@@ -157,6 +157,8 @@ body {
 }
 
 #hud-info {
+  /* a pályán lévő feliratok fölött */
+  z-index: 4;
   position: absolute;
   top: 52px;
   left: 10px;

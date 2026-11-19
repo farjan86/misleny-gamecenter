@@ -27,9 +27,6 @@ const a = await open('A');
 const b = await open('B');
 await a.waitForSelector('#auth-box:not(.hidden)');
 await shot(a, '01-main');
-await a.click('#auth-settings');
-await shot(a, '02-settings');
-await a.click('#settings-back');
 
 // regisztráció
 for (const [page, name] of [[a, `Anna${stamp}`], [b, `Béla${stamp}`]]) {
@@ -39,6 +36,9 @@ for (const [page, name] of [[a, `Anna${stamp}`], [b, `Béla${stamp}`]]) {
   await page.waitForSelector('#user-box:not(.hidden)');
 }
 await shot(a, '03-logged-in');
+await a.click('#main-settings');
+await shot(a, '02-settings');
+await a.click('#settings-back');
 await a.click('#main-multiplayer');
 await b.click('#main-multiplayer');
 await a.waitForSelector('#screen-lobby:not(.hidden)');

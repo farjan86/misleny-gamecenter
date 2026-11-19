@@ -4,6 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { GameMap, nearestOnPolyline, pointInPolygon, SpatialIndex } from '../src/game/maps/GameMap';
+import { renderChunk, setSupersample } from '../src/game/maps/chunkRender';
 import { renderCanopy, renderMap } from '../src/game/maps/raster';
 import { placeRoadLabels } from '../src/game/maps/roadLabels';
 import type { MapData } from '../src/game/maps/types';
@@ -286,6 +287,40 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
     expect(map.underCanopy(tree.x, tree.y)).toBe(false);
     map.resetDamage();
     expect(map.fellables.fallen[index]).toBe(0);
+  });
+
+  it('a főútra kiérkező utcák végén stopvonal van, az érkező sávban', () => {
+    expect(map.stopLines.length / 4).toBeGreaterThan(15);
+    const white = (px: number): boolean => (px & 0xff) > 0xc0 && ((px >> 8) & 0xff) > 0xc0 && ((px >> 16) & 0xff) > 0xb8;
+    let drawn = 0;
+    for (let i = 0; i < map.stopLines.length; i += 4) {
+      const [x, y] = [map.stopLines[i], map.stopLines[i + 1]];
+      // a vonal közepe egy közút úttestjén van (nem a tengelyén: az érkező sávban)
+      const near = map.nearestRoad(x, y, 8, true)!;
+      expect(near.hit.dist).toBeLessThan(near.road.width / 2);
+      expect(near.hit.dist).toBeGreaterThan(0.5);
+      if (renderAt(x, y, 24).filter(white).length > 20) drawn++;
+    }
+    // szinte mindegyik látszik is (néhányat zebra vagy burkolt tér fedhet)
+    expect(drawn).toBeGreaterThan((map.stopLines.length / 4) * 0.8);
+  });
+
+  it('az élsimított térképdarab ugyanazt a képet adja, csak lágyabb élekkel', () => {
+    const [x, y] = [th.x + 48, th.y - 4];
+    const cx = Math.floor((x * 12) / 256);
+    const cy = Math.floor((y * 12) / 256);
+    setSupersample(1);
+    const plain = renderChunk(map, cx, cy, 256, 12);
+    setSupersample(2);
+    const smooth = renderChunk(map, cx, cy, 256, 12);
+    expect(smooth.ground).toHaveLength(256 * 256);
+    // minden pixel teljesen fedő, és az átlagos szín közel azonos a két változatban
+    expect(smooth.ground.every((px) => px >>> 24 === 255)).toBe(true);
+    const mean = (buf: Uint32Array): number => buf.reduce((sum, px) => sum + (px & 255) + ((px >> 8) & 255) + ((px >> 16) & 255), 0) / buf.length;
+    expect(Math.abs(mean(plain.ground) - mean(smooth.ground))).toBeLessThan(12);
+    // az élsimítás köztes árnyalatokat hoz létre: több a különböző szín
+    expect(new Set(smooth.ground).size).toBeGreaterThan(new Set(plain.ground).size);
+    expect(smooth.canopy === null).toBe(plain.canopy === null);
   });
 
   it('a lövésnyom megmarad a pályán és megjelenik a talajon', () => {

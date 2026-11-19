@@ -149,7 +149,6 @@ export class Menu {
     password.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') submit('login');
     });
-    el('auth-settings').onclick = () => this.show('settings');
     el('main-settings').onclick = () => this.show('settings');
     el('main-multiplayer').onclick = () => this.show('lobby');
     el('main-logout').onclick = () => {

@@ -14,6 +14,8 @@ const NIGHT = { color: 0x070b1e, alpha: 0.74 };
 /** A sötétség-réteg ennyied felbontással készül (olcsóbb, a fények széle úgyis lágy). */
 const DARK_SCALE = 2;
 const LIGHT_TEX = 128;
+/** az eső két rétegének esési sebessége a képernyőn (képpont/mp): a távolabbi lassabb */
+const RAIN_SPEED = [230, 360];
 /** fénykörök sugara méterben */
 const LAMP_RADIUS = 13;
 const TANK_RADIUS = 6.5;
@@ -31,7 +33,15 @@ interface Flash {
 export class WeatherLayer {
   private readonly dark: Phaser.GameObjects.RenderTexture | null = null;
   private readonly stamp: Phaser.GameObjects.Image | null = null;
-  private readonly rain: Phaser.GameObjects.TileSprite | null = null;
+  /** az eső két rétege: a távolabbi apróbb és lassabb, a közelebbi nagyobb és gyorsabb */
+  private readonly rain: Phaser.GameObjects.TileSprite[] = [];
+  private readonly rainOffset = [
+    { x: 0, y: 0 },
+    { x: 0, y: 0 },
+  ];
+  private readonly splashPool: Phaser.GameObjects.Image[] = [];
+  private splashDebt = 0;
+  private seed = 7;
   private readonly flashes: Flash[] = [];
   private readonly glows: Phaser.GameObjects.Image[] = [];
   private lastScrollX = 0;
@@ -53,8 +63,41 @@ export class WeatherLayer {
         .setDepth(28);
       this.stamp = scene.make.image({ key: GTEX.light }, false);
     } else if (weather === 'rain') {
-      scene.add.rectangle(0, 0, cam.width, cam.height, 0x3c4a60, 0.22).setOrigin(0).setScrollFactor(0).setDepth(28);
-      this.rain = scene.add.tileSprite(0, 0, cam.width, cam.height, GTEX.rain).setOrigin(0).setScrollFactor(0).setDepth(29).setAlpha(0.55);
+      // borús ég: enyhe, hűvös fátyol a képen
+      scene.add.rectangle(0, 0, cam.width, cam.height, 0x2a3442, 0.16).setOrigin(0).setScrollFactor(0).setDepth(28);
+      for (const [scale, alpha] of [[1, 0.55], [1.7, 0.45]] as const) {
+        this.rain.push(scene.add.tileSprite(0, 0, cam.width, cam.height, GTEX.rain).setOrigin(0).setScrollFactor(0).setDepth(29).setAlpha(alpha).setTileScale(scale));
+      }
+    }
+  }
+
+  private rnd(): number {
+    this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff;
+    return this.seed / 0x7fffffff;
+  }
+
+  /** A földet érő cseppek: apró, gyorsan szétterülő és elhalványuló gyűrűk a látómezőben. */
+  private splashes(view: Phaser.Geom.Rectangle, dt: number): void {
+    this.splashDebt += dt * 32;
+    while (this.splashDebt >= 1) {
+      this.splashDebt -= 1;
+      const ring = this.splashPool.pop() ?? this.scene.add.image(0, 0, GTEX.splash).setDepth(3);
+      const size = (0.35 + this.rnd() * 0.3) * (this.ppm / 12);
+      ring
+        .setPosition(view.x + this.rnd() * view.width, view.y + this.rnd() * view.height)
+        .setScale(size * 0.25)
+        .setAlpha(0.42)
+        .setVisible(true);
+      this.scene.tweens.add({
+        targets: ring,
+        scale: size,
+        alpha: 0,
+        duration: 620 + this.rnd() * 300,
+        onComplete: () => {
+          ring.setVisible(false);
+          this.splashPool.push(ring);
+        },
+      });
     }
   }
 
@@ -66,12 +109,22 @@ export class WeatherLayer {
   }
 
   update(view: Phaser.Geom.Rectangle, tanks: readonly TankState[], fires: FireLayer, dt: number): void {
-    if (this.rain) {
+    if (this.rain.length) {
       // az eső ferdén esik; a kamera mozgását is követi, így a cseppek a világhoz képest hullanak
-      this.rain.tilePositionX += view.x - this.lastScrollX - 260 * dt;
-      this.rain.tilePositionY += view.y - this.lastScrollY - 1150 * dt;
+      const dx = view.x - this.lastScrollX;
+      const dy = view.y - this.lastScrollY;
+      this.rain.forEach((layer, i) => {
+        // nyugodt, egyenletes esés (képpont/mp a képernyőn); a hely egész képpontra kerekítve, hogy a kép ne vibráljon
+        const speed = RAIN_SPEED[i];
+        const offset = this.rainOffset[i];
+        offset.x += (dx - speed * 0.2 * dt) / layer.tileScaleX;
+        offset.y += (dy - speed * dt) / layer.tileScaleY;
+        layer.tilePositionX = Math.round(offset.x);
+        layer.tilePositionY = Math.round(offset.y);
+      });
       this.lastScrollX = view.x;
       this.lastScrollY = view.y;
+      this.splashes(view, dt);
       return;
     }
     const dark = this.dark;

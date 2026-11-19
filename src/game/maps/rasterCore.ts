@@ -17,7 +17,8 @@ export interface RasterTarget {
 
 export type Mat = (wx: number, wy: number) => number;
 export type Put = (idx: number, wx: number, wy: number) => void;
-export type StrokePut = (idx: number, wx: number, wy: number, dist: number, along: number) => void;
+/** `cap`: a pixel a szakasz lekerekített végében van (a végpont körül), nem a szakasz mellett */
+export type StrokePut = (idx: number, wx: number, wy: number, dist: number, along: number, cap: boolean) => void;
 
 // --- színek és zaj -----------------------------------------------------------
 
@@ -139,11 +140,12 @@ export function strokeLine(t: RasterTarget, pts: ArrayLike<number>, hw: number, 
       const py = t.oy + j + 0.5 - ay;
       for (let i = i0; i <= i1; i++) {
         const px = t.ox + i + 0.5 - ax;
-        const u = len2 > 0 ? Math.max(0, Math.min(1, (px * dx + py * dy) / len2)) : 0;
+        const raw = len2 > 0 ? (px * dx + py * dy) / len2 : -1;
+        const u = Math.max(0, Math.min(1, raw));
         const ex = px - u * dx;
         const ey = py - u * dy;
         const d2 = ex * ex + ey * ey;
-        if (d2 <= hw2) put(j * t.w + i, t.ox + i, t.oy + j, Math.sqrt(d2), acc + u * len);
+        if (d2 <= hw2) put(j * t.w + i, t.ox + i, t.oy + j, Math.sqrt(d2), acc + u * len, raw < 0 || raw > 1);
       }
     }
     acc += len;
@@ -182,7 +184,7 @@ export function strokeRing(t: RasterTarget, pts: ArrayLike<number>, inner: numbe
     const d = distBuf[idx];
     const along = alongBuf[idx];
     distBuf[idx] = Infinity;
-    if (d >= inner && along > 0.5 && along < total - 0.5) put(idx, t.ox + (idx % t.w), t.oy + Math.floor(idx / t.w), d, along);
+    if (d >= inner && along > 0.5 && along < total - 0.5) put(idx, t.ox + (idx % t.w), t.oy + Math.floor(idx / t.w), d, along, false);
   }
 }
 

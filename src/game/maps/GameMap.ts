@@ -200,6 +200,8 @@ export class GameMap implements Terrain {
   private borderOwner = -10;
   /** időjárás: a rajzolást (sár) és a talaj tapadását befolyásolja */
   weather: Weather = 'day';
+  /** stopvonalak a főútra kiérkező utcák végén, lapítva: x, y, irány (rad), fél hossz */
+  readonly stopLines: number[] = [];
   /** maradandó lövésnyomok, lapítva: x, y, sugár */
   readonly scars: number[] = [];
   scarIndex: SpatialIndex;
@@ -282,6 +284,35 @@ export class GameMap implements Terrain {
     }
     this.fellables = new Fellables(width, height, fellable);
     this.scarIndex = new SpatialIndex(width, height);
+
+    // Stopvonal ott, ahol egy utca vége főútra fut ki: a kereszteződés előtt, az érkező (jobb oldali) sávban.
+    data.roads.forEach((road, i) => {
+      if (!STREETS.has(road.kind)) return;
+      const p = road.pts;
+      const n = p.length;
+      if (n < 4) return;
+      for (const end of [0, 1]) {
+        const ex = end ? p[n - 2] : p[0];
+        const ey = end ? p[n - 1] : p[1];
+        const bx = end ? p[n - 4] : p[2];
+        const by = end ? p[n - 3] : p[3];
+        const len = Math.hypot(ex - bx, ey - by);
+        if (len < 4) continue;
+        const dx = (ex - bx) / len;
+        const dy = (ey - by) / len;
+        for (const j of this.roadIndex.query(ex - 4, ey - 4, ex + 4, ey + 4)) {
+          const other = data.roads[j];
+          if (j === i || !MAIN_ROADS.has(other.kind)) continue;
+          const hit = nearestOnPolyline(ex, ey, other.pts);
+          if (hit.dist > 3) continue;
+          const back = other.width / 2 + street.shoulder + 0.9;
+          const half = road.width / 4;
+          // a haladási irány jobb oldala (a képernyőn y lefelé nő)
+          this.stopLines.push(ex - dx * back - dy * half, ey - dy * back + dx * half, Math.atan2(dy, dx), half - 0.3);
+          break;
+        }
+      }
+    });
 
     // a fotók alapján felvett tárgyak közül a parkoló autók és a zászlórudak akadályok
     const lm = data.landmarks;

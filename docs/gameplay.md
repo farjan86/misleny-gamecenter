@@ -183,6 +183,21 @@ Egyszerre egy fegyver lehet a tanknál: az újonnan felvett a régi helyére lé
 - A pálya változásai (kidőlt fa, lövésnyom, összedőlt ház) bekerülnek a pálya
   állapotába, és csak az érintett darabok rajzolódnak újra a háttérben; a régi
   kép addig kint marad, így nincs villanás.
+- **Élsimítás.** A térképdarabok kétszeres felbontásban készülnek, majd
+  átlagolva kicsinyítődnek: a tetők, utak és lombok ferde élei nem lépcsősek.
+  Ez a darab egyszeri kirajzolását terheli a háttérben, a képkockákat nem.
+  Négynél kevesebb processzormagnál magától kikapcsol; az URL `?aa=0` /
+  `?aa=1` paramétere felülbírálja.
+- **A térkép részletei** (mind a darabokba rajzolva, tehát játék közben
+  ingyen vannak): a falak tövében sötétebb sáv, gerincfény és sötétebb eresz a
+  tetőkön, viseltes tetőfelület, tetőablakok és napelemek; az utakon szegélykő,
+  keréknyomok, foltozások, aknafedelek, a főúton szélső vonal, a főútra
+  kiérkező utcák végén stopvonal; a kertekben virágágyások, veteményesek,
+  teraszok; tagoltabb lombkoronák, virágzó fák és bokrok.
+- **Mozgó részletek:** a tankok a burkolatlan talajon lánctalpnyomot hagynak
+  (kb. 45 másodpercig látszik, legfeljebb 900 nyomdarab), terepen port,
+  esőben sarat vernek fel; a nagyobb robbanásokat lökéshullám, szétrepülő
+  törmelék és gomolygó füst kíséri.
 
 ### Teljesítmény
 
@@ -190,7 +205,8 @@ A cél: gyengébb asztali gépen is egyenletes kép.
 
 - **Háttérszálak.** A térképdarabokat legfeljebb három Web Worker rajzolja; a
   fő szál csak a kész pixeleket tölti textúrába, képkockánként korlátozott
-  időkerettel.
+  időkerettel. Élsimítással egy darab kb. 40–80 ms alatt készül el (nélküle
+  kb. 12 ms); a pálya a meccs indulásakor 1–2,5 másodperc alatt áll össze.
 - **Takarékos rajzoló és térbeli indexek.** A tetők alatti talaj nem
   számolódik ki; a fák, bokrok, oszlopok, épületek és utak rácsba rendezve
   kereshetők.
@@ -200,8 +216,10 @@ A cél: gyengébb asztali gépen is egyenletes kép.
   „radírozódnak ki".
 - **A felület csak változáskor ír a DOM-ba.**
 
-Mérés (Intel Iris Xe, 1920 × 1080): a jelenet frissítése képkockánként
-átlagosan 0,4–0,7 ms (60 FPS-hez 16,7 ms fér bele), este, botokkal is.
+Mérés (Intel Iris Xe, 8 szálas processzor, 1920 × 1080; 10 másodperc vezetés
+és folyamatos lövés közben): a jelenet frissítése képkockánként átlagosan
+0,6–1,3 ms (60 FPS-hez 16,7 ms fér bele), a képkockák 95%-a 3 ms alatt van,
+8 ms fölötti képkocka nem volt – nappal, esőben és este, botokkal is.
 
 ## Felépítés
 
@@ -226,10 +244,11 @@ src/
       raster.ts           térképrajzoló (vektor → pixel): talaj- és lombréteg, romok, sár
       landmarkRaster.ts   a hivatal és környezete a fotók alapján felvett adatokból
       roadLabels.ts       az útra írt utcanevek helyének kiszámítása
+      chunkRender.ts      egy térképdarab kirajzolása élsimítással
       ChunkLayer.ts       a rajzolt rétegek darabonkénti, igény szerinti előállítása
       chunkWorker.ts      a térképdarabok kirajzolása háttérszálon
       RoadLabelLayer.ts   az útra írt utcanevek, csak a kamera közelében
-    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, tüzek, időjárás, kódból rajzolt sprite-ok
+    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, tüzek, időjárás, lánctalpnyomok, kódból rajzolt sprite-ok
     scenes/GameScene.ts   bemenet → szerver; szerverállapot → megjelenítés
     settings.ts           a játékos beállításai (név, belépés, billentyűk), a böngészőben megőrizve
     systems/audio.ts      szintetizált hangok (Web Audio)
@@ -272,7 +291,7 @@ A rajzolási sorrend egyben a rétegrend:
 8. fatörzsek, villanyoszlopok, a kidőlt fák és oszlopok;
 9. épületek (tetők, kémények), majd a lövésnyomok;
 10. az útra írt utcanevek;
-11. olajfoltok, roncsok, majd a **mozgó elemek:** tankok, lövedékek, rakétafüst, lézersugár;
+11. lánctalpnyomok, olajfoltok, roncsok, majd a **mozgó elemek:** tankok, lövedékek, rakétafüst, lézersugár;
 12. **lombréteg:** az álló fák koronája, vezetékek, zászlók – a tank fölött, kissé áttetszően;
 13. tüzek és füstjük, felvehető tárgyak, a tankok életerősávja, robbanások;
 14. időjárás: az eső, illetve az esti sötétség a fényekkel.

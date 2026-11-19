@@ -187,6 +187,15 @@ levezetett adat: ahol az OSM-ben nincs berajzolva az átvezető gyalogút, ott
 a játékban sincs zebra, és nem minden így megtalált átkelő biztosan
 felfestett zebra a valóságban.
 
+### Rajzolt, nem adatból származó részletek
+
+A térkép képén sok apró részlet nem térképi adat, hanem a rajzoló találmánya
+(helyük rögzített, minden gépen ugyanott vannak): a tetőablakok és napelemek, a
+kertek virágágyásai, veteményesei és teraszai, az útburkolat keréknyomai és
+foltozásai, az aknafedelek, valamint a virágzó fák és bokrok. A **stopvonalak**
+levezetett adatok: ott jelennek meg, ahol egy lakóutca vége az OSM szerint
+főútra fut ki – a valóságban nem biztos, hogy ott stopvonal van.
+
 ### Generált díszítőelemek
 
 Az OSM-ben alig vannak egyedi fák, bokrok vagy villanyoszlopok, ezért ezeket

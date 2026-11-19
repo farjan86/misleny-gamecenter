@@ -8,6 +8,7 @@ import { FireLayer } from '../entities/FireLayer';
 import { createGameTextures, GTEX, PICKUP_ICON_SIZE } from '../entities/gameTextures';
 import { PICKUP_STYLE, pickupTexture } from '../entities/pickupStyle';
 import { TankView } from '../entities/TankView';
+import { TrackLayer } from '../entities/TrackLayer';
 import { createTextures, TEX } from '../entities/textures';
 import { WeatherLayer } from '../entities/WeatherLayer';
 import { ChunkLayer } from '../maps/ChunkLayer';
@@ -62,6 +63,9 @@ export class GameScene extends Phaser.Scene {
   private ground!: ChunkLayer;
   private fires!: FireLayer;
   private weather!: WeatherLayer;
+  private tracks!: TrackLayer;
+  private readonly debrisPool: Phaser.GameObjects.Image[] = [];
+  private readonly shockPool: Phaser.GameObjects.Image[] = [];
   private roadLabels!: RoadLabelLayer;
   private hud!: Hud;
   private readonly sfx = new Sfx();
@@ -132,6 +136,7 @@ export class GameScene extends Phaser.Scene {
     this.ground = new ChunkLayer(this, this.map, this.ppm);
     this.fires = new FireLayer(this, this.ppm);
     this.weather = new WeatherLayer(this, this.map, this.ppm, this.world.room.settings.weather);
+    this.tracks = new TrackLayer(this, this.map, this.ppm, this.world.room.settings.weather);
     this.hud = new Hud(this.map, this.ppm);
     this.hud.onLeave(() => this.onLeave());
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
@@ -264,6 +269,8 @@ export class GameScene extends Phaser.Scene {
     this.roadLabels.update(view);
     const dt = Math.min(0.1, deltaMs / 1000);
     this.fires.update(view, dt);
+    this.tracks.update(world.tanks, view, seconds);
+    if (this.frame % 5 === 0) this.dust(view);
     this.weather.update(view, world.tanks, this.fires, dt);
     this.syncPickups(view, seconds);
     world.listsChanged = false;
@@ -597,6 +604,89 @@ export class GameScene extends Phaser.Scene {
       .setScale(this.spriteScale * size)
       .setVisible(true)
       .play('boom');
+    // a képernyőn látható, nagyobb robbanásokat lökéshullám, törmelék és gomolygó füst kíséri
+    const px = x * this.ppm;
+    const py = y * this.ppm;
+    const v = this.view;
+    if (size >= 0.9 && px > v.x - 80 && px < v.right + 80 && py > v.y - 80 && py < v.bottom + 80) this.burst(px, py, size);
+  }
+
+  private burst(px: number, py: number, size: number): void {
+    const scale = this.spriteScale;
+    const ring = this.shockPool.pop() ?? this.add.image(0, 0, GTEX.shock).setDepth(18).setBlendMode(Phaser.BlendModes.ADD);
+    ring.setPosition(px, py).setScale(scale * size * 0.25).setAlpha(0.7).setVisible(true);
+    this.tweens.add({
+      targets: ring,
+      scale: scale * size * 1.5,
+      alpha: 0,
+      duration: 260,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        ring.setVisible(false);
+        this.shockPool.push(ring);
+      },
+    });
+    const pieces = Math.min(9, 3 + Math.round(size * 2.5));
+    for (let i = 0; i < pieces; i++) {
+      const piece = this.debrisPool.pop() ?? this.add.image(0, 0, GTEX.debris).setDepth(18);
+      const angle = (i / pieces) * Math.PI * 2 + ((this.frame * 7 + i * 13) % 10) * 0.07;
+      const reach = (22 + ((i * 37 + this.frame) % 30)) * size * scale;
+      piece
+        .setPosition(px, py)
+        .setScale(scale * (0.6 + (i % 3) * 0.35))
+        .setRotation(angle)
+        .setTint(i % 3 === 0 ? 0xd88a3a : 0x2a2622)
+        .setAlpha(1)
+        .setVisible(true);
+      this.tweens.add({
+        targets: piece,
+        x: px + Math.cos(angle) * reach,
+        y: py + Math.sin(angle) * reach,
+        rotation: angle + 4,
+        alpha: 0,
+        duration: 380 + (i % 4) * 70,
+        ease: 'Quad.easeOut',
+        onComplete: () => {
+          piece.setVisible(false);
+          this.debrisPool.push(piece);
+        },
+      });
+    }
+    for (let i = 0; i < 3; i++) this.time.delayedCall(90 + i * 110, () => this.puff(px + (i - 1) * 9 * scale * size, py - i * 7 * scale, 0x4a4642, 1.1 * size, 900));
+  }
+
+  /** A terepen gyorsan haladó tankok port vernek fel (esőben sarat). */
+  private dust(view: Phaser.Geom.Rectangle): void {
+    const rain = this.world.room.settings.weather === 'rain';
+    for (const tank of this.world.tanks) {
+      if (!tank.alive || Math.abs(tank.speed) < 6) continue;
+      const px = tank.x * this.ppm;
+      const py = tank.y * this.ppm;
+      if (px < view.x || px > view.right || py < view.y || py > view.bottom) continue;
+      if (this.map.speedFactor(tank.x, tank.y) >= 1) continue;
+      const back = (tank.speed > 0 ? -1.9 : 1.9) * this.ppm;
+      const side = ((this.frame / 5) & 1 ? 1 : -1) * 1.2 * this.ppm;
+      const cos = Math.cos(tank.hullAngle);
+      const sin = Math.sin(tank.hullAngle);
+      this.puff(px + cos * back - sin * side, py + sin * back + cos * side, rain ? 0x5a4832 : 0xb8a888, rain ? 0.7 : 1, rain ? 380 : 620);
+    }
+  }
+
+  /** Színezett füst- vagy porpamacs, amely szétterül és elhalványul. */
+  private puff(x: number, y: number, tint: number, size: number, duration: number): void {
+    const puff = this.smokePool.pop() ?? this.add.image(0, 0, GTEX.smoke).setDepth(12);
+    puff.setPosition(x, y).setScale(this.spriteScale * 0.5 * size).setAlpha(0.6).setTint(tint).setVisible(true);
+    this.tweens.add({
+      targets: puff,
+      alpha: 0,
+      scale: this.spriteScale * 1.7 * size,
+      duration,
+      onComplete: () => {
+        puff.setVisible(false);
+        puff.clearTint();
+        this.smokePool.push(puff);
+      },
+    });
   }
 
   /** Lézersugár: fényes vonal, amely gyorsan elhalványul. */
@@ -767,6 +857,9 @@ export class GameScene extends Phaser.Scene {
       collapsed: this.map.structures.collapsed.reduce((n, f) => n + f, 0),
       chunks: this.ground.chunkCount,
       chunksPending: this.ground.pendingCount,
+      antialias: this.ground.antialias,
+      tracks: this.tracks.count,
+      chunkMs: Math.round(this.ground.lastRenderMs * 10) / 10,
       ping: this.world.pingMs,
     };
   }

@@ -23,6 +23,14 @@ export const GTEX = {
   /** lágy szélű fehér korong: este ezzel „vágunk lyukat” a sötétségbe a fények helyén */
   light: 'fx-light',
   rain: 'fx-rain',
+  /** a földet érő esőcsepp gyűrűje */
+  splash: 'fx-splash',
+  /** két lánctalp nyoma, 2 méternyi útszakasz (jobbra néz) */
+  track: 'fx-track',
+  /** robbanáskor szétrepülő törmelékdarab */
+  debris: 'fx-debris',
+  /** lökéshullám gyűrűje */
+  shock: 'fx-shock',
   oil: 'oil-slick',
   ring: 'fx-ring',
   smoke: 'fx-smoke',
@@ -109,22 +117,60 @@ export function createGameTextures(scene: Phaser.Scene): void {
     ctx.fillRect(0, 0, 128, 128);
   });
 
-  // esőcseppek: ferde, halvány vonalkák (a kép csempézve ismétlődik)
+  // esőcseppek: sok rövid, vékony, különböző erősségű vonalka (a kép csempézve ismétlődik)
   canvasTexture(scene, GTEX.rain, 256, 256, (ctx) => {
-    ctx.strokeStyle = 'rgba(205,220,240,0.55)';
-    ctx.lineWidth = 1.4;
     ctx.lineCap = 'round';
-    for (let i = 0; i < 46; i++) {
-      const x = (i * 97.3 + 13) % 256;
-      const y = (i * 61.7 + 41) % 256;
-      const len = 14 + ((i * 7) % 12);
+    for (let i = 0; i < 80; i++) {
+      const x = (i * 97.31 + 13) % 256;
+      const y = (i * 61.73 + ((i * i * 7.1) % 53)) % 256;
+      const len = 12 + ((i * 7) % 14);
+      ctx.strokeStyle = `rgba(214,226,242,${(0.1 + ((i * 13) % 10) * 0.018).toFixed(2)})`;
+      ctx.lineWidth = i % 4 === 0 ? 2 : 1.5;
       for (const [ox, oy] of [[0, 0], [256, 0], [0, 256], [-256, 0], [0, -256]]) {
         ctx.beginPath();
         ctx.moveTo(x + ox, y + oy);
-        ctx.lineTo(x + ox - len * 0.22, y + oy + len);
+        ctx.lineTo(x + ox - len * 0.2, y + oy + len);
         ctx.stroke();
       }
     }
+  });
+
+  // lánctalpnyom: két sáv, bennük a láncszemek keresztirányú lenyomatai (fehér: a színt a tint adja)
+  canvasTexture(scene, GTEX.track, 24, 40, (ctx) => {
+    for (const top of [2, 28]) {
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillRect(0, top, 24, 10);
+      ctx.fillStyle = 'rgba(255,255,255,1)';
+      for (let x = 1; x < 24; x += 4) ctx.fillRect(x, top, 2, 10);
+    }
+  });
+
+  canvasTexture(scene, GTEX.debris, 8, 8, (ctx) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(1, 2);
+    ctx.lineTo(6, 0);
+    ctx.lineTo(7, 5);
+    ctx.lineTo(3, 7);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  canvasTexture(scene, GTEX.shock, 96, 96, (ctx) => {
+    const g = ctx.createRadialGradient(48, 48, 30, 48, 48, 47);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.75, 'rgba(255,240,200,0.75)');
+    g.addColorStop(1, 'rgba(255,220,160,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 96, 96);
+  });
+
+  canvasTexture(scene, GTEX.splash, 24, 24, (ctx) => {
+    ctx.strokeStyle = 'rgba(225,235,248,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(12, 12, 9, 7, 0, 0, Math.PI * 2);
+    ctx.stroke();
   });
 
   // tárgyikonok: színes korong világos peremmel, közepén a jel

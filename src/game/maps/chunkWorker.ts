@@ -3,12 +3,12 @@
 // A kész pixelpuffereket másolás nélkül (transfer) adja vissza.
 
 import { GameMap } from './GameMap';
-import { renderCanopy, renderMap } from './raster';
+import { renderChunk, setSupersample } from './chunkRender';
 import type { Weather } from '../sim/world';
 import type { MapData } from './types';
 
 export type ChunkRequest =
-  | { type: 'init'; data: MapData; ppm: number; size: number; weather: Weather; area: { minX: number; minY: number; maxX: number; maxY: number } | null }
+  | { type: 'init'; data: MapData; ppm: number; size: number; aa: number; weather: Weather; area: { minX: number; minY: number; maxX: number; maxY: number } | null }
   | { type: 'render'; key: number; cx: number; cy: number }
   // a pálya változó állapota: a fő szál minden változást elküld, mielőtt újrarajzolást kér
   | { type: 'felled'; index: number; angle: number }
@@ -42,6 +42,7 @@ scope.onmessage = (ev) => {
   if (msg.type === 'init') {
     map = new GameMap(msg.data, { collision: false });
     map.weather = msg.weather;
+    setSupersample(msg.aa);
     map.bounds = msg.area;
     ppm = msg.ppm;
     size = msg.size;
@@ -65,20 +66,15 @@ scope.onmessage = (ev) => {
     return;
   }
   const started = performance.now();
-  const target = { w: size, h: size, ox: msg.cx * size, oy: msg.cy * size, scale: ppm, detail: true };
-
-  const ground = new Uint32Array(size * size);
-  renderMap(map, { ...target, buf: ground });
-  const canopyBuf = new Uint32Array(size * size);
-  const hasCanopy = renderCanopy(map, { ...target, buf: canopyBuf });
+  const { ground, canopy } = renderChunk(map, msg.cx, msg.cy, size, ppm);
 
   const reply: ChunkReply = {
     key: msg.key,
     cx: msg.cx,
     cy: msg.cy,
-    ground: ground.buffer,
-    canopy: hasCanopy ? canopyBuf.buffer : null,
+    ground: ground.buffer as ArrayBuffer,
+    canopy: canopy ? (canopy.buffer as ArrayBuffer) : null,
     ms: performance.now() - started,
   };
-  scope.postMessage(reply, hasCanopy ? [ground.buffer, canopyBuf.buffer] : [ground.buffer]);
+  scope.postMessage(reply, canopy ? [reply.ground, canopy.buffer as ArrayBuffer] : [reply.ground]);
 };

@@ -10,7 +10,7 @@
 import Phaser from 'phaser';
 import type { ChunkReply, ChunkRequest } from './chunkWorker';
 import type { GameMap } from './GameMap';
-import { renderCanopy, renderMap } from './raster';
+import { renderChunk, setSupersample } from './chunkRender';
 
 const CHUNK = 256;
 /** ennyi darabnyi szegély készül el előre a látómező körül */
@@ -48,6 +48,8 @@ export class ChunkLayer {
   private readonly webgl: boolean;
   /** üres pixeltömb: feltöltés után ezt hagyjuk a textúra forrásaként, hogy a pixelek ne maradjanak kétszer a memóriában */
   private readonly blank = new Uint8Array(CHUNK * CHUNK * 4);
+  /** be van-e kapcsolva az élsimítás (diagnosztikához) */
+  antialias = false;
   private generation = 0;
   private serial = 0;
   /** a megváltozott (újrarajzolandó) darabok */
@@ -85,12 +87,18 @@ export class ChunkLayer {
   private startWorkers(): void {
     if (typeof Worker === 'undefined') return;
     const count = Math.max(1, Math.min(MAX_WORKERS, (navigator.hardwareConcurrency || 2) - 1));
+    // Élsimítás (négyszeres rajzolási munka a háttérben) csak ott, ahol van rá elég processzormag;
+    // az URL ?aa=0 / ?aa=1 paramétere felülbírálja.
+    const param = new URLSearchParams(window.location.search).get('aa');
+    const aa = param === '0' ? 1 : param === '1' ? 2 : (navigator.hardwareConcurrency || 2) >= 4 ? 2 : 1;
+    this.antialias = aa === 2;
+    setSupersample(aa);
     for (let i = 0; i < count; i++) {
       try {
         const worker = new Worker(new URL('./chunkWorker.ts', import.meta.url), { type: 'module' });
         worker.onmessage = (ev: MessageEvent<ChunkReply>) => this.onReply(worker, ev.data);
         worker.onerror = () => this.dropWorker(worker);
-        const init: ChunkRequest = { type: 'init', data: this.map.data, ppm: this.ppm, size: CHUNK, weather: this.map.weather, area: this.map.bounds };
+        const init: ChunkRequest = { type: 'init', data: this.map.data, ppm: this.ppm, size: CHUNK, aa, weather: this.map.weather, area: this.map.bounds };
         worker.postMessage(init);
         this.workers.push(worker);
         this.idle.push(worker);
@@ -224,13 +232,9 @@ export class ChunkLayer {
 
   private renderOnMainThread(cx: number, cy: number): void {
     const started = performance.now();
-    const target = { w: CHUNK, h: CHUNK, ox: cx * CHUNK, oy: cy * CHUNK, scale: this.ppm, detail: true };
-    const ground = new Uint32Array(CHUNK * CHUNK);
-    renderMap(this.map, { ...target, buf: ground });
-    const canopy = new Uint32Array(CHUNK * CHUNK);
-    const hasCanopy = renderCanopy(this.map, { ...target, buf: canopy });
+    const { ground, canopy } = renderChunk(this.map, cx, cy, CHUNK, this.ppm);
     this.lastRenderMs = performance.now() - started;
-    this.addChunk(cx, cy, new Uint8Array(ground.buffer), hasCanopy ? new Uint8Array(canopy.buffer) : null);
+    this.addChunk(cx, cy, new Uint8Array(ground.buffer), canopy ? new Uint8Array(canopy.buffer) : null);
   }
 
   private addChunk(cx: number, cy: number, ground: Uint8Array, canopy: Uint8Array | null): void {

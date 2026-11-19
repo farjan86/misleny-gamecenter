@@ -46,6 +46,7 @@ function buildMats(s: number): Mats {
   const soilB = c(0x9c7a50);
   const veg = c(0x4e8c3a);
 
+  const frac = (v: number) => v - Math.floor(v);
   const slab = Math.max(2, Math.round(0.55 * s));
   const slabA = c(0xb9b5a9);
   const slabB = c(0xb1ada1);
@@ -55,7 +56,6 @@ function buildMats(s: number): Mats {
     return hash(Math.floor(wx / slab), Math.floor(wy / slab)) & 1 ? slabA : slabB;
   };
 
-  const frac = (v: number) => v - Math.floor(v);
   const waterDark = c(0x2f6cb8);
   const waterMid = c(0x3a7ac8);
   const waterLight = c(0x6aa6e6);
@@ -64,9 +64,53 @@ function buildMats(s: number): Mats {
   const flowerA = c(0xf4e060);
   const flowerB = c(0xf08aa0);
 
+  // A kertek részletei 6 méteres cellákban: a cellák egy részébe virágágyás,
+  // veteményes vagy burkolt terasz kerül (ahol ház vagy út van, az úgyis eltakarja).
+  const cell = 6 * s;
+  const bloom = [c(0xf4e060), c(0xf08aa0), c(0xf6f2e6), c(0xd8483c), c(0xb07ad8)];
+  const leaf = c(0x3c7a34);
+  const slabLight = c(0xbdb7a8);
+  const slabDark = c(0xa9a394);
+  const garden: Mat = (wx, wy) => {
+    const cxi = Math.floor(wx / cell);
+    const cyi = Math.floor(wy / cell);
+    const h = hash(cxi * 7 + 3, cyi * 13 + 1);
+    const kind = h & 31;
+    if (kind > 3) return yard(wx, wy);
+    const lx = wx - cxi * cell;
+    const ly = wy - cyi * cell;
+    // a cellán belüli hely és méret ágyásonként más
+    const jx = ((h >>> 14) & 7) * 0.14 * s;
+    const jy = ((h >>> 17) & 7) * 0.14 * s;
+    const grow = 1 + ((h >>> 20) & 3) * 0.14;
+    if (kind <= 1) {
+      // virágágyás: szabálytalan folt sötétebb lombbal és apró, színes virágokkal
+      const ox = cell * (0.35 + ((h >>> 5) & 7) * 0.04);
+      const oy = cell * (0.35 + ((h >>> 8) & 7) * 0.04);
+      const r = s * (0.9 + ((h >>> 11) & 3) * 0.22);
+      const dx = lx - ox;
+      const dy = ly - oy;
+      if (dx * dx + dy * dy > r * r * (0.7 + 0.5 * vnoise(wx / (0.5 * s), wy / (0.5 * s)))) return yard(wx, wy);
+      // egy ágyásban egyféle (ritkán kétféle) virág nyílik
+      const dot = hash(Math.floor(wx / (0.3 * s)) + h, Math.floor(wy / (0.3 * s)));
+      const tint = bloom[((h >>> 13) + (dot % 11 === 0 ? 1 : 0)) % bloom.length];
+      return dot % 4 === 0 ? tint : (dot & 3) === 1 ? shade(leaf, 1.12) : leaf;
+    }
+    if (kind === 2) {
+      // veteményes: felásott ágyás zöld sorokkal
+      if (lx < 1.0 * s + jx || lx > (1.0 + 2.6 * grow) * s + jx || ly < 1.2 * s + jy || ly > (1.2 + 1.9 * grow) * s + jy) return yard(wx, wy);
+      return frac(ly / (0.62 * s)) < 0.42 ? veg : (hash(wx, wy) & 7) === 0 ? soilB : soilA;
+    }
+    // burkolt terasz: világos lapok
+    if (lx < 1.2 * s + jx || lx > (1.2 + 2.0 * grow) * s + jx || ly < 1.4 * s + jy || ly > (1.4 + 1.8 * grow) * s + jy) return yard(wx, wy);
+    const q = Math.max(2, Math.round(0.6 * s));
+    if (wx % q === 0 || wy % q === 0) return slabDark;
+    return slabLight;
+  };
+
   const areas: Record<string, Mat> = {
-    residential: yard,
-    garden: yard,
+    residential: garden,
+    garden,
     cemetery: yard,
     orchard: yard,
     grass,
@@ -415,7 +459,11 @@ function drawBuilding(t: RasterTarget, b: BuildingFeature, seq: number, spec?: L
     faceColors[i * 4 + 2] = shade(lit, 1.07);
     faceColors[i * 4 + 3] = shade(lit, 0.8);
   });
-  const ridge = shade(style.base, 0.6);
+  const ridge = shade(style.base, 0.56);
+  // a gerinc megvilágított oldala: világos kúpcserép
+  const ridgeLight = shade(style.base, 1.3);
+  const eavePx = 0.42 * s;
+  const wearK = 1 / (2.4 * s);
   const coursePx = Math.max(2, Math.round(0.33 * s));
   const tilePx = Math.max(2, Math.round(0.25 * s));
   const rimPx = style.rim ? 0.45 * s : 0;
@@ -440,6 +488,13 @@ function drawBuilding(t: RasterTarget, b: BuildingFeature, seq: number, spec?: L
       buf[idx] = ridge;
       return;
     }
+    // a gerinc vonala mellett egy pixelnyi világos sáv fut (a fény felőli oldalon)
+    const left2 = idx % w > 1 ? faceBuf[idx - 2] : 0;
+    const up2 = idx >= w * 2 ? faceBuf[idx - w * 2] : 0;
+    if ((left2 && left2 !== id && (left2 - 1) >> 6 === seq) || (up2 && up2 !== id && (up2 - 1) >> 6 === seq)) {
+      buf[idx] = ridgeLight;
+      return;
+    }
     // cserépsorok az eresszel párhuzamosan, soronként fél cseréppel eltolva
     const course = Math.floor(roofH / coursePx);
     const base = roofFace * 4;
@@ -449,8 +504,38 @@ function drawBuilding(t: RasterTarget, b: BuildingFeature, seq: number, spec?: L
     }
     const col = Math.floor((roofAlong + (course & 1) * tilePx * 0.5) / tilePx);
     const v = hash(col + roofFace * 131, course + seed) & 7;
-    buf[idx] = faceColors[base + (v === 0 ? 1 : v === 1 ? 2 : 0)];
+    let color = faceColors[base + (v === 0 ? 1 : v === 1 ? 2 : 0)];
+    // az eresz felé sötétebb a tető, a felületén pedig foltokban látszik az idő (kifakulás, moha)
+    const wear = vnoise(wx * wearK + seed, wy * wearK - seed);
+    const tone = (roofH < eavePx ? 0.88 : 1) * (wear < 0.3 ? 0.93 : wear > 0.74 ? 1.05 : 1);
+    if (tone !== 1) color = shade(color, tone);
+    buf[idx] = color;
   });
+
+  // tetőablak vagy napelem néhány lakóházon, a leghosszabb eresz fölötti tetősíkon
+  const extra = seed % 100;
+  if (!spec && b.kind !== 'church' && b.area > 60 && extra < 38) {
+    let li = 0;
+    for (let i = 1; i < edges.length; i++) if (edges[i].len > edges[li].len) li = i;
+    const e = edges[li];
+    const ux = e.dx / e.len;
+    const uy = e.dy / e.len;
+    const solar = extra >= 24 && b.area > 85;
+    const count = solar ? 1 : 1 + (seed >> 8) % 2;
+    for (let k = 0; k < count; k++) {
+      const alongAt = e.len * (0.5 + (k === 0 ? ((seed >> 4) % 5) * 0.05 - 0.1 : 0.22));
+      for (const sign of [1, -1]) {
+        const depth = (solar ? 1.9 : 1.5) * s;
+        const px = e.ax + ux * alongAt - uy * depth * sign;
+        const py = e.ay + uy * alongAt + ux * depth * sign;
+        if (!pointInPolygon(px / s, py / s, b.pts)) continue;
+        roofAt(edges, gable, px, py);
+        if (roofFace !== li || roofH < 1.0 * s) continue;
+        drawRoofPanel(t, px, py, ux, uy, solar);
+        break;
+      }
+    }
+  }
 
   // kémény a lakóházakon, a gerinc közelében
   if (b.area > 45 && !spec && b.kind !== 'church') {
@@ -489,6 +574,79 @@ function drawBuilding(t: RasterTarget, b: BuildingFeature, seq: number, spec?: L
 
 // --- kisebb elemek ---------------------------------------------------------------
 
+/** Tetőablak (világos keret, sötét üveg) vagy napelemtábla (sötétkék cellák) a tetősíkon, az eresszel párhuzamosan. */
+function drawRoofPanel(t: RasterTarget, cx: number, cy: number, ux: number, uy: number, solar: boolean): void {
+  const s = t.scale;
+  const { buf } = t;
+  const halfU = (solar ? 1.9 : 0.5) * s;
+  const halfV = (solar ? 1.05 : 0.62) * s;
+  const frame = Math.max(1, 0.1 * s);
+  const cellU = 0.95 * s;
+  const cellV = 1.05 * s;
+  forDisc(t, cx, cy, Math.hypot(halfU, halfV) + 1, (idx, dx, dy) => {
+    const u = dx * ux + dy * uy;
+    const v = dy * ux - dx * uy;
+    if (Math.abs(u) > halfU || Math.abs(v) > halfV) return;
+    if (solar) {
+      const lu = (u + halfU) % cellU;
+      const lv = (v + halfV) % cellV;
+      buf[idx] = lu < frame || lv < frame || Math.abs(u) > halfU - frame || Math.abs(v) > halfV - frame ? c(0x8c98a8) : (u + v) % (0.5 * s) < 0.08 * s ? c(0x2c4468) : c(0x1c2c48);
+      return;
+    }
+    if (Math.abs(u) > halfU - frame || Math.abs(v) > halfV - frame) buf[idx] = c(0xd6d4c8);
+    else buf[idx] = u - v > 0.25 * s ? c(0x5c7896) : c(0x2a3a52); // az üvegen megcsillan az ég
+  });
+}
+
+/** Stopvonal: széles fehér sáv keresztben az érkező sávon. */
+function drawStopLine(t: RasterTarget, x: number, y: number, angle: number, half: number): void {
+  const s = t.scale;
+  const { buf } = t;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const halfLen = half * s;
+  const halfThick = 0.25 * s;
+  forDisc(t, x * s, y * s, halfLen + 1, (idx, dx, dy, wx, wy) => {
+    const u = dx * cos + dy * sin;
+    const v = dy * cos - dx * sin;
+    if (Math.abs(u) > halfThick || Math.abs(v) > halfLen) return;
+    buf[idx] = (hash(wx, wy) & 15) === 0 ? c(0xc9c9c2) : c(0xe9e9e1);
+  });
+}
+
+/** Aknafedél: sötét öntöttvas korong világosabb gyűrűvel és bordázattal. */
+function drawManhole(t: RasterTarget, x: number, y: number): void {
+  const s = t.scale;
+  const { buf } = t;
+  const r = 0.4 * s;
+  const rib = Math.max(1, 0.16 * s);
+  forDisc(t, x * s, y * s, r, (idx, dx, dy) => {
+    const d2 = dx * dx + dy * dy;
+    if (d2 > r * r) return;
+    const d = Math.sqrt(d2);
+    if (d > r - Math.max(1, 0.07 * s)) buf[idx] = c(0x2a2a30);
+    else if (d > r * 0.72) buf[idx] = c(0x5c5c64);
+    else buf[idx] = Math.floor((dx + r) / rib) & 1 ? c(0x44444c) : c(0x3a3a42);
+  });
+}
+
+/** A vonal bejárása méterben: `start`-tól `step` méterenként hívja a függvényt a ponttal és az iránnyal. */
+function walk(pts: ArrayLike<number>, start: number, step: number, fn: (x: number, y: number, angle: number) => void): void {
+  let next = start;
+  let acc = 0;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const dx = pts[i + 2] - pts[i];
+    const dy = pts[i + 3] - pts[i + 1];
+    const len = Math.hypot(dx, dy);
+    while (next <= acc + len && len > 0) {
+      const k = (next - acc) / len;
+      fn(pts[i] + dx * k, pts[i + 1] + dy * k, Math.atan2(dy, dx));
+      next += step;
+    }
+    acc += len;
+  }
+}
+
 function drawCrossing(t: RasterTarget, cr: Crossing): void {
   const s = t.scale;
   const { buf } = t;
@@ -520,10 +678,21 @@ function drawBush(t: RasterTarget, x: number, y: number, r: number, seed: number
       buf[idx] = c(0x1e4a20);
       return;
     }
+    // némelyik bokor virágzik: apró, világos pöttyök a lombon
+    if (seed % 6 === 0) {
+      const dot = hash(Math.floor(wx / (0.24 * s)) + seed, Math.floor(wy / (0.24 * s)));
+      if (dot % 7 === 0) {
+        buf[idx] = BLOSSOM[(seed >>> 4) % BLOSSOM.length];
+        return;
+      }
+    }
     const v = 0.5 - ((dx + dy) / (rp * 1.4142)) * 0.4 + (vnoise(wx * k * 1.7, wy * k * 1.7 + seed) - 0.5) * 0.6;
     buf[idx] = v < 0.36 ? tones[0] : v < 0.62 ? tones[1] : tones[2];
   });
 }
+
+/** virágzó bokrok és fák pöttyeinek színe */
+const BLOSSOM = [0xf6eef0, 0xf2a8c0, 0xf4e27a, 0xe8d0f0].map(c);
 
 const CANOPY_TONES: number[][] = [
   [0x1f4d22, 0x2d6a2c, 0x3c8436, 0x55a045],
@@ -549,6 +718,11 @@ function drawCanopy(t: RasterTarget, tree: Tree, seed: number): void {
   const k = 1 / (0.42 * s);
   const edgePx = Math.max(1, 0.1 * s);
   const tier = 0.5 * s;
+  // a legvilágosabb, napsütötte levélcsomók színe
+  const sunlit = shade(tones[3], 1.16);
+  // a gyümölcsfák és néhány lombos fa virágzik
+  const blossom = !conifer && (tree.kind === 2 ? seed % 3 === 0 : seed % 23 === 0) ? BLOSSOM[seed % 2] : 0;
+  const k2 = 1 / (0.2 * s);
   forDisc(t, tree.x * s, tree.y * s, rp + 1, (idx, dx, dy, wx, wy) => {
     const d = Math.sqrt(dx * dx + dy * dy);
     if (d > rp) return;
@@ -565,7 +739,15 @@ function drawCanopy(t: RasterTarget, tree: Tree, seed: number): void {
     const q = d / edge;
     let v = 0.5 - ((dx + dy) / (rp * 1.4142)) * 0.32 + (vnoise(wx * k + seed, wy * k + seed * 3) - 0.5) * 0.7 - q * q * q * 0.22;
     if (conifer) v += Math.floor(d / tier) & 1 ? -0.14 : 0.1;
-    buf[idx] = tones[v < 0.3 ? 0 : v < 0.52 ? 1 : v < 0.74 ? 2 : 3];
+    else {
+      // kisebb levélcsomók: ettől a korona nem egyenletes folt, hanem tagolt lomb
+      v += (vnoise(wx * k2 + seed * 5, wy * k2 - seed) - 0.5) * 0.34;
+      if (blossom && hash(Math.floor(wx / (0.28 * s)) + seed, Math.floor(wy / (0.28 * s))) % 5 === 0) {
+        buf[idx] = blossom;
+        return;
+      }
+    }
+    buf[idx] = v < 0.28 ? tones[0] : v < 0.5 ? tones[1] : v < 0.72 ? tones[2] : v < 0.94 ? tones[3] : sunlit;
   });
 }
 
@@ -694,17 +876,52 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       if (MINOR_KINDS.has(road.kind)) continue;
       const hw = (road.width * s) / 2;
       const mat = asphaltFor(m, road.kind);
-      const edge = STREETS.has(road.kind) || MAIN_ROADS.has(road.kind) ? c(0x3e3e46) : c(0x55555b);
-      strokeLine(t, road.pts, hw, (idx, wx, wy, d) => {
-        buf[idx] = d > hw - line ? edge : mat(wx, wy);
+      // lakóutcán világos szegélykő, mögötte sötét vízfolyóka; főúton sötét aszfaltszél (a padka mellett)
+      const kerb = STREETS.has(road.kind);
+      const edge = kerb ? c(0xa39f93) : MAIN_ROADS.has(road.kind) ? c(0x3e3e46) : c(0x55555b);
+      const gutter = c(0x3a3a42);
+      strokeLine(t, road.pts, hw, (idx, wx, wy, d, _along, cap) => {
+        buf[idx] = d > hw - line ? edge : kerb && !cap && d > hw - line * 2.2 ? gutter : mat(wx, wy);
       });
     }
     // a kereszteződésekben a szegélyt újra aszfalt fedi
     for (const { road } of roads) {
       if (MINOR_KINDS.has(road.kind)) continue;
       const mat = asphaltFor(m, road.kind);
-      strokeLine(t, road.pts, (road.width * s) / 2 - line, (idx, wx, wy) => {
+      strokeLine(t, road.pts, (road.width * s) / 2 - (STREETS.has(road.kind) ? line * 2.2 : line), (idx, wx, wy) => {
         buf[idx] = mat(wx, wy);
+      });
+    }
+    // A közutakon látszik a használat: sötétebb keréknyomok a két sávban, itt-ott foltozás, a
+    // főúton szélső vonal. Ezek csak a szakaszok mellé kerülnek (a lekerekített végekbe nem),
+    // így a töréspontoknál és a kereszteződésekben nem rajzolnak íveket.
+    for (const { road, n } of roads) {
+      const kerb = STREETS.has(road.kind);
+      const main = MAIN_ROADS.has(road.kind);
+      if (!kerb && !main) continue;
+      const hw = (road.width * s) / 2;
+      const inner = hw - (kerb ? line * 2.2 : line);
+      const lane = hw * 0.5;
+      const wheel = 0.82 * s;
+      const band = 0.3 * s;
+      const patchLen = 13 * s;
+      const edgeLine = c(0xdedcd0);
+      strokeLine(t, road.pts, inner, (idx, _wx, _wy, d, along, cap) => {
+        if (cap) return;
+        let color = buf[idx];
+        {
+          if (Math.abs(Math.abs(d - lane) - wheel) < band) color = shade(color, 0.945);
+          const seg = Math.floor(along / patchLen);
+          const ph = hash(seg + n * 31, n);
+          if ((ph & 15) === 0) {
+            const u = along - seg * patchLen;
+            const from = hw * (0.12 + ((ph >>> 3) & 3) * 0.12);
+            if (u > patchLen * 0.25 && u < patchLen * (0.45 + ((ph >>> 5) & 3) * 0.08) && d > from && d < from + hw * 0.42) color = shade(color, 0.9);
+          }
+          // főúton folytonos fehér szélső vonal
+          if (main && d > hw - 0.62 * s && d < hw - 0.48 * s) color = edgeLine;
+        }
+        buf[idx] = color;
       });
     }
     // felezővonal a főúton: 3 m vonal, 6 m köz
@@ -716,6 +933,22 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
     }
     for (const cr of data.crossings) {
       if (inView(cr.x, cr.y)) drawCrossing(t, cr);
+    }
+    // stopvonalak a főútra kiérkező utcák végén
+    for (let i = 0; i < map.stopLines.length; i += 4) {
+      if (inView(map.stopLines[i], map.stopLines[i + 1])) drawStopLine(t, map.stopLines[i], map.stopLines[i + 1], map.stopLines[i + 2], map.stopLines[i + 3]);
+    }
+    // aknafedelek a közutakon, kb. 60 méterenként, felváltva a két sávban
+    for (const { road, n } of roads) {
+      if (!STREETS.has(road.kind) && !MAIN_ROADS.has(road.kind)) continue;
+      let k = 0;
+      walk(road.pts, 14 + (hash(n, 5) % 30), 61, (x, y, angle) => {
+        const side = (k++ + n) & 1 ? 1 : -1;
+        const off = road.width * 0.22 * side;
+        const mx = x - Math.sin(angle) * off;
+        const my = y + Math.cos(angle) * off;
+        if (inView(mx, my)) drawManhole(t, mx, my);
+      });
     }
     // a burkolt terek az odavezető gyalogutak fölé kerülnek
     drawLandmarkAreas(map, t, 'over');
@@ -753,6 +986,9 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
     const poles = data.decor.poles;
     const poleIds = map.poleIndex.query(minX, minY, maxX, maxY);
 
+    // esőben a burkolatlan talaj foltokban felázik (a bokrok és az épületek már e fölé kerülnek)
+    if (map.weather === 'rain') muddy(t);
+
     // 6. bokrok
     for (const n of map.bushIndex.query(minX, minY, maxX, maxY)) {
       drawBush(t, bushes[n * 3], bushes[n * 3 + 1], bushes[n * 3 + 2], hash(n * 3, 313));
@@ -760,6 +996,16 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
 
     // az összedőlt épületek romjai a talajon
     for (const n of ruins) drawRuin(t, data.buildings[n], n);
+
+    // a falak tövében a talaj sötétebb: ettől az épület „ül” a földön
+    const aoPx = 1.0 * s;
+    for (const b of buildings) {
+      const ring = Array.from(b.pts);
+      ring.push(ring[0], ring[1]);
+      strokeRing(t, ring, 0, aoPx, (idx, _wx, _wy, d) => {
+        if (!coverBuf[idx] && buf[idx] !== 0) buf[idx] = shade(buf[idx], 0.74 + 0.26 * (d / aoPx));
+      });
+    }
 
     // 7. vetett árnyékok (épületek, álló fák és oszlopok) – maszkba gyűjtve, hogy az átfedés ne sötétedjen kétszer
     const mark: Put = (idx) => {
@@ -837,7 +1083,6 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
     for (const n of map.scarIndex.query(minX, minY, maxX, maxY)) {
       drawScar(t, map.scars[n * 3], map.scars[n * 3 + 1], map.scars[n * 3 + 2], n);
     }
-    if (map.weather === 'rain') muddy(t);
   } else {
     for (const b of buildings) drawBuilding(t, b, 0);
     const ruin = c(0x6e6860);
@@ -871,20 +1116,37 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
 
 /** Esőben a zöld (burkolatlan) felületek sárosak: a zöld árnyalatok barnába hajlanak. */
 function muddy(t: RasterTarget): void {
-  const { buf } = t;
-  for (let idx = 0; idx < buf.length; idx++) {
-    const px = buf[idx];
-    const r = px & 255;
-    const g = (px >>> 8) & 255;
-    const b = (px >>> 16) & 255;
-    // csak a zöld túlsúlyú pixelek (fű, kert, park, erdőtalaj)
-    if (g <= r * 1.06 || g <= b * 1.12) continue;
-    const n = (hash((idx % t.w) + t.ox, Math.floor(idx / t.w) + t.oy) & 255) / 255;
-    const k = 0.5 + 0.18 * n;
-    const nr = r + (104 - r) * k;
-    const ng = g + (84 - g) * k;
-    const nb = b + (52 - b) * k;
-    buf[idx] = ((px & 0xff000000) | ((nb & 255) << 16) | ((ng & 255) << 8) | (nr & 255)) >>> 0;
+  const { buf, scale: s } = t;
+  // a foltok mérete méterben: nagy, lassan változó sárfoltok, bennük kisebb tócsák
+  const big = 1 / (9 * s);
+  const small = 1 / (2.2 * s);
+  for (let py = 0; py < t.h; py++) {
+    const wy = py + t.oy;
+    for (let px = 0; px < t.w; px++) {
+      const idx = py * t.w + px;
+      const color = buf[idx];
+      const r = color & 255;
+      const g = (color >>> 8) & 255;
+      const b = (color >>> 16) & 255;
+      // csak a zöld túlsúlyú pixelek (fű, kert, park, erdőtalaj)
+      if (g <= r * 1.06 || g <= b * 1.12) continue;
+      const wx = px + t.ox;
+      const n = vnoise(wx * big, wy * big) * 0.7 + vnoise(wx * small + 31, wy * small + 17) * 0.3;
+      // a fű mindenütt nedves (kicsit sötétebb, tompább); a foltokban egyre sárosabb
+      const mud = Math.max(0, Math.min(1, (n - 0.38) * 2.6));
+      const grain = ((hash(wx, wy) & 31) - 15) * 0.6;
+      let nr = r * 0.86 + (112 - r * 0.86) * mud * 0.8 + grain * mud;
+      let ng = g * 0.84 + (90 - g * 0.84) * mud * 0.8 + grain * mud;
+      let nb = b * 0.9 + (62 - b * 0.9) * mud * 0.8 + grain * mud * 0.6;
+      if (n > 0.74) {
+        // tócsa a sárfolt közepén: az eget tükröző, szürkéskék víz, világosabb szegéllyel
+        const edge = n < 0.765 ? 1.18 : 1;
+        nr = 96 * edge;
+        ng = 108 * edge;
+        nb = 120 * edge;
+      }
+      buf[idx] = ((color & 0xff000000) | ((nb & 255) << 16) | ((ng & 255) << 8) | (nr & 255)) >>> 0;
+    }
   }
 }
 
