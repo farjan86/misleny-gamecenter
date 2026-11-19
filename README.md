@@ -4,9 +4,10 @@ Böngészőben futó, felülnézetes tankos játék prototípusa. A pálya
 **Kozármisleny** teljes beépített területe (kb. 2 × 3,5 km), valós
 térképadatokból; a kiindulópont a **Polgármesteri Hivatal** (Pécsi utca 124.).
 
-Jelenleg egy tankkal szabadon bejárható a pálya: látszanak az utak, a
-járdák, a zebrák, az épületek, a parkok, a fák és a tájékozódási pontok, az
-utcanevek pedig az útburkolatra vannak írva.
+A pályán gép vezérelte ellenséges tankok járőröznek (a számuk állítható), az
+utakon pedig felvehető tárgyak vannak: másféle lövedékek, pajzs, turbó,
+olajfolt és társaik. Látszanak az utak, a járdák, a zebrák, az épületek, a
+parkok, a fák és a tájékozódási pontok; az utcanevek az útburkolatra vannak írva.
 
 ## Indítás
 
@@ -39,7 +40,9 @@ Klasszikus tankirányítás. A tank elejét a sárga, hegyes orr jelöli.
 | Bal kattintás / Space | lövés |
 | M | az egész város térképe utcanevekkel (a sarokban lévő kis térkép a tank környékét mutatja) |
 | F | teljes képernyős mód be/ki (a bal felső gombbal is) |
-| R | újraindítás |
+| E / jobb egérgomb | olajfolt lerakása (ha van töltet) |
+| + / − | több / kevesebb ellenséges tank (a HUD gombjaival is) |
+| R | új kör |
 | H | súgó be/ki |
 | Q | részletesség váltása (12 → 10 → 8 pixel/méter); gyengébb gépen az alacsonyabb érték gyorsabb |
 

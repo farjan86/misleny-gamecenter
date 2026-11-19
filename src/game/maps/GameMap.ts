@@ -2,7 +2,7 @@
 // ütközési rács és út-keresés a szimulációhoz. Nincs Phaser-függés.
 
 import { SegmentGrid } from '../sim/collision';
-import type { Terrain } from '../sim/world';
+import type { RoadGuide, Terrain } from '../sim/world';
 import type { LandmarkBuilding, MapData, RoadFeature } from './types';
 
 export type Box = [minX: number, minY: number, maxX: number, maxY: number];
@@ -186,6 +186,9 @@ export class GameMap implements Terrain {
   /** burkolt felületek az utakon kívül (tér, aszfaltozott udvar) */
   private pavedRings: number[][] = [];
   private pavedBox: Box = [0, 0, -1, -1];
+  /** a közutak a hosszukkal, a véletlen helyek kisorsolásához (első használatkor épül fel) */
+  private spotRoads: { road: RoadFeature; length: number }[] | null = null;
+  private spotTotal = 0;
 
   /**
    * `collision: false` – csak rajzoláshoz (pl. háttérszálon): az ütközési rács
@@ -310,6 +313,59 @@ export class GameMap implements Terrain {
       if (dx * dx + dy * dy < t.r * t.r * 0.8) return true;
     }
     return false;
+  }
+
+  /**
+   * Véletlen pont egy közút úttestjén (felvehető tárgynak, újraéledő botnak).
+   * Az utak a hosszuk arányában kerülnek sorra, így a tárgyak egyenletesen
+   * oszlanak el a városban. null, ha a kisorsolt hely nem használható.
+   */
+  pickupSpot(rnd: () => number): { x: number; y: number } | null {
+    if (!this.spotRoads) {
+      this.spotRoads = [];
+      for (const road of this.data.roads) {
+        if (!DRIVABLE.has(road.kind) || road.kind.startsWith('motorway')) continue;
+        let length = 0;
+        for (let i = 0; i + 3 < road.pts.length; i += 2) length += Math.hypot(road.pts[i + 2] - road.pts[i], road.pts[i + 3] - road.pts[i + 1]);
+        this.spotRoads.push({ road, length });
+        this.spotTotal += length;
+      }
+    }
+    let roll = rnd() * this.spotTotal;
+    let pick = this.spotRoads[0];
+    for (const entry of this.spotRoads) {
+      pick = entry;
+      roll -= entry.length;
+      if (roll < 0) break;
+    }
+    if (!pick) return null;
+    // a kisorsolt út véletlen pontja, a tengelytől oldalra eltolva (az úttesten belül)
+    const pts = pick.road.pts;
+    let along = rnd() * pick.length;
+    const side = (rnd() - 0.5) * Math.max(0, pick.road.width - 4.6);
+    for (let i = 0; i + 3 < pts.length; i += 2) {
+      const dx = pts[i + 2] - pts[i];
+      const dy = pts[i + 3] - pts[i + 1];
+      const len = Math.hypot(dx, dy);
+      if (along > len) {
+        along -= len;
+        continue;
+      }
+      const t = len > 0 ? along / len : 0;
+      const x = pts[i] + dx * t - (dy / (len || 1)) * side;
+      const y = pts[i + 1] + dy * t + (dx / (len || 1)) * side;
+      if (x < 6 || y < 6 || x > this.width - 6 || y > this.height - 6) return null;
+      if (this.walls.resolveCircle(x, y, 2).hit) return null;
+      return { x, y };
+    }
+    return null;
+  }
+
+  /** A legközelebbi közút pontja és iránya (a botok útkövetéséhez). */
+  roadGuide(x: number, y: number): RoadGuide | null {
+    const near = this.nearestRoad(x, y, 45, true);
+    if (!near) return null;
+    return { x: near.hit.x, y: near.hit.y, angle: near.hit.angle, width: near.road.width };
   }
 
   /** Kezdőpont: a hivatalhoz legközelebbi közút tengelyvonalán. */

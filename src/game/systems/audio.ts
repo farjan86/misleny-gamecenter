@@ -66,8 +66,9 @@ export class Sfx {
     src.start(now, Math.random() * 0.5, duration);
   }
 
-  shot(): void {
-    this.burst(0.18, 3200, 300, 0.7);
+  /** volume: 0..1 – távoli lövés halkabb */
+  shot(volume = 1): void {
+    this.burst(0.18, 3200, 300, 0.7 * volume);
     if (!this.ctx || !this.master || this.muted) return;
     const now = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
@@ -75,7 +76,7 @@ export class Sfx {
     osc.frequency.setValueAtTime(220, now);
     osc.frequency.exponentialRampToValueAtTime(55, now + 0.14);
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.25, now);
+    gain.gain.setValueAtTime(0.25 * volume, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
     osc.connect(gain).connect(this.master);
     osc.start(now);
@@ -89,5 +90,55 @@ export class Sfx {
 
   bump(): void {
     this.burst(0.12, 500, 90, 0.5);
+  }
+
+  /** Egyszerű hangjegy: frekvencia-csúszás a megadott hullámformával. */
+  private tone(type: OscillatorType, from: number, to: number, duration: number, volume: number, delay = 0): void {
+    if (!this.ctx || !this.master || this.muted) return;
+    const start = this.ctx.currentTime + delay;
+    const osc = this.ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(from, start);
+    osc.frequency.exponentialRampToValueAtTime(to, start + duration);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(volume, start);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    osc.connect(gain).connect(this.master);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+  }
+
+  laser(volume = 1): void {
+    this.tone('sawtooth', 1800, 320, 0.22, 0.22 * volume);
+    this.tone('square', 2600, 900, 0.12, 0.1 * volume);
+  }
+
+  rocket(volume = 1): void {
+    this.burst(0.5, 900, 2600, 0.5 * volume);
+    this.tone('sawtooth', 110, 60, 0.4, 0.2 * volume);
+  }
+
+  /** tárgy felvétele: két emelkedő hang */
+  pickup(): void {
+    this.tone('triangle', 660, 680, 0.1, 0.3);
+    this.tone('triangle', 990, 1020, 0.16, 0.3, 0.09);
+  }
+
+  ricochet(volume = 1): void {
+    this.tone('sine', 2400, 700, 0.18, 0.25 * volume);
+  }
+
+  /** megcsúszás az olajon */
+  skid(): void {
+    this.burst(0.7, 2200, 500, 0.45);
+  }
+
+  /** találat; absorbed: pajzs vagy sebezhetetlenség fogta fel */
+  hit(absorbed: boolean): void {
+    if (absorbed) this.tone('sine', 1500, 2200, 0.16, 0.3);
+    else {
+      this.burst(0.16, 1800, 200, 0.6);
+      this.tone('square', 180, 70, 0.14, 0.25);
+    }
   }
 }

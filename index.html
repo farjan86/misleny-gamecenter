@@ -14,6 +14,17 @@
         <div class="panel title">TANK MISLENY <span>· KOZÁRMISLENY</span></div>
         <div class="panel" id="hud-street">–</div>
         <div class="panel" id="hud-townhall">Hivatal: –</div>
+        <div class="panel" id="hud-status">
+          <div id="hud-health"><div id="hud-health-fill"></div><span id="hud-health-text">100 / 100</span></div>
+          <div id="hud-score">Kilőtt ellenfél: 0 · Kilőttek: 0</div>
+        </div>
+        <div class="panel" id="hud-bots">
+          Ellenfelek:
+          <span class="btn" id="hud-bots-minus" role="button" title="Kevesebb ellenfél (−)">−</span>
+          <span id="hud-bots-count">3</span>
+          <span class="btn" id="hud-bots-plus" role="button" title="Több ellenfél (+)">+</span>
+        </div>
+        <div class="panel hidden" id="hud-effects"></div>
         <div class="panel" id="hud-fullscreen" role="button">⛶ Teljes képernyő (F)</div>
       </div>
       <div id="hud-minimap" class="panel">
@@ -25,6 +36,8 @@
         W / ↑ – előre · S / ↓ – tolatás<br />
         A D / ← → – a tank forgatása<br />
         Egér – célzás · Kattintás / Space – lövés<br />
+        E / jobb egérgomb – olajfolt lerakása<br />
+        + / − – ellenfelek száma<br />
         M – térkép · F – teljes képernyő<br />
         R – újraindítás · H – súgó<br />
         Q – részletesség: <span id="hud-quality">–</span>
@@ -34,6 +47,7 @@
         <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a>
         (ODbL)<span id="hud-extra-attribution"></span>
       </div>
+      <div id="hud-toast" class="panel"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
     </div>

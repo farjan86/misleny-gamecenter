@@ -4,6 +4,8 @@
 
 import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
+import { PICKUP_STYLE } from '../entities/pickupStyle';
+import type { PickupState, TankState } from '../sim/world';
 
 /** A térképkép felbontása: pixel / méter. */
 const MINI_SCALE = 0.3;
@@ -94,6 +96,10 @@ export interface HudFrame {
   canvasTop: number;
   canvasWidth: number;
   canvasHeight: number;
+  /** a pálya összes tankja (a botok a térképen piros pontként látszanak) */
+  tanks: readonly TankState[];
+  /** a felvehető tárgyak, ha a radar aktív; különben null */
+  pickups: readonly PickupState[] | null;
 }
 
 function el<T extends HTMLElement>(id: string): T {
@@ -121,6 +127,15 @@ export class Hud {
   private miniY = NaN;
   private miniAngle = NaN;
   private miniDirty = true;
+  private readonly healthFill = el<HTMLDivElement>('hud-health-fill');
+  private readonly healthText = el<HTMLSpanElement>('hud-health-text');
+  private readonly score = el<HTMLDivElement>('hud-score');
+  private readonly effects = el<HTMLDivElement>('hud-effects');
+  private readonly toastBox = el<HTMLDivElement>('hud-toast');
+  private readonly botCount = el<HTMLSpanElement>('hud-bots-count');
+  private statusKey = '';
+  private effectsKey = '';
+  private toastTimer = 0;
 
   constructor(
     private readonly map: GameMap,
@@ -162,6 +177,46 @@ export class Hud {
     node.style.display = 'none';
     layer.appendChild(node);
     this.labels.push({ el: node, x, y, visible: false, left: NaN, top: NaN });
+  }
+
+  /** A − és + gomb a botok számát állítja; a visszahívás a változás irányát kapja (−1 vagy +1). */
+  onBotChange(callback: (delta: number) => void): void {
+    el<HTMLSpanElement>('hud-bots-minus').addEventListener('click', () => callback(-1));
+    el<HTMLSpanElement>('hud-bots-plus').addEventListener('click', () => callback(1));
+  }
+
+  setBotCount(count: number): void {
+    this.botCount.textContent = String(count);
+    this.miniDirty = true;
+  }
+
+  /** Rövid értesítés a képernyő tetején (pl. felvett tárgy). */
+  toast(text: string): void {
+    this.toastBox.textContent = text;
+    this.toastBox.classList.add('show');
+    window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastBox.classList.remove('show'), 2600);
+  }
+
+  /** Életerő és eredmény; respawn > 0: a tank ki van lőve, ennyi mp múlva éled újra. */
+  setStatus(hp: number, maxHp: number, kills: number, deaths: number, respawn: number): void {
+    const key = `${Math.ceil(hp)}|${kills}|${deaths}|${Math.ceil(respawn)}`;
+    if (key === this.statusKey) return;
+    this.statusKey = key;
+    const ratio = Math.max(0, Math.min(1, hp / maxHp));
+    this.healthFill.style.width = `${Math.round(ratio * 100)}%`;
+    this.healthFill.style.background = ratio > 0.5 ? '#5ad24a' : ratio > 0.25 ? '#e8c23a' : '#e0483a';
+    this.healthText.textContent = respawn > 0 ? `újraéledés: ${Math.ceil(respawn)} mp` : `${Math.ceil(hp)} / ${maxHp}`;
+    this.score.textContent = `Kilőtt ellenfél: ${kills} · Kilőttek: ${deaths}`;
+  }
+
+  /** Az aktív bónuszok listája (soronként egy). */
+  setEffects(lines: readonly string[]): void {
+    const key = lines.join('\n');
+    if (key === this.effectsKey) return;
+    this.effectsKey = key;
+    this.effects.classList.toggle('hidden', lines.length === 0);
+    this.effects.textContent = key;
   }
 
   hideLoading(): void {
@@ -213,6 +268,8 @@ export class Hud {
 
     // a minitérképet csak akkor rajzoljuk újra, ha a tank érdemben elmozdult vagy elfordult
     const moved = !(Math.abs(f.x - this.miniX) < 0.5 && Math.abs(f.y - this.miniY) < 0.5 && Math.abs(f.angle - this.miniAngle) < 0.03);
+    // ha vannak ellenfelek vagy aktív a radar, a térkép folyamatosan frissül
+    if (f.tanks.length > 1 || f.pickups) this.miniDirty = true;
     if (moved || this.miniDirty) {
       this.miniX = f.x;
       this.miniY = f.y;
@@ -291,6 +348,27 @@ export class Hud {
     ctx.fillRect(th.x * s - 6, th.y * s - 6, 12, 12);
     ctx.fillStyle = '#d03a40';
     ctx.fillRect(th.x * s - 3, th.y * s - 3, 6, 6);
+
+    // radar: a felvehető tárgyak a saját színükkel
+    if (f.pickups) {
+      for (const p of f.pickups) {
+        ctx.fillStyle = '#101418';
+        ctx.fillRect(p.x * s - 4, p.y * s - 4, 8, 8);
+        ctx.fillStyle = PICKUP_STYLE[p.kind].color;
+        ctx.fillRect(p.x * s - 3, p.y * s - 3, 6, 6);
+        ctx.fillStyle = '#fff6d0';
+        ctx.fillRect(p.x * s - 1, p.y * s - 1, 2, 2);
+      }
+    }
+
+    // ellenséges tankok: piros pont
+    for (const t of f.tanks) {
+      if (!t.bot || !t.alive) continue;
+      ctx.fillStyle = '#101418';
+      ctx.fillRect(t.x * s - 5, t.y * s - 5, 10, 10);
+      ctx.fillStyle = '#ff4a3a';
+      ctx.fillRect(t.x * s - 3.5, t.y * s - 3.5, 7, 7);
+    }
 
     // a tank: irányba forgatott nyíl
     ctx.save();

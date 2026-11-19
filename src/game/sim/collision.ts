@@ -6,6 +6,9 @@ export interface RayHit {
   t: number;
   x: number;
   y: number;
+  /** az eltalált fal egységnyi normálisa, a sugár kiindulási oldala felé mutat */
+  nx: number;
+  ny: number;
 }
 
 export class SegmentGrid {
@@ -137,6 +140,7 @@ export class SegmentGrid {
     const rx = bx - ax;
     const ry = by - ay;
     let best = Infinity;
+    let bestSeg = -1;
     this.forEachNear(Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by), (i) => {
       const cx = s[i * 4];
       const cy = s[i * 4 + 1];
@@ -146,9 +150,22 @@ export class SegmentGrid {
       if (Math.abs(den) < 1e-9) return;
       const t = ((cx - ax) * sy - (cy - ay) * sx) / den;
       const u = ((cx - ax) * ry - (cy - ay) * rx) / den;
-      if (t >= 0 && t <= 1 && u >= 0 && u <= 1 && t < best) best = t;
+      if (t >= 0 && t <= 1 && u >= 0 && u <= 1 && t < best) {
+        best = t;
+        bestSeg = i;
+      }
     });
-    if (best === Infinity) return null;
-    return { t: best, x: ax + rx * best, y: ay + ry * best };
+    if (bestSeg < 0) return null;
+    // a fal normálisa, a sugár érkezési oldala felé fordítva
+    const sx = s[bestSeg * 4 + 2] - s[bestSeg * 4];
+    const sy = s[bestSeg * 4 + 3] - s[bestSeg * 4 + 1];
+    const len = Math.hypot(sx, sy) || 1;
+    let nx = -sy / len;
+    let ny = sx / len;
+    if (nx * rx + ny * ry > 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    return { t: best, x: ax + rx * best, y: ay + ry * best, nx, ny };
   }
 }
