@@ -1,5 +1,7 @@
-// DOM-alapú HUD a játékvászon fölött: utcanév, a hivatal iránya, minitérkép,
-// a tájékozódási pontok feliratai és az OSM-forrásmegjelölés.
+// DOM-alapú felület a játékvászon fölött. Játék közben csak a térkép és az
+// információ gombja látszik állandóan; az irányítás, a tank állapota és a
+// forrásmegjelölés az információs panelen van. Emellett a tájékozódási pontok
+// feliratai és a rövid értesítések tartoznak ide.
 // A DOM-ot csak akkor írja, ha a megjelenítendő érték tényleg változott.
 
 import type { GameMap } from '../maps/GameMap';
@@ -29,8 +31,6 @@ const POI_LABEL: Record<string, string> = {
 };
 /** Ezeknél a típusoknál az OSM-ben szereplő (intézmény)név jelenik meg. */
 const USE_OSM_NAME = new Set(['place_of_worship', 'school', 'kindergarten', 'library', 'community_centre']);
-
-const ARROWS = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗'];
 
 interface Label {
   el: HTMLDivElement;
@@ -80,6 +80,15 @@ function streetLabels(map: GameMap): StreetLabel[] {
   return placed;
 }
 
+/** A tanknál lévő fegyver, képesség vagy aktív tárgy a képernyő tetején. */
+export interface LoadoutItem {
+  /** az ikon képe (adat-URL); üres, ha nincs ikon (pl. a szint) */
+  icon: string;
+  label: string;
+  /** a hátralévő mennyiség kiírva (pl. „18 lövés”, „9 mp”, „×2”), vagy üres */
+  count: string;
+}
+
 /** A képkockánként átadott állapot; a hívó ugyanazt az objektumot használhatja újra. */
 export interface HudFrame {
   /** a tank helye méterben és a test iránya */
@@ -96,8 +105,10 @@ export interface HudFrame {
   canvasTop: number;
   canvasWidth: number;
   canvasHeight: number;
-  /** a pálya összes tankja (a botok a térképen piros pontként látszanak) */
+  /** az ismert tankok: a botok piros, a többi játékos narancs pontként látszik a térképen */
   tanks: readonly TankState[];
+  /** a saját (követett) tank azonosítója */
+  focusId: number;
   /** a felvehető tárgyak, ha a radar aktív; különben null */
   pickups: readonly PickupState[] | null;
 }
@@ -109,36 +120,26 @@ function el<T extends HTMLElement>(id: string): T {
 }
 
 export class Hud {
-  private readonly street = el<HTMLDivElement>('hud-street');
-  private readonly townhall = el<HTMLDivElement>('hud-townhall');
   private readonly miniPanel = el<HTMLDivElement>('hud-minimap');
   private readonly mini = el<HTMLCanvasElement>('minimap');
-  private readonly help = el<HTMLDivElement>('hud-help');
+  private readonly info = el<HTMLDivElement>('hud-info');
+  private readonly infoBody = el<HTMLDivElement>('hud-info-body');
   private readonly miniCtx: CanvasRenderingContext2D;
   private readonly miniBase: HTMLCanvasElement;
+  /** a térképképnek az a része, amely a játéktérhez tartozik (pixel): csak ez látszik */
+  private readonly crop: { x: number; y: number; w: number; h: number };
   private readonly labels: Label[] = [];
   private readonly streets: StreetLabel[];
   private frame = 0;
   private bigMap = false;
-  // az utoljára kiírt értékek
-  private streetText = '';
-  private townhallText = '';
   private miniX = NaN;
   private miniY = NaN;
   private miniAngle = NaN;
   private miniDirty = true;
-  private readonly healthFill = el<HTMLDivElement>('hud-health-fill');
-  private readonly healthText = el<HTMLSpanElement>('hud-health-text');
-  private readonly score = el<HTMLDivElement>('hud-score');
-  private readonly boost = el<HTMLDivElement>('hud-boost');
-  private readonly boostFill = el<HTMLDivElement>('hud-boost-fill');
-  private readonly boostText = el<HTMLSpanElement>('hud-boost-text');
-  private boostKey = '';
-  private readonly effects = el<HTMLDivElement>('hud-effects');
   private readonly toastBox = el<HTMLDivElement>('hud-toast');
-  private readonly botCount = el<HTMLSpanElement>('hud-bots-count');
-  private statusKey = '';
-  private effectsKey = '';
+  private infoKey = '';
+  private readonly loadout = el<HTMLDivElement>('hud-loadout');
+  private loadoutKey = '';
   private toastTimer = 0;
 
   constructor(
@@ -154,11 +155,21 @@ export class Hud {
     const buf = new Uint32Array(w * h);
     renderMap(map, { buf, w, h, ox: 0, oy: 0, scale: MINI_SCALE, detail: false });
     this.miniBase.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer), w, h), 0, 0);
+    const area = map.bounds ?? { minX: 0, minY: 0, maxX: map.width, maxY: map.height };
+    this.crop = {
+      x: Math.round(area.minX * MINI_SCALE),
+      y: Math.round(area.minY * MINI_SCALE),
+      w: Math.round((area.maxX - area.minX) * MINI_SCALE),
+      h: Math.round((area.maxY - area.minY) * MINI_SCALE),
+    };
     this.miniCtx = this.mini.getContext('2d')!;
     this.resizeMinimap();
+    window.addEventListener('resize', () => this.resizeMinimap());
 
     this.streets = streetLabels(map);
-    if (map.data.meta.extraAttribution) el<HTMLSpanElement>('hud-extra-attribution').textContent = ` · ${map.data.meta.extraAttribution}`;
+    el<HTMLDivElement>('hud').classList.remove('hidden');
+    el<HTMLDivElement>('hud-info-button').onclick = () => this.toggleInfo();
+    el<HTMLSpanElement>('hud-info-close').onclick = () => this.toggleInfo();
 
     const layer = el<HTMLDivElement>('labels');
     layer.replaceChildren();
@@ -183,18 +194,6 @@ export class Hud {
     this.labels.push({ el: node, x, y, visible: false, left: NaN, top: NaN });
   }
 
-  /** A − és + gomb a botok számát állítja; a visszahívás a változás irányát kapja (−1 vagy +1). */
-  onBotChange(callback: (delta: number) => void): void {
-    for (const [id, delta] of [['hud-bots-minus10', -10], ['hud-bots-minus', -1], ['hud-bots-plus', 1], ['hud-bots-plus10', 10]] as const) {
-      el<HTMLSpanElement>(id).addEventListener('click', () => callback(delta));
-    }
-  }
-
-  setBotCount(count: number): void {
-    this.botCount.textContent = String(count);
-    this.miniDirty = true;
-  }
-
   /** Rövid értesítés a képernyő tetején (pl. felvett tárgy). */
   toast(text: string): void {
     this.toastBox.textContent = text;
@@ -203,44 +202,60 @@ export class Hud {
     this.toastTimer = window.setTimeout(() => this.toastBox.classList.remove('show'), 2600);
   }
 
-  /** Életerő és eredmény; respawn > 0: a tank ki van lőve, ennyi mp múlva éled újra. */
-  setStatus(hp: number, maxHp: number, level: number, kills: number, deaths: number, respawn: number): void {
-    const key = `${Math.ceil(hp)}|${maxHp}|${level}|${kills}|${deaths}|${Math.ceil(respawn)}`;
-    if (key === this.statusKey) return;
-    this.statusKey = key;
-    const ratio = Math.max(0, Math.min(1, hp / maxHp));
-    this.healthFill.style.width = `${Math.round(ratio * 100)}%`;
-    this.healthFill.style.background = ratio > 0.5 ? '#5ad24a' : ratio > 0.25 ? '#e8c23a' : '#e0483a';
-    this.healthText.textContent = respawn > 0 ? `újraéledés: ${Math.ceil(respawn)} mp` : `${Math.ceil(hp)} / ${maxHp}`;
-    this.score.textContent = `Szint: ${level} · Kilőtt: ${kills} · Kilőttek: ${deaths}`;
+  /**
+   * Ami éppen a tanknál van (fegyver, képességek, aktív tárgyak): ikon, név és
+   * – ha van – a hátralévő mennyiség. Csak változáskor írja a DOM-ot.
+   */
+  setLoadout(items: readonly LoadoutItem[]): void {
+    const key = items.map((i) => `${i.label}|${i.count}`).join(';');
+    if (key === this.loadoutKey) return;
+    this.loadoutKey = key;
+    this.loadout.replaceChildren(
+      ...items.map((item) => {
+        const box = document.createElement('div');
+        box.className = item.icon ? 'loadout-item' : 'loadout-item level';
+        if (item.icon) {
+          const icon = document.createElement('img');
+          icon.src = item.icon;
+          icon.alt = '';
+          box.append(icon);
+        }
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        box.append(label);
+        if (item.count) {
+          const count = document.createElement('span');
+          count.className = 'count';
+          count.textContent = item.count;
+          box.append(count);
+        }
+        return box;
+      }),
+    );
   }
 
-  /** A gyorsító hőfoka (0..1); túlmelegedve piros, és nem használható, amíg le nem hűl. */
-  setBoost(heat: number, overheated: boolean, boosting: boolean): void {
-    const percent = Math.round(Math.max(0, Math.min(1, heat)) * 100);
-    const key = `${percent}|${overheated}|${boosting}`;
-    if (key === this.boostKey) return;
-    this.boostKey = key;
-    this.boostFill.style.width = `${percent}%`;
-    this.boost.classList.toggle('overheated', overheated);
-    this.boostText.textContent = overheated ? 'Túlmelegedett – hűl…' : boosting ? 'Gyorsító bekapcsolva' : 'Gyorsító (Shift)';
+  /** A „Kilépés a meccsből" gomb. */
+  onLeave(callback: () => void): void {
+    el<HTMLSpanElement>('hud-info-leave').onclick = callback;
   }
 
-  /** Az aktív bónuszok listája (soronként egy). */
-  setEffects(lines: readonly string[]): void {
-    const key = lines.join('\n');
-    if (key === this.effectsKey) return;
-    this.effectsKey = key;
-    this.effects.classList.toggle('hidden', lines.length === 0);
-    this.effects.textContent = key;
+  get infoOpen(): boolean {
+    return !this.info.classList.contains('hidden');
+  }
+
+  toggleInfo(): void {
+    this.info.classList.toggle('hidden');
+  }
+
+  /** Az információs panel tartalma (HTML); csak akkor írja a DOM-ot, ha nyitva van és változott. */
+  setInfo(html: string): void {
+    if (!this.infoOpen || html === this.infoKey) return;
+    this.infoKey = html;
+    this.infoBody.innerHTML = html;
   }
 
   hideLoading(): void {
     el<HTMLDivElement>('loading').classList.add('hidden');
-  }
-
-  setQualityText(text: string): void {
-    el<HTMLSpanElement>('hud-quality').textContent = text;
   }
 
   toggleMap(): void {
@@ -251,36 +266,20 @@ export class Hud {
 
   /** Kis nézetben a vászon a tank környékét mutatja, nagy nézetben az egész pályát. */
   private resizeMinimap(): void {
-    this.mini.width = this.bigMap ? this.miniBase.width : MINI_VIEW;
-    this.mini.height = this.bigMap ? this.miniBase.height : MINI_VIEW;
+    const { crop } = this;
+    this.mini.width = this.bigMap ? crop.w : Math.min(MINI_VIEW, crop.w);
+    this.mini.height = this.bigMap ? crop.h : Math.min(MINI_VIEW, crop.h);
+    // nagy nézetben a játéktér képe kitölti a képernyőt (a képarány megtartásával)
+    const zoom = this.bigMap ? Math.min((window.innerWidth * 0.9) / crop.w, (window.innerHeight * 0.86) / crop.h, 5) : 1;
+    this.mini.style.width = `${Math.round(this.mini.width * zoom)}px`;
+    this.mini.style.height = `${Math.round(this.mini.height * zoom)}px`;
     this.miniCtx.imageSmoothingEnabled = false;
     this.miniDirty = true;
-  }
-
-  toggleHelp(): void {
-    this.help.classList.toggle('hidden');
   }
 
   update(f: HudFrame): void {
     this.updateLabels(f);
     if (this.frame++ % 6 !== 0) return;
-
-    const street = this.map.streetNameAt(f.x, f.y) || '(terep)';
-    if (street !== this.streetText) {
-      this.streetText = street;
-      this.street.textContent = street;
-    }
-
-    const th = this.map.data.townhall;
-    const dx = th.x - f.x;
-    const dy = th.y - f.y;
-    const dist = Math.hypot(dx, dy);
-    const dir = ARROWS[((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
-    const text = dist < 30 ? 'Hivatal: itt vagy ★' : `Hivatal: ${Math.round(dist)} m ${dir}`;
-    if (text !== this.townhallText) {
-      this.townhallText = text;
-      this.townhall.textContent = text;
-    }
 
     // a minitérképet csak akkor rajzoljuk újra, ha a tank érdemben elmozdult vagy elfordult
     const moved = !(Math.abs(f.x - this.miniX) < 0.5 && Math.abs(f.y - this.miniY) < 0.5 && Math.abs(f.angle - this.miniAngle) < 0.03);
@@ -321,11 +320,12 @@ export class Hud {
     const ctx = this.miniCtx;
     const s = MINI_SCALE;
     // kis nézetben a kép a tank köré igazodik (a pálya szélén megáll)
-    let ox = 0;
-    let oy = 0;
+    const { crop } = this;
+    let ox = crop.x;
+    let oy = crop.y;
     if (!this.bigMap) {
-      ox = Math.max(0, Math.min(this.miniBase.width - MINI_VIEW, Math.round(f.x * s - MINI_VIEW / 2)));
-      oy = Math.max(0, Math.min(this.miniBase.height - MINI_VIEW, Math.round(f.y * s - MINI_VIEW / 2)));
+      ox = Math.max(crop.x, Math.min(crop.x + crop.w - this.mini.width, Math.round(f.x * s - this.mini.width / 2)));
+      oy = Math.max(crop.y, Math.min(crop.y + crop.h - this.mini.height, Math.round(f.y * s - this.mini.height / 2)));
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.miniBase, -ox, -oy);
@@ -379,11 +379,13 @@ export class Hud {
 
     // ellenséges tankok: piros pont
     for (const t of f.tanks) {
-      if (!t.bot || !t.alive) continue;
+      if (!t.alive || t.id === f.focusId) continue;
       ctx.fillStyle = '#101418';
       ctx.fillRect(t.x * s - 4, t.y * s - 4, 8, 8);
-      ctx.fillStyle = '#ff4a3a';
-      ctx.fillRect(t.x * s - 2.5, t.y * s - 2.5, 5, 5);
+      // a botok pirosak, a többi játékos narancssárga (nagyobb ponttal)
+      ctx.fillStyle = t.bot ? '#ff4a3a' : '#ffb020';
+      const r = t.bot ? 2.5 : 3.5;
+      ctx.fillRect(t.x * s - r, t.y * s - r, r * 2, r * 2);
     }
 
     // a tank: irányba forgatott nyíl

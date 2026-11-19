@@ -1,7 +1,7 @@
-// A fő játékjelenet: bemenet → szimuláció (rögzített lépésköz) → megjelenítés.
-// A jelenet csak TankInput-ot ad a World-nek (a botok „agya” ugyanígy), az
-// állapotot nem írja közvetlenül – ugyanez a felosztás marad meg, ha a World
-// később a szerveren fut.
+// A játékjelenet: a szerveren futó meccs megjelenítése. A jelenet csak
+// BEMENETET küld (a ClientWorld-ön keresztül), az állapotot a szervertől kapja:
+// a tankokat, lövedékeket, tárgyakat a pillanatképekből, a hangokat, effekteket
+// és a pálya változásait (kidőlt fa, összedőlt ház) az eseményekből rajzolja.
 
 import Phaser from 'phaser';
 import { FireLayer } from '../entities/FireLayer';
@@ -9,21 +9,21 @@ import { createGameTextures, GTEX, PICKUP_ICON_SIZE } from '../entities/gameText
 import { PICKUP_STYLE, pickupTexture } from '../entities/pickupStyle';
 import { TankView } from '../entities/TankView';
 import { createTextures, TEX } from '../entities/textures';
+import { WeatherLayer } from '../entities/WeatherLayer';
 import { ChunkLayer } from '../maps/ChunkLayer';
 import type { GameMap } from '../maps/GameMap';
 import { RoadLabelLayer } from '../maps/RoadLabelLayer';
-import { BASE_PPM, cycleQuality } from '../quality';
-import { BOT_LIMITS, loadSettings, saveSettings, type Settings } from '../settings';
-import { BotManager } from '../sim/bots';
-import { OIL, PICKUP, TIMED_KINDS } from '../sim/pickups';
-import { BOOSTER, SIM_DT, TANK, tankMaxHp, TEAM, World, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
+import type { ClientWorld } from '../net/ClientWorld';
+import { BASE_PPM } from '../quality';
+import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
+import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
+import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
-import { Hud, type HudFrame } from '../ui/Hud';
+import { toggleFullscreen } from '../ui/fullscreen';
+import { Hud, type HudFrame, type LoadoutItem } from '../ui/Hud';
 
 /** Ha a térkép ennyi idő alatt sem készül el, a töltőképernyő akkor is eltűnik. */
 const LOADING_TIMEOUT_MS = 8000;
-/** Ennyi felvehető tárgy van egyszerre a pályán; közülük néhány a kezdőpont közelében. */
-const PICKUPS = { total: 350, nearStart: 24, nearRadius: 300 };
 /** A robbanás mérete a találat fajtája szerint. */
 const BLAST: Record<ShotKind, number> = { shell: 1, heavy: 1.7, rocket: 2.4, laser: 0.45 };
 /** A maradandó lövésnyom sugara méterben, a találat fajtája szerint. */
@@ -39,8 +39,16 @@ const ROOF_FIRE: Record<ShotKind, { size: number; life: number }> = {
 const WRECK_FIRE = { size: 2.4, life: 45 };
 /** Ennél messzebbi események hangja nem hallatszik (m). */
 const HEARING = 140;
+const WEATHER_LABEL = { day: 'nappal', rain: 'eső', night: 'este' } as const;
 
-type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'SPACE' | 'SHIFT', Phaser.Input.Keyboard.Key>;
+export interface GameSceneData {
+  map: GameMap;
+  ppm: number;
+  world: ClientWorld;
+  keys: KeyBindings;
+  /** a játékos a „Kilépés a meccsből” gombra kattintott */
+  onLeave: () => void;
+}
 
 export class GameScene extends Phaser.Scene {
   private map!: GameMap;
@@ -48,18 +56,18 @@ export class GameScene extends Phaser.Scene {
   private ppm = BASE_PPM;
   /** a sprite-ok méretaránya az alap részletességhez képest */
   private spriteScale = 1;
-  private settings: Settings = loadSettings();
-  private world!: World;
-  private bots!: BotManager;
-  private player!: TankState;
+  private world!: ClientWorld;
+  private bindings!: KeyBindings;
+  private onLeave: () => void = () => undefined;
   private ground!: ChunkLayer;
   private fires!: FireLayer;
+  private weather!: WeatherLayer;
   private roadLabels!: RoadLabelLayer;
   private hud!: Hud;
-  private keys!: Keys;
   private readonly sfx = new Sfx();
-  private readonly inputs = new Map<number, TankInput>();
-  // a szimuláció elemeinek megjelenítői, azonosító szerint
+  /** a lenyomott billentyűk (KeyboardEvent.code) */
+  private readonly down = new Set<string>();
+  // a szerverállapot elemeinek megjelenítői, azonosító szerint
   private readonly tankViews = new Map<number, TankView>();
   private readonly bulletViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly pickupViews = new Map<number, Phaser.GameObjects.Image>();
@@ -76,65 +84,76 @@ export class GameScene extends Phaser.Scene {
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
-    tanks: [], pickups: null,
+    tanks: [], pickups: null, focusId: 0,
   };
-  private readonly effectLines: string[] = [];
   private canvasRectStale = true;
   private accumulator = 0;
   private pointerMoved = false;
-  private tankViewsDirty = false;
-  /** az olajfolt lerakását kérő leütés, amíg a szimuláció fel nem dolgozza */
+  /** az olajfolt lerakását kérő leütés, amíg el nem megy a szervernek */
   private dropLatch = false;
   private ready = false;
   private startedAt = 0;
   private frame = 0;
   private camX = 0;
   private camY = 0;
+  private wasOut = false;
+  private readonly listeners: [EventTarget, string, EventListener][] = [];
+  /** a tárgyak ikonjai képként (adat-URL), a felső sáv számára */
+  private readonly iconUrls = new Map<PickupKind, string>();
+  private readonly loadout: LoadoutItem[] = [];
 
   constructor() {
     super('game');
   }
 
-  init(data: { map: GameMap; ppm: number }): void {
+  init(data: GameSceneData): void {
     this.map = data.map;
     this.ppm = data.ppm;
     this.spriteScale = data.ppm / BASE_PPM;
+    this.world = data.world;
+    this.bindings = data.keys;
+    this.onLeave = data.onLeave;
+    this.startedAt = performance.now();
+  }
+
+  private listen(target: EventTarget, type: string, handler: EventListener): void {
+    target.addEventListener(type, handler);
+    this.listeners.push([target, type, handler]);
   }
 
   create(): void {
     createTextures(this);
     createGameTextures(this);
-    this.cameras.main.setBounds(0, 0, this.map.width * this.ppm, this.map.height * this.ppm);
+    // A kamera csak a kijelölt játékteret járja be: ami azon kívül van, az nem látszik.
+    const area = this.map.bounds ?? { minX: 0, minY: 0, maxX: this.map.width, maxY: this.map.height };
+    this.cameras.main.setBounds(area.minX * this.ppm, area.minY * this.ppm, (area.maxX - area.minX) * this.ppm, (area.maxY - area.minY) * this.ppm);
     this.cameras.main.setRoundPixels(true);
 
     this.ground = new ChunkLayer(this, this.map, this.ppm);
     this.fires = new FireLayer(this, this.ppm);
+    this.weather = new WeatherLayer(this, this.map, this.ppm, this.world.room.settings.weather);
     this.hud = new Hud(this.map, this.ppm);
-    this.hud.setQualityText(`${this.ppm} px/m`);
-    this.hud.onBotChange((delta) => this.changeBots(delta));
+    this.hud.onLeave(() => this.onLeave());
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
 
-    const kb = this.input.keyboard!;
-    this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT') as Keys;
-    // Az egyszeri parancsokat közvetlenül a böngésző billentyűeseményéből vesszük
-    // (ismétlés nélkül), így minden leütés pontosan egyszer számít. A folyamatosan
-    // nyomva tartott gombokat (mozgás, lövés) a fenti Key objektumok adják.
-    window.addEventListener('keydown', (ev) => {
+    // A billentyűket közvetlenül a böngésző eseményeiből követjük, a beállított kiosztás szerint.
+    this.listen(window, 'keydown', ((ev: KeyboardEvent) => {
       if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
-      // a botok száma a + és − billentyűvel állítható (bármelyik kiosztáson);
-      // nyomva tartva gyorsan változik
-      if (ev.key === '+' || ev.key === '-') {
-        this.changeBots(ev.key === '+' ? 1 : -1);
-        return;
-      }
+      const action = this.actionOf(ev.code);
+      if (action) ev.preventDefault();
+      this.down.add(ev.code);
       if (ev.repeat) return;
       this.sfx.unlock();
-      if (ev.code === 'KeyR') this.startRound();
-      else if (ev.code === 'KeyM') this.hud.toggleMap();
-      else if (ev.code === 'KeyH') this.hud.toggleHelp();
-      else if (ev.code === 'KeyQ') cycleQuality(this.ppm);
-      else if (ev.code === 'KeyE') this.dropLatch = true;
-    });
+      if (action === 'map') this.hud.toggleMap();
+      else if (action === 'info') this.hud.toggleInfo();
+      else if (action === 'fullscreen') toggleFullscreen();
+      else if (action === 'oil') this.dropLatch = true;
+    }) as EventListener);
+    this.listen(window, 'keyup', ((ev: KeyboardEvent) => {
+      this.down.delete(ev.code);
+    }) as EventListener);
+    // ha az ablak elveszti a fókuszt, a lenyomva maradt gombok ne ragadjanak be
+    this.listen(window, 'blur', () => this.down.clear());
     this.input.on('pointerdown', () => this.sfx.unlock());
     this.input.on('pointermove', () => {
       this.pointerMoved = true;
@@ -146,98 +165,96 @@ export class GameScene extends Phaser.Scene {
       this.canvasRectStale = true;
     };
     this.scale.on(Phaser.Scale.Events.RESIZE, stale);
-    window.addEventListener('resize', stale);
-    document.addEventListener('fullscreenchange', stale);
+    this.listen(window, 'resize', stale);
+    this.listen(document, 'fullscreenchange', stale);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      for (const [target, type, handler] of this.listeners) target.removeEventListener(type, handler);
+    });
 
-    this.startedAt = performance.now();
-    this.startRound();
-  }
-
-  /** Új kör: tiszta pálya, a tank a hivatal melletti kezdőpontra kerül, a botok és a tárgyak újra szétszóródnak. */
-  private startRound(): void {
-    for (const views of [this.tankViews, this.bulletViews, this.pickupViews, this.oilViews]) {
-      for (const view of views.values()) view.destroy();
-      views.clear();
+    const focus = this.world.focus;
+    if (focus) {
+      this.camX = focus.x * this.ppm;
+      this.camY = focus.y * this.ppm;
+      this.cameras.main.centerOn(this.camX, this.camY);
     }
-    for (const parts of this.wreckViews.values()) for (const part of parts) part.destroy();
-    this.wreckViews.clear();
-    // a pálya sérülései (kidőlt fák, lövésnyomok) is eltűnnek
-    this.map.resetDamage();
-    this.ground.reset();
-    this.fires.clear();
-    this.inputs.clear();
-    this.accumulator = 0;
-
-    this.world = new World(this.map, (Date.now() % 2147483647) + 1);
-    const spawn = this.map.spawnPoint();
-    this.player = this.world.addTank(spawn.x, spawn.y, spawn.angle, { team: TEAM.player });
-    this.bots = new BotManager(this.world);
-    this.bots.setCount(this.settings.bots, TEAM.bots, TEAM.player);
-    this.world.scatterPickups(PICKUPS.total, { x: spawn.x, y: spawn.y, radius: PICKUPS.nearRadius, count: PICKUPS.nearStart });
-    this.hud.setBotCount(this.bots.count);
-
-    this.camX = spawn.x * this.ppm;
-    this.camY = spawn.y * this.ppm;
-    this.cameras.main.centerOn(this.camX, this.camY);
+    const s = this.world.room.settings;
+    this.hud.toast(`${s.name} – ${s.lives} élet, ${WEATHER_LABEL[s.weather]}. Az utolsó életben maradó nyer!`);
   }
 
-  private changeBots(delta: number): void {
-    const wanted = Math.max(BOT_LIMITS.min, Math.min(BOT_LIMITS.max, this.settings.bots + delta));
-    if (wanted === this.settings.bots) return;
-    this.settings = saveSettings({ ...this.settings, bots: wanted });
-    this.bots.setCount(wanted, TEAM.bots, TEAM.player);
-    this.tankViewsDirty = true;
-    this.hud.setBotCount(this.bots.count);
-    this.hud.toast(wanted === 0 ? 'Nincs ellenfél a pályán' : `Ellenfelek száma: ${wanted}`);
+  private actionOf(code: string): Action | null {
+    for (const action of ACTIONS) if (this.bindings[action].includes(code)) return action;
+    return null;
+  }
+
+  private held(action: Action): boolean {
+    for (const code of this.bindings[action]) if (this.down.has(code)) return true;
+    return false;
   }
 
   private readInput(): TankInput {
-    const k = this.keys;
     const input = this.input_;
-    input.throttle = (k.W.isDown || k.UP.isDown ? 1 : 0) - (k.S.isDown || k.DOWN.isDown ? 1 : 0);
-    input.turn = (k.D.isDown || k.RIGHT.isDown ? 1 : 0) - (k.A.isDown || k.LEFT.isDown ? 1 : 0);
+    input.throttle = (this.held('forward') ? 1 : 0) - (this.held('back') ? 1 : 0);
+    input.turn = (this.held('right') ? 1 : 0) - (this.held('left') ? 1 : 0);
     const pointer = this.input.activePointer;
     input.aim = null;
-    if (this.pointerMoved) {
+    const own = this.world.own;
+    if (this.pointerMoved && own) {
       pointer.updateWorldPoint(this.cameras.main);
-      input.aim = Math.atan2(pointer.worldY - this.player.y * this.ppm, pointer.worldX - this.player.x * this.ppm);
+      input.aim = Math.atan2(pointer.worldY - own.y * this.ppm, pointer.worldX - own.x * this.ppm);
     }
-    input.fire = k.SPACE.isDown || pointer.leftButtonDown();
-    input.boost = k.SHIFT.isDown;
-    // az E egyetlen rövid leütése is számít: a következő szimulációs lépésig megjegyezzük
+    input.fire = this.held('fire') || pointer.leftButtonDown();
+    input.boost = this.held('boost');
     input.drop = this.dropLatch || pointer.rightButtonDown();
     return input;
   }
 
   update(time: number, deltaMs: number): void {
     this.frame++;
-    this.inputs.set(this.player.id, this.readInput());
+    const world = this.world;
+    const seconds = time / 1000;
+    const now = performance.now();
 
-    // rögzített lépésközű szimuláció; lemaradásnál legfeljebb 5 lépés képkockánként
+    // új szerverállapot érkezett: a többi tank interpolációja onnan indul, ahol éppen látszik
+    if (world.fresh) {
+      world.fresh = false;
+      for (const [id, view] of this.tankViews) {
+        const tank = world.tank(id);
+        if (!tank) {
+          view.destroy();
+          this.tankViews.delete(id);
+        } else if (id !== world.myId) view.rebase(tank);
+      }
+    }
+    for (const ev of world.events) this.handleEvent(ev);
+    world.events.length = 0;
+
+    // rögzített lépésközű bemenet: minden lépés elmegy a szervernek, és a saját tankon azonnal le is játszódik
     this.accumulator = Math.min(this.accumulator + deltaMs / 1000, SIM_DT * 5);
+    const ownView = this.tankViews.get(world.myId);
     while (this.accumulator >= SIM_DT) {
-      for (const tank of this.world.tanks) this.tankViews.get(tank.id)?.remember(tank);
-      this.bots.update(this.inputs, SIM_DT);
-      this.world.step(this.inputs);
-      this.handleEvents();
-      this.accumulator -= SIM_DT;
+      const own = world.own;
+      if (own && ownView) ownView.remember(own);
+      world.input(this.readInput());
       this.dropLatch = false;
-      this.input_.drop = this.input.activePointer.rightButtonDown();
+      this.accumulator -= SIM_DT;
     }
 
-    const seconds = time / 1000;
-    this.syncTanks(this.accumulator / SIM_DT, seconds, this.view);
-    this.syncBullets();
-    this.syncOils();
+    const netAlpha = Math.max(0, Math.min(1, (now - world.snapAt) / world.snapInterval));
+    this.syncTanks(this.accumulator / SIM_DT, netAlpha, seconds, this.view);
+    this.syncBullets((now - world.snapAt) / 1000);
+    if (world.listsChanged) this.syncOils();
     this.syncWrecks(this.view);
-    this.sfx.engine(this.player.alive ? (Math.abs(this.player.speed) / TANK.maxSpeed) * (this.player.boosting ? 1.15 : 1) : 0);
 
-    // a kamera a saját tankot követi; ha kilőtték, ott marad, ahol történt
-    const playerView = this.tankViews.get(this.player.id);
-    if (playerView && this.player.alive) {
-      this.camX = playerView.px;
-      this.camY = playerView.py;
-      playerView.setCovered(this.map.underCanopy(this.player.x, this.player.y));
+    const own = world.own;
+    const focus = world.focus;
+    this.sfx.engine(own && own.alive ? (Math.abs(own.speed) / TANK.maxSpeed) * (own.boosting ? 1.15 : 1) : 0);
+
+    // a kamera a saját tankot követi (kiesés után egy másik játékosét); ha kilőtték, ott marad, ahol történt
+    const focusView = focus ? this.tankViews.get(focus.id) : undefined;
+    if (focus && focusView && focus.alive) {
+      this.camX = focusView.px;
+      this.camY = focusView.py;
+      focusView.setCovered(this.map.underCanopy(focus.x, focus.y));
     }
     const cam = this.cameras.main;
     cam.centerOn(this.camX, this.camY);
@@ -245,8 +262,11 @@ export class GameScene extends Phaser.Scene {
     // amíg a töltőképernyő látszik, a kész darabok átvétele több időt kaphat
     this.ground.update(view, this.ready ? 3 : 12);
     this.roadLabels.update(view);
-    this.fires.update(view, Math.min(0.1, deltaMs / 1000));
+    const dt = Math.min(0.1, deltaMs / 1000);
+    this.fires.update(view, dt);
+    this.weather.update(view, world.tanks, this.fires, dt);
     this.syncPickups(view, seconds);
+    world.listsChanged = false;
 
     if (!this.ready && (this.ground.isReady(view) || performance.now() - this.startedAt > LOADING_TIMEOUT_MS)) {
       this.ready = true;
@@ -256,6 +276,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateHud(view: Phaser.Geom.Rectangle): void {
+    const world = this.world;
+    const focus = world.focus;
+    if (!focus) return;
     const f = this.hudFrame;
     if (this.canvasRectStale) {
       const rect = this.game.canvas.getBoundingClientRect();
@@ -263,50 +286,105 @@ export class GameScene extends Phaser.Scene {
       f.canvasTop = rect.top;
       f.canvasWidth = rect.width;
       f.canvasHeight = rect.height;
-      this.canvasRectStale = rect.width === 0; // amíg a vászon nincs elrendezve, újra próbáljuk
+      this.canvasRectStale = false;
     }
-    const p = this.player;
-    f.x = p.x;
-    f.y = p.y;
-    f.angle = p.hullAngle;
+    f.x = focus.x;
+    f.y = focus.y;
+    f.angle = focus.hullAngle;
     f.viewX = view.x;
     f.viewY = view.y;
     f.viewW = view.width;
     f.viewH = view.height;
-    f.tanks = this.world.tanks;
-    f.pickups = p.effects.radar > 0 ? this.world.pickups : null;
+    f.tanks = world.tanks;
+    f.focusId = focus.id;
+    const own = world.own;
+    f.pickups = own && own.effects.radar > 0 ? world.pickups : null;
     this.hud.update(f);
 
-    if (this.frame % 6 !== 0) return;
-    this.hud.setStatus(p.hp, tankMaxHp(p), p.level, p.kills, p.deaths, p.alive ? 0 : Math.max(0, p.respawn));
-    this.hud.setBoost(p.heat / BOOSTER.duration, p.overheated, p.boosting);
-    // az aktív bónuszok listája
-    const lines = this.effectLines;
-    lines.length = 0;
-    if (p.weapon) lines.push(`Fegyver: ${PICKUP_STYLE[p.weapon].label}`);
-    if (p.ricochet) lines.push(PICKUP_STYLE.ricochet.label);
-    if (p.tripleShots > 0) lines.push(`${PICKUP_STYLE.triple.label} · ${p.tripleShots} lövés`);
-    for (const kind of TIMED_KINDS) {
-      if (p.effects[kind] > 0) lines.push(`${PICKUP_STYLE[kind].label} · ${Math.ceil(p.effects[kind])} mp`);
+    // a saját tank fölött: a gyorsító hőfoka és az életek
+    if (own) this.tankViews.get(own.id)?.setOwnStatus(own.heat / BOOSTER.duration, own.overheated, own.lives);
+
+    if (this.frame % 6 === 0) this.hud.setLoadout(this.loadoutOf(own));
+
+    if (own?.out && !this.wasOut) {
+      this.wasOut = true;
+      this.hud.toast('Kiestél! Nézőként követed a játékot.');
     }
-    if (p.shield > 0) lines.push(`${PICKUP_STYLE.shield.label} ×${p.shield}`);
-    if (p.oil > 0) lines.push(`${PICKUP_STYLE.oil.label} ×${p.oil} (E)`);
-    this.hud.setEffects(lines);
+    if (this.frame % 20 === 0 && this.hud.infoOpen) this.hud.setInfo(this.infoHtml());
   }
 
-  /** A hang ereje a játékostól mért távolság szerint (0 = nem hallatszik). */
+  private iconUrl(kind: PickupKind): string {
+    let url = this.iconUrls.get(kind);
+    if (!url) {
+      url = (this.textures.get(pickupTexture(kind)).getSourceImage() as HTMLCanvasElement).toDataURL();
+      this.iconUrls.set(kind, url);
+    }
+    return url;
+  }
+
+  /** Ami éppen a tanknál van: a fegyver, a megmaradó képességek, majd a fogyó és az időre szóló tárgyak. */
+  private loadoutOf(own: TankState | undefined): LoadoutItem[] {
+    const items = this.loadout;
+    items.length = 0;
+    if (!own) return items;
+    // a sáv elején mindig a tank szintje áll (ikon nélkül)
+    items.push({ icon: '', label: `★ ${own.level}. szint`, count: own.level >= LEVEL.max ? 'max' : '' });
+    if (!own.alive) return items;
+    const add = (kind: PickupKind, count = ''): void => {
+      items.push({ icon: this.iconUrl(kind), label: PICKUP_STYLE[kind].label, count });
+    };
+    if (own.weapon) add(own.weapon);
+    if (own.ricochet) add('ricochet');
+    if (own.tripleShots > 0) add('triple', `${own.tripleShots} lövés`);
+    if (own.shield > 0) add('shield', `×${own.shield}`);
+    if (own.oil > 0) add('oil', `×${own.oil}`);
+    for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) add(kind, `${Math.ceil(own.effects[kind])} mp`);
+    return items;
+  }
+
+  /** Az információs panel tartalma: irányítás, a tank állapota, a játékosok, forrásmegjelölés. */
+  private infoHtml(): string {
+    const own = this.world.own;
+    const s = this.world.room.settings;
+    const rows = (pairs: [string, string][]): string => `<table>${pairs.map(([k, v]) => `<tr><td class="key">${k}</td><td>${v}</td></tr>`).join('')}</table>`;
+    const controls: [string, string][] = ACTIONS.map((a) => [keysText(this.bindings, a), ACTION_LABEL[a]]);
+    controls.splice(4, 0, ['Egér', 'célzás – bal gomb: lövés, jobb gomb: olajfolt']);
+    const state: [string, string][] = [];
+    if (own) {
+      state.push(['Életerő', `${Math.ceil(own.hp)} / ${tankMaxHp(own)}`], ['Szint', String(own.level)], ['Életek', own.out ? 'kiestél' : String(own.lives)]);
+      state.push(['Fegyver', own.weapon ? PICKUP_STYLE[own.weapon].label : 'alaplövedék']);
+      const extras: string[] = [];
+      if (own.ricochet) extras.push(PICKUP_STYLE.ricochet.label);
+      if (own.tripleShots > 0) extras.push(`${PICKUP_STYLE.triple.label} (${own.tripleShots} lövés)`);
+      for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) extras.push(`${PICKUP_STYLE[kind].label} (${Math.ceil(own.effects[kind])} mp)`);
+      if (own.shield > 0) extras.push(`${PICKUP_STYLE.shield.label} ×${own.shield}`);
+      if (own.oil > 0) extras.push(`${PICKUP_STYLE.oil.label} ×${own.oil}`);
+      if (extras.length) state.push(['Nálad van', extras.join(', ')]);
+    }
+    const players: [string, string][] = this.world.standings.map((p) => [escapeHtml(p.name), p.out ? 'kiesett' : `${p.lives} élet · ${p.kills} kilövés`]);
+    const extra = this.map.data.meta.extraAttribution ? ` · ${this.map.data.meta.extraAttribution}` : '';
+    return (
+      `<h3>Irányítás</h3>${rows(controls)}` +
+      `<h3>A tankod</h3>${rows(state)}` +
+      `<h3>Játékosok – ${escapeHtml(s.name)}</h3>${rows(players)}` +
+      `<p class="small">Időjárás: ${WEATHER_LABEL[s.weather]} · botok: ${this.world.room.plan.bots} · válaszidő: ${this.world.pingMs} ms<br />` +
+      `Térképadat: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a> (ODbL)${extra}</p>`
+    );
+  }
+
+  /** A hang ereje a követett tanktól mért távolság szerint (0 = nem hallatszik). */
   private loudness(x: number, y: number): number {
-    const dist = Math.hypot(x - this.player.x, y - this.player.y);
+    const focus = this.world.focus;
+    if (!focus) return 0;
+    const dist = Math.hypot(x - focus.x, y - focus.y);
     return dist >= HEARING ? 0 : 1 - dist / HEARING;
-  }
-
-  private handleEvents(): void {
-    for (const ev of this.world.events) this.handleEvent(ev);
   }
 
   private handleEvent(ev: SimEvent): void {
     const ppm = this.ppm;
-    const mine = 'tank' in ev && ev.tank === this.player.id;
+    const world = this.world;
+    const myId = world.myId;
+    const mine = 'tank' in ev && ev.tank === myId;
     switch (ev.type) {
       case 'shot': {
         const volume = mine ? 1 : this.loudness(ev.x, ev.y) * 0.7;
@@ -323,6 +401,7 @@ export class GameScene extends Phaser.Scene {
             this.flashPool.push(flash);
           });
         }
+        this.weather.flash(ev.x, ev.y, 9, 0.12);
         if (mine) this.cameras.main.shake(70, ev.kind === 'rocket' ? 0.003 : 0.0018);
         break;
       }
@@ -331,6 +410,7 @@ export class GameScene extends Phaser.Scene {
         if (volume > 0 && ev.kind !== 'laser') this.sfx.explosion(Math.max(0.15, volume) * (ev.kind === 'shell' ? 1 : 1.3));
         this.boom(ev.x, ev.y, BLAST[ev.kind]);
         this.scar(ev.x, ev.y, SCAR[ev.kind]);
+        this.weather.flash(ev.x, ev.y, 8 + BLAST[ev.kind] * 5, 0.3);
         // az eltalált épület teteje kigyullad
         const roof = this.map.roofNear(ev.x, ev.y);
         if (roof) this.fires.ignite(roof.x, roof.y, ROOF_FIRE[ev.kind].size, ROOF_FIRE[ev.kind].life);
@@ -338,6 +418,7 @@ export class GameScene extends Phaser.Scene {
       }
       case 'laser':
         this.beam(ev.x1, ev.y1, ev.x2, ev.y2);
+        this.weather.flash((ev.x1 + ev.x2) / 2, (ev.y1 + ev.y2) / 2, Math.hypot(ev.x2 - ev.x1, ev.y2 - ev.y1) / 2 + 4, 0.2);
         break;
       case 'ricochet':
         if (this.loudness(ev.x, ev.y) > 0) this.sfx.ricochet(this.loudness(ev.x, ev.y));
@@ -356,7 +437,7 @@ export class GameScene extends Phaser.Scene {
       case 'slip':
         if (mine) {
           this.sfx.skid();
-          this.hud.toast('Megcsúsztál az olajon!');
+          this.hud.toast('Megcsúsztál!');
         }
         break;
       case 'bump':
@@ -369,7 +450,7 @@ export class GameScene extends Phaser.Scene {
         if (mine) {
           this.sfx.hit(ev.absorbed !== null);
           this.cameras.main.shake(140, ev.absorbed ? 0.002 : 0.005);
-        } else if (ev.by === this.player.id) {
+        } else if (ev.by === myId) {
           this.sfx.hit(ev.absorbed !== null);
         }
         break;
@@ -377,16 +458,26 @@ export class GameScene extends Phaser.Scene {
         this.boom(ev.x, ev.y, 3.2);
         this.scar(ev.x, ev.y, 3);
         this.fires.ignite(ev.x, ev.y, WRECK_FIRE.size, WRECK_FIRE.life);
+        this.weather.flash(ev.x, ev.y, 26, 0.5);
         this.sfx.explosion(Math.max(0.4, this.loudness(ev.x, ev.y)) * 1.6);
         if (mine) {
           this.cameras.main.shake(400, 0.009);
-          this.hud.toast('Kilőttek! Mindjárt újraéledsz…');
-        } else if (ev.by === this.player.id) {
-          this.hud.toast('Ellenfél kilőve!');
+          const left = (world.me?.lives ?? 1) - 1;
+          this.hud.toast(left > 0 ? `Kilőttek! Még ${left} életed van – mindjárt újraéledsz…` : 'Kilőttek!');
+        } else if (ev.by === myId) {
+          const name = world.nameOf(ev.tank);
+          this.hud.toast(name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`);
+        }
+        break;
+      case 'eliminated':
+        if (!mine) {
+          const left = world.standings.filter((p) => !p.out && p.tank !== ev.tank).length;
+          this.hud.toast(`${world.nameOf(ev.tank)} kiesett – még ${left} játékos van játékban`);
         }
         break;
       case 'felled': {
-        // a változást a háttérszálak is megkapják, az érintett térképdarabok újrarajzolódnak
+        // a kidőlt fa bekerül a pálya állapotába; a háttérszálak is megkapják, az érintett térképdarabok újrarajzolódnak
+        this.map.fellables.fell(ev.index, ev.angle);
         this.ground.notify({ type: 'felled', index: ev.index, angle: ev.angle });
         const reach = (this.map.trees[ev.index]?.r ?? 2.5) * 2.6 + 3;
         this.ground.invalidate(ev.x - reach, ev.y - reach, ev.x + reach, ev.y + reach);
@@ -400,6 +491,9 @@ export class GameScene extends Phaser.Scene {
         }
         break;
       }
+      case 'collapse':
+        this.collapse(ev.index);
+        break;
       case 'overheat':
         if (mine) {
           this.sfx.overheat();
@@ -412,9 +506,41 @@ export class GameScene extends Phaser.Scene {
           this.hud.toast(`${ev.level}. szint: nagyobb, szívósabb tank, erősebb lövedék!`);
         }
         break;
-      case 'respawn':
-        this.tankViews.get(ev.tank)?.snap(this.world.tank(ev.tank)!);
+      case 'respawn': {
+        const tank = world.tank(ev.tank);
+        if (tank) this.tankViews.get(ev.tank)?.snap(tank);
         break;
+      }
+    }
+  }
+
+  /** Épület összedőlése: a pályán rom lesz belőle (át lehet hajtani rajta), porfelhő és tűz kíséri. */
+  private collapse(index: number): void {
+    const building = this.map.data.buildings[index];
+    if (!building || this.map.structures.collapsed[index]) return;
+    this.map.collapse(index);
+    this.ground.notify({ type: 'collapse', index });
+    const [minX, minY, maxX, maxY] = this.map.buildingBoxes[index];
+    this.ground.invalidate(minX - 6, minY - 6, maxX + 6, maxY + 6);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const size = Math.max(maxX - minX, maxY - minY);
+    // robbanások és por az alaprajz mentén
+    const count = Math.min(7, 2 + Math.floor(building.area / 60));
+    for (let i = 0; i < count; i++) {
+      const x = minX + ((i * 0.618 + 0.31) % 1) * (maxX - minX);
+      const y = minY + ((i * 0.382 + 0.17) % 1) * (maxY - minY);
+      this.time.delayedCall(i * 90, () => {
+        this.boom(x, y, 1.6 + size * 0.06);
+        for (let k = 0; k < 3; k++) this.smoke((x + k - 1) * this.ppm, (y - k) * this.ppm);
+      });
+    }
+    this.fires.ignite(cx, cy, Math.min(4, 2 + size * 0.08), 40);
+    this.weather.flash(cx, cy, size + 12, 0.6);
+    const volume = this.loudness(cx, cy);
+    if (volume > 0) {
+      this.sfx.explosion(Math.max(0.3, volume) * 1.8);
+      this.cameras.main.shake(300, 0.004 * volume + 0.002);
     }
   }
 
@@ -447,7 +573,7 @@ export class GameScene extends Phaser.Scene {
       // a friss roncs még füstöl
       if (visible && w.age < 25 && (this.frame + w.id) % 14 === 0) this.smoke(x + (w.id % 5) - 2, y - 4);
     }
-    if (this.wreckViews.size !== wrecks.length) {
+    if (this.world.listsChanged) {
       for (const [id, parts] of this.wreckViews) {
         if (!wrecks.some((w) => w.id === id)) {
           for (const part of parts) part.destroy();
@@ -514,39 +640,36 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** `visible`: az előző képkocka látómezeje – a rajta kívüli tankok megjelenítője pihen. */
-  private syncTanks(alpha: number, seconds: number, visible: Phaser.Geom.Rectangle): void {
-    const { tanks } = this.world;
+  /**
+   * `ownAlpha`: a saját tank két helyi lépése közötti arány; `netAlpha`: a többi
+   * tanké két szerverállapot között. `visible`: az előző képkocka látómezeje –
+   * a rajta kívüli tankok megjelenítője pihen.
+   */
+  private syncTanks(ownAlpha: number, netAlpha: number, seconds: number, visible: Phaser.Geom.Rectangle): void {
+    const { tanks, myId } = this.world;
+    const focusId = this.world.focus?.id ?? myId;
     const margin = 6 * this.ppm;
     for (const tank of tanks) {
       const x = tank.x * this.ppm;
       const y = tank.y * this.ppm;
-      const onScreen = tank === this.player || (x > visible.x - margin && x < visible.right + margin && y > visible.y - margin && y < visible.bottom + margin);
+      const onScreen = tank.id === focusId || (x > visible.x - margin && x < visible.right + margin && y > visible.y - margin && y < visible.bottom + margin);
       let view = this.tankViews.get(tank.id);
       if (!view) {
         // megjelenítő csak akkor készül, amikor a tank először a kép közelébe kerül
         if (!onScreen) continue;
-        view = new TankView(this, this.ppm, tank, tank.team !== this.player.team);
+        view = new TankView(this, this.ppm, tank, tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival');
         this.tankViews.set(tank.id, view);
       }
-      if (onScreen) view.render(tank, alpha, seconds);
+      if (onScreen) view.render(tank, tank.id === myId ? ownAlpha : netAlpha, seconds);
       else view.hide();
-    }
-    // az eltávolított tankok megjelenítőinek törlése (ritkán kell: csak ha csökkent a botok száma)
-    if (this.tankViewsDirty) {
-      this.tankViewsDirty = false;
-      for (const [id, view] of this.tankViews) {
-        if (!this.world.tank(id)) {
-          view.destroy();
-          this.tankViews.delete(id);
-        }
-      }
     }
   }
 
-  private syncBullets(): void {
+  /** `age`: az utolsó szerverállapot óta eltelt idő (mp) – a lövedékek addig a sebességük szerint repülnek tovább. */
+  private syncBullets(age: number): void {
     const { bullets } = this.world;
     if (bullets.length === 0 && this.bulletViews.size === 0) return;
+    const t = Math.min(0.15, Math.max(0, age));
     for (const b of bullets) {
       let view = this.bulletViews.get(b.id);
       if (!view) {
@@ -559,11 +682,13 @@ export class GameScene extends Phaser.Scene {
           .setDepth(12);
         this.bulletViews.set(b.id, view);
       }
+      const x = (b.x + b.vx * t) * this.ppm;
+      const y = (b.y + b.vy * t) * this.ppm;
       // a pattanó lövedék iránya menet közben változhat
-      view.setPosition(b.x * this.ppm, b.y * this.ppm).setRotation(Math.atan2(b.vy, b.vx));
-      if (b.kind === 'rocket' && this.frame % 2 === 0) this.smoke(b.x * this.ppm, b.y * this.ppm);
+      view.setPosition(x, y).setRotation(Math.atan2(b.vy, b.vx));
+      if (b.kind === 'rocket' && this.frame % 2 === 0) this.smoke(x, y);
     }
-    if (this.bulletViews.size !== bullets.length) {
+    if (this.world.listsChanged) {
       for (const [id, view] of this.bulletViews) {
         if (!bullets.some((b) => b.id === id)) {
           view.destroy();
@@ -589,7 +714,7 @@ export class GameScene extends Phaser.Scene {
       // finom lüktetés, hogy feltűnjön
       if (visible) icon.setScale(base * (1 + 0.09 * Math.sin(seconds * 4 + p.id)));
     }
-    if (this.pickupViews.size !== pickups.length) {
+    if (this.world.listsChanged) {
       for (const [id, icon] of this.pickupViews) {
         if (!pickups.some((p) => p.id === id)) {
           icon.destroy();
@@ -601,60 +726,52 @@ export class GameScene extends Phaser.Scene {
 
   private syncOils(): void {
     const { oils } = this.world;
-    if (oils.length === 0 && this.oilViews.size === 0) return;
     const scale = (OIL.radius * 2 * this.ppm) / 80; // a textúrán a folt kb. 80 pixel átmérőjű
     for (const oil of oils) {
-      let view = this.oilViews.get(oil.id);
-      if (!view) {
-        view = this.add.image(oil.x * this.ppm, oil.y * this.ppm, GTEX.oil).setDepth(2).setScale(scale).setRotation((oil.id * 1.7) % 6.28);
-        this.oilViews.set(oil.id, view);
-      }
-      // az utolsó másodpercekben elhalványul
-      view.setAlpha(Math.min(0.88, oil.life / 4));
+      if (this.oilViews.has(oil.id)) continue;
+      const view = this.add.image(oil.x * this.ppm, oil.y * this.ppm, GTEX.oil).setDepth(2).setScale(scale).setRotation((oil.id * 1.7) % 6.28).setAlpha(0.88);
+      this.oilViews.set(oil.id, view);
     }
-    if (this.oilViews.size !== oils.length) {
-      for (const [id, view] of this.oilViews) {
-        if (!oils.some((o) => o.id === id)) {
-          view.destroy();
-          this.oilViews.delete(id);
-        }
+    for (const [id, view] of this.oilViews) {
+      if (!oils.some((o) => o.id === id)) {
+        view.destroy();
+        this.oilViews.delete(id);
       }
     }
   }
 
   /** Diagnosztika (automata tesztekhez és hibakereséshez). */
   debugState(): Record<string, number | boolean> {
-    const p = this.player;
+    const p: Partial<TankState> = this.world.own ?? {};
     return {
-      x: p.x,
-      y: p.y,
-      angle: p.hullAngle,
-      speed: p.speed,
-      hp: p.hp,
-      alive: p.alive,
-      kills: p.kills,
-      deaths: p.deaths,
+      x: p.x ?? 0,
+      y: p.y ?? 0,
+      angle: p.hullAngle ?? 0,
+      speed: p.speed ?? 0,
+      hp: p.hp ?? 0,
+      alive: p.alive ?? false,
+      level: p.level ?? 0,
+      lives: p.lives ?? 0,
+      out: p.out ?? false,
+      heat: p.heat ?? 0,
       tick: this.world.tick,
       ready: this.ready,
       ppm: this.ppm,
-      bots: this.bots.count,
+      tanks: this.world.tanks.length,
+      bots: this.world.tanks.filter((t) => t.bot).length,
       pickups: this.world.pickups.length,
-      oils: this.world.oils.length,
-      fires: this.fires.count,
-      firesVisible: this.fires.visibleCount,
-      level: p.level,
-      heat: p.heat,
-      overheated: p.overheated,
-      boosting: p.boosting,
       wrecks: this.world.wrecks.length,
+      fires: this.fires.count,
       scars: this.map.scars.length / 3,
       fallen: this.map.fellables.fallen.reduce((n, f) => n + f, 0),
-      walls: this.map.walls.segmentCount,
+      collapsed: this.map.structures.collapsed.reduce((n, f) => n + f, 0),
       chunks: this.ground.chunkCount,
       chunksPending: this.ground.pendingCount,
-      workers: this.ground.workerCount,
-      chunkMs: Math.round(this.ground.lastRenderMs * 10) / 10,
-      roadLabels: this.roadLabels.count,
+      ping: this.world.pingMs,
     };
   }
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 }

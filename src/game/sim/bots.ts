@@ -246,7 +246,8 @@ export class BotBrain {
       const past = (tank.x - guide.x) * cos + (tank.y - guide.y) * sin;
       const ex = guide.x + cos * (ahead + 6);
       const ey = guide.y + sin * (ahead + 6);
-      const leaves = ex < 0 || ey < 0 || ex > terrain.width || ey > terrain.height;
+      const area = terrain.bounds ?? { minX: 0, minY: 0, maxX: terrain.width, maxY: terrain.height };
+      const leaves = ex < area.minX || ey < area.minY || ex > area.maxX || ey > area.maxY;
       if (past > 5 || leaves) {
         along += Math.PI;
         cos = -cos;

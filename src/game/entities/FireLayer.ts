@@ -175,6 +175,11 @@ export class FireLayer {
     });
   }
 
+  /** Az égő tüzek bejárása (pl. az esti megvilágításhoz): hely méterben és a láng fél szélessége. */
+  forEach(fn: (x: number, y: number, size: number) => void): void {
+    for (const fire of this.fires) fn(fire.x, fire.y, fire.size * Math.min(1, fire.left / DYING));
+  }
+
   /** Minden tűz kialszik (új kör). */
   clear(): void {
     for (const fire of this.fires) this.release(fire);

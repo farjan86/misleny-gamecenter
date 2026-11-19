@@ -10,6 +10,9 @@ import { HULL_SIZE, TEX, TURRET_SIZE } from './textures';
 export const GTEX = {
   enemyHull: ['enemy-hull-0', 'enemy-hull-1', 'enemy-hull-2'],
   enemyTurret: 'enemy-turret',
+  /** a többi játékos tankja: kék (a botoké vörös, a sajátunk zöld) */
+  rivalHull: ['rival-hull-0', 'rival-hull-1', 'rival-hull-2'],
+  rivalTurret: 'rival-turret',
   wreckHull: 'wreck-hull',
   wreckTurret: 'wreck-turret',
   rocket: 'rocket',
@@ -17,6 +20,9 @@ export const GTEX = {
   /** lángok: FIRE_FRAMES képkocka egymás mellett */
   fire: 'fx-fire',
   glow: 'fx-glow',
+  /** lágy szélű fehér korong: este ezzel „vágunk lyukat” a sötétségbe a fények helyén */
+  light: 'fx-light',
+  rain: 'fx-rain',
   oil: 'oil-slick',
   ring: 'fx-ring',
   smoke: 'fx-smoke',
@@ -37,8 +43,8 @@ function canvasTexture(scene: Phaser.Scene, key: string, w: number, h: number, d
   tex.refresh();
 }
 
-/** A saját tank textúrájának átszínezése: a zöld árnyalatok vörösre váltanak, a többi marad. */
-function recolored(scene: Phaser.Scene, source: string, key: string, w: number, h: number): void {
+/** A saját tank textúrájának átszínezése: a zöld árnyalatok vörösre (vagy kékre) váltanak, a többi marad. */
+function recolored(scene: Phaser.Scene, source: string, key: string, w: number, h: number, hue: 'red' | 'blue' = 'red'): void {
   canvasTexture(scene, key, w, h, (ctx) => {
     const src = scene.textures.get(source).getSourceImage() as HTMLCanvasElement;
     ctx.drawImage(src, 0, 0);
@@ -49,9 +55,15 @@ function recolored(scene: Phaser.Scene, source: string, key: string, w: number, 
       const g = d[i + 1];
       const b = d[i + 2];
       if (g > r * 1.08 && g > b) {
-        d[i] = Math.min(255, g * 1.15);
-        d[i + 1] = r * 0.7;
-        d[i + 2] = b * 0.7;
+        if (hue === 'red') {
+          d[i] = Math.min(255, g * 1.15);
+          d[i + 1] = r * 0.7;
+          d[i + 2] = b * 0.7;
+        } else {
+          d[i] = r * 0.55;
+          d[i + 1] = g * 0.72;
+          d[i + 2] = Math.min(255, g * 1.35);
+        }
       }
     }
     ctx.putImageData(image, 0, 0);
@@ -85,6 +97,35 @@ export function createGameTextures(scene: Phaser.Scene): void {
   charred(scene, TEX.turret, GTEX.wreckTurret, TURRET_SIZE.w, TURRET_SIZE.h);
   TEX.hull.forEach((key, i) => recolored(scene, key, GTEX.enemyHull[i], HULL_SIZE.w, HULL_SIZE.h));
   recolored(scene, TEX.turret, GTEX.enemyTurret, TURRET_SIZE.w, TURRET_SIZE.h);
+  TEX.hull.forEach((key, i) => recolored(scene, key, GTEX.rivalHull[i], HULL_SIZE.w, HULL_SIZE.h, 'blue'));
+  recolored(scene, TEX.turret, GTEX.rivalTurret, TURRET_SIZE.w, TURRET_SIZE.h, 'blue');
+
+  canvasTexture(scene, GTEX.light, 128, 128, (ctx) => {
+    const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.85)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 128, 128);
+  });
+
+  // esőcseppek: ferde, halvány vonalkák (a kép csempézve ismétlődik)
+  canvasTexture(scene, GTEX.rain, 256, 256, (ctx) => {
+    ctx.strokeStyle = 'rgba(205,220,240,0.55)';
+    ctx.lineWidth = 1.4;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 46; i++) {
+      const x = (i * 97.3 + 13) % 256;
+      const y = (i * 61.7 + 41) % 256;
+      const len = 14 + ((i * 7) % 12);
+      for (const [ox, oy] of [[0, 0], [256, 0], [0, 256], [-256, 0], [0, -256]]) {
+        ctx.beginPath();
+        ctx.moveTo(x + ox, y + oy);
+        ctx.lineTo(x + ox - len * 0.22, y + oy + len);
+        ctx.stroke();
+      }
+    }
+  });
 
   // tárgyikonok: színes korong világos peremmel, közepén a jel
   const size = PICKUP_ICON_SIZE;

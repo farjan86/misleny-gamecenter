@@ -1,0 +1,214 @@
+// A kliens és a szerver közötti üzenetek. Minden üzenet JSON, a `t` mező a
+// típusa. A protokoll verziózott: a szerver az eltérő verziójú klienst elutasítja.
+//
+// Elv: a kliens csak BEMENETET küld (TankInput), a szerver számol mindent, és
+// állapot-pillanatképeket (snap) meg eseményeket (ev) küld vissza.
+
+import { PICKUP_KINDS } from '../sim/pickups';
+import type { MatchPlan, MatchSettings } from '../sim/match';
+import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
+
+export const PROTOCOL_VERSION = 1;
+/** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
+export const SNAPSHOT_EVERY = 3;
+
+export type RoomStatus = 'waiting' | 'starting' | 'playing';
+
+export interface RoomInfo {
+  id: string;
+  /** a szoba létrehozójának neve */
+  host: string;
+  /** a bent lévő játékosok nevei */
+  players: string[];
+  status: RoomStatus;
+  settings: MatchSettings;
+  plan: MatchPlan;
+}
+
+export interface PlayerInfo {
+  id: string;
+  name: string;
+  tank: number;
+}
+
+export interface Standing {
+  id: string;
+  name: string;
+  place: number;
+  kills: number;
+  deaths: number;
+  level: number;
+}
+
+/** [gáz, forgatás, célzás (rad) vagy null, jelzők: 1 = tűz, 2 = olaj, 4 = gyorsító] */
+export type PackedInput = [number, number, number | null, number];
+
+export type ClientMessage =
+  // belépés: regisztráció, név + jelszó, vagy a böngészőben megőrzött kulcs
+  | { t: 'register'; v: number; name: string; password: string }
+  | { t: 'login'; v: number; name: string; password: string }
+  | { t: 'resume'; v: number; token: string }
+  | { t: 'logout' }
+  /** a szerver kapuja küldi a szobakezelőnek a sikeres belépés után (a kliensé nem jut el odáig) */
+  | { t: 'hello'; v: number; name: string }
+  | { t: 'create'; settings: Partial<MatchSettings> }
+  | { t: 'join'; room: string }
+  | { t: 'leave' }
+  /** s: a bemenet sorszáma (a szerver ezzel nyugtáz) */
+  | { t: 'input'; s: number; i: PackedInput }
+  | { t: 'ping'; c: number };
+
+/** a saját (vagy a nézett) tank teljes állapota */
+export type MeState = TankState;
+
+/** [id, x, y, test szöge, torony szöge, sebesség, életerő, szint, jelzők, csapat, megtett út] */
+export type PackedTank = number[];
+export const TANK_FLAG = { alive: 1, bot: 2, boosting: 4, invulnerable: 8, shield: 16, out: 32 } as const;
+
+export interface Snapshot {
+  t: 'snap';
+  /** a szimuláció lépésszáma */
+  k: number;
+  /** az utolsó feldolgozott bemenet sorszáma */
+  a: number;
+  /** a saját tank teljes állapota (null, ha már nincs tankja) */
+  me: MeState | null;
+  /** annak a tanknak az azonosítója, amelyet a kamera követ (kiesés után egy másik játékosé) */
+  v: number;
+  T: PackedTank[];
+  /** lövedékek: [id, fajta (0 sima, 1 nehéz, 2 rakéta), x, y, vx, vy] */
+  B: number[][];
+  /** tárgyak: [id, fajta sorszáma, x, y] */
+  P: number[][];
+  /** olajfoltok: [id, x, y] */
+  O: number[][];
+  /** roncsok: [id, x, y, test szöge, torony szöge, kor] */
+  W: number[][];
+  /** játékosok állása: [tank, életek, kilövések, kiesett-e] */
+  S: number[][];
+}
+
+export type ServerMessage =
+  /** sikeres belépés: a fiók neve és a belépve maradás kulcsa */
+  | { t: 'auth'; name: string; token: string }
+  | { t: 'authError'; message: string }
+  | { t: 'welcome'; id: string; map: { width: number; height: number } }
+  | { t: 'rooms'; rooms: RoomInfo[] }
+  /** a szoba állapota, amíg a játékos a váróban van; countdown: az indulásig hátralévő mp */
+  | { t: 'room'; room: RoomInfo; you: string; countdown: number }
+  | { t: 'left'; reason: string }
+  | { t: 'error'; message: string }
+  | { t: 'start'; room: RoomInfo; tank: number; players: PlayerInfo[] }
+  | Snapshot
+  | { t: 'ev'; e: SimEvent[] }
+  | { t: 'over'; winner: string | null; standings: Standing[] }
+  | { t: 'pong'; c: number };
+
+// --- tömörítés ------------------------------------------------------------------
+
+export function packInput(input: TankInput): PackedInput {
+  return [input.throttle, input.turn, input.aim === null ? null : Math.round(input.aim * 1000) / 1000, (input.fire ? 1 : 0) | (input.drop ? 2 : 0) | (input.boost ? 4 : 0)];
+}
+
+export function unpackInput(packed: unknown): TankInput | null {
+  if (!Array.isArray(packed) || packed.length < 4) return null;
+  const [throttle, turn, aim, flags] = packed as unknown[];
+  if (typeof throttle !== 'number' || typeof turn !== 'number' || typeof flags !== 'number') return null;
+  if (!Number.isFinite(throttle) || !Number.isFinite(turn)) return null;
+  return {
+    throttle: Math.max(-1, Math.min(1, throttle)),
+    turn: Math.max(-1, Math.min(1, turn)),
+    aim: typeof aim === 'number' && Number.isFinite(aim) ? aim : null,
+    fire: (flags & 1) !== 0,
+    drop: (flags & 2) !== 0,
+    boost: (flags & 4) !== 0,
+  };
+}
+
+export function packTank(t: TankState): PackedTank {
+  const flags =
+    (t.alive ? TANK_FLAG.alive : 0) |
+    (t.bot ? TANK_FLAG.bot : 0) |
+    (t.boosting ? TANK_FLAG.boosting : 0) |
+    (t.effects.invulnerable > 0 ? TANK_FLAG.invulnerable : 0) |
+    (t.shield > 0 ? TANK_FLAG.shield : 0) |
+    (t.out ? TANK_FLAG.out : 0);
+  return [t.id, t.x, t.y, t.hullAngle, t.turretAngle, t.speed, t.hp, t.level, flags, t.team, t.odometer];
+}
+
+/** Üres tankállapot a kliens tükörvilágához (a pillanatkép tölti ki). */
+export function blankTank(id: number): TankState {
+  return {
+    id,
+    team: 0,
+    bot: false,
+    x: 0,
+    y: 0,
+    hullAngle: 0,
+    turretAngle: 0,
+    turnSpeed: 0,
+    speed: 0,
+    cooldown: 0,
+    odometer: 0,
+    hp: 100,
+    alive: true,
+    respawn: 0,
+    kills: 0,
+    deaths: 0,
+    level: 1,
+    lives: -1,
+    out: false,
+    grip: 0,
+    homeX: 0,
+    homeY: 0,
+    homeAngle: 0,
+    effects: { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0 },
+    weapon: null,
+    tripleShots: 0,
+    ricochet: false,
+    shield: 0,
+    oil: 0,
+    dropCooldown: 0,
+    slip: 0,
+    slideAngle: 0,
+    spin: 0,
+    heat: 0,
+    overheated: false,
+    boosting: false,
+  };
+}
+
+export function unpackTank(p: PackedTank, into: TankState): TankState {
+  const flags = p[8];
+  into.x = p[1];
+  into.y = p[2];
+  into.hullAngle = p[3];
+  into.turretAngle = p[4];
+  into.speed = p[5];
+  into.hp = p[6];
+  into.level = p[7];
+  into.alive = (flags & TANK_FLAG.alive) !== 0;
+  into.bot = (flags & TANK_FLAG.bot) !== 0;
+  into.boosting = (flags & TANK_FLAG.boosting) !== 0;
+  into.effects.invulnerable = flags & TANK_FLAG.invulnerable ? 1 : 0;
+  into.shield = flags & TANK_FLAG.shield ? 1 : 0;
+  into.out = (flags & TANK_FLAG.out) !== 0;
+  into.team = p[9];
+  into.odometer = p[10];
+  return into;
+}
+
+const SHELLS: ShellKind[] = ['shell', 'heavy', 'rocket'];
+export const packBullet = (b: BulletState): number[] => [b.id, SHELLS.indexOf(b.kind), b.x, b.y, b.vx, b.vy];
+export const unpackBullet = (p: number[]): BulletState => ({ id: p[0], owner: 0, team: 0, kind: SHELLS[p[1]] ?? 'shell', x: p[2], y: p[3], vx: p[4], vy: p[5], life: 1, bounces: 0 });
+export const packPickup = (p: PickupState): number[] => [p.id, PICKUP_KINDS.indexOf(p.kind), p.x, p.y];
+export const unpackPickup = (p: number[]): PickupState => ({ id: p[0], kind: PICKUP_KINDS[p[1]] ?? 'repair', x: p[2], y: p[3] });
+export const packOil = (o: OilState): number[] => [o.id, o.x, o.y];
+export const unpackOil = (p: number[]): OilState => ({ id: p[0], owner: 0, x: p[1], y: p[2], life: 10, ownerSafe: false });
+export const packWreck = (w: WreckState): number[] => [w.id, w.x, w.y, w.hullAngle, w.turretAngle, w.age];
+export const unpackWreck = (p: number[]): WreckState => ({ id: p[0], x: p[1], y: p[2], hullAngle: p[3], turretAngle: p[4], team: 0, age: p[5] });
+
+/** JSON-kódolás a számok kerekítésével (a pillanatképek így jóval kisebbek). */
+export function encode(message: ServerMessage | ClientMessage): string {
+  return JSON.stringify(message, (_key, value: unknown) => (typeof value === 'number' && !Number.isInteger(value) ? Math.round(value * 100) / 100 : value));
+}

@@ -90,7 +90,7 @@ export class ChunkLayer {
         const worker = new Worker(new URL('./chunkWorker.ts', import.meta.url), { type: 'module' });
         worker.onmessage = (ev: MessageEvent<ChunkReply>) => this.onReply(worker, ev.data);
         worker.onerror = () => this.dropWorker(worker);
-        const init: ChunkRequest = { type: 'init', data: this.map.data, ppm: this.ppm, size: CHUNK };
+        const init: ChunkRequest = { type: 'init', data: this.map.data, ppm: this.ppm, size: CHUNK, weather: this.map.weather, area: this.map.bounds };
         worker.postMessage(init);
         this.workers.push(worker);
         this.idle.push(worker);

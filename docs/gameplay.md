@@ -1,248 +1,251 @@
 # Játékmenet és architektúra
 
-## Jelenlegi állapot (első prototípus)
+A többjátékos mód, a szerver és a fiókok leírása külön fájlban van:
+[multiplayer.md](multiplayer.md). Ez a fájl a játék szabályait, a
+megjelenítést és a kód felépítését írja le.
 
-Kozármisleny teljes beépített területén (2000 × 3460 m) lehet tankkal harcolni gép vezérelte ellenfelek ellen, felvehető tárgyakkal.
+## A játék
 
-### Irányítás
+Kozármisleny térképének egy kijelölt részén, tankkal, mindenki mindenki ellen.
+Egy meccsben 1–8 játékos és (beállítástól függően) gép vezérelte botok vannak.
+Minden játékosnak 1, 3 vagy 5 élete van; akinek elfogy, kiesik. **Az nyer, aki
+utolsónak marad.**
+
+### Menük
+
+- **Főképernyő:** belépés vagy regisztráció (játékosnév + jelszó), utána
+  *Multiplayer*, *Beállítások*, *Kijelentkezés*.
+- **Beállítások:** a billentyűkiosztás. Műveletenként két billentyű adható
+  meg; egy billentyű csak egy művelethez tartozhat. A beállítás a böngészőben
+  megmarad.
+- **Multiplayer:** a nyitott játékok listája, belépés, új játék létrehozása
+  (lásd [multiplayer.md](multiplayer.md)).
+
+### Irányítás (alapértékek)
 
 | Bemenet | Hatás |
 |---|---|
 | W / ↑ | előre, amerre a tank eleje (a sárga orr) néz |
 | S / ↓ | tolatás (lassabb) |
 | A D / ← → | a tank testének forgatása, helyben is |
-| Egér | a torony a kurzor felé fordul (amíg az egér nem mozdult, a torony a testet követi) |
-| Bal kattintás / Space | lövés |
-| Shift | gyorsító: 30%-kal nagyobb sebesség legfeljebb 3 másodpercig, utána túlmelegszik |
-| M | az egész város térképe utcanevekkel be/ki; a sarokban lévő kis térkép a tank kb. 700 m-es környékét mutatja |
-| F | teljes képernyős mód be/ki (a HUD bal felső gombjával is) |
-| E / jobb egérgomb | olajfolt lerakása a tank mögé (ha van töltet) |
-| + / − | több / kevesebb ellenséges tank |
-| R | új kör: vissza a kezdőpontra, a botok és a tárgyak újra szétszóródnak; a pálya sérülései és a roncsok eltűnnek, a szint 1-re áll vissza |
-| H | súgó be/ki |
-| Q | részletesség váltása (az oldal újratöltődik) |
+| Egér | a torony a kurzor felé fordul; bal gomb: lövés, jobb gomb: olajfolt |
+| Szóköz | lövés |
+| Shift | gyorsító |
+| E | olajfolt lerakása a tank mögé (ha van töltet) |
+| M | az egész város térképe utcanevekkel be/ki |
+| F | teljes képernyős mód be/ki |
+| H | információs panel be/ki |
 
 Irányítási modell: klasszikus tankirányítás – az A/D a tank testét forgatja,
-a W/S a test saját iránya szerint visz előre vagy hátra. A torony ettől
+a W/S a test saját iránya szerint visz előre vagy hátra, a torony ettől
 függetlenül, az egérrel céloz. A forgás fokozatosan gyorsul fel: egy rövid
 billentyűnyomás csak egy-két fokot fordít (finom iránytartás íves utcán), a
 nyomva tartás erős fordulást ad. Teljes sebességnél a tank lassabban fordul,
-mint állva, a legszűkebb íve ilyenkor kb. 15 m sugarú. A tank elejét sárga, hegyes orr és előre
-mutató fekete nyilak jelölik; a hátulján a sötét motortér és a kipufogók
-látszanak.
+mint állva.
 
-### Szabályok a prototípusban
+### Ami a képernyőn látszik
 
-- Burkolt úton teljes sebesség (előre 17 m/s, tolatva 9 m/s), terepen 72%.
-- **Gyorsító (Shift):** amíg nyomva van, a tank 30%-kal gyorsabb (és jobban
-  gyorsul). Összesen 3 másodpercig bírja: ekkor túlmelegszik, és nem
-  használható, amíg teljesen le nem hűl (kb. 6 másodperc). Ha előbb
-  elengeded, a hő fokozatosan csökken, és nem melegszik túl. A hőfokot a HUD
-  sávja mutatja (narancs: melegszik, piros: túlmelegedett).
-- Épületek, vízfelületek, kerítések, a parkoló autók és a roncsok nem járhatók
-  át. A zöldterületeken szabadon lehet menni: **a fák és a villanyoszlopok
-  nem akadályok**, a tank kidönti őket (a haladás irányába dőlnek), és úgy is
-  maradnak. A bokrokon és a patakokon át lehet hajtani.
-- **A pálya sérül, és úgy marad:** a lövedék, a rakéta és a lézer kidönti az
-  eltalált fát vagy oszlopot (a rakéta robbanása a közelieket is), a
-  becsapódás helyén pedig maradandó nyom keletkezik – kráter a talajon,
-  beszakadt, kormos folt a tetőn. Ez csak látvány: az épületek fala ettől
-  még áll. Legfeljebb 3000 nyom marad meg, utána a legrégebbiek eltűnnek.
-- **Tűz:** a találatot kapott háztető, a lövéstől kidőlt fa vagy oszlop és
-  a kilőtt tank kigyullad, és egy ideig ég (a találat fajtájától függően
-  kb. 15–45 másodpercig; ugyanoda érkező újabb találattól nagyobb lesz és
-  tovább ég). A tűz csak látvány: nem sebez és nem terjed. Amit a tank
-  dönt ki, az nem gyullad meg.
-- **Roncsok:** a kilőtt tank kiégett roncsa ott marad, ahol kilőtték
-  (egy ideig ég és füstöl). A roncs akadály a tankoknak és a lövedékeknek is.
-  Legfeljebb 150 roncs marad a pályán.
-- A pálya széle fal; a kamera a pálya határán megáll.
-- A tank életereje 100. Egy sima lövedék 25-öt sebez, a nehéz 50-et, a
-  rakéta 55-öt (a robbanása 7 m-en belül további 30-at), a lézer 18-at.
-- A kilőtt tank 4 másodperc múlva éled újra (a játékos a kezdőponton, a botok
-  véletlen helyen, a játékostól távol), rövid sebezhetetlenséggel.
-- Az azonos csapatbeliek nem sebzik egymást: a botok lövedéke átmegy a többi
-  boton.
-- Az épületek nem dönthetők le (csak nyomot hagy rajtuk a találat); a
-  Polgármesteri Hivatal a tervek szerint később sem lesz rombolható.
+Játék közben állandóan a **térkép** (jobb felül), az **információ gombja**
+(bal felül, *i*) és mellette a **tank sávja** látszik.
 
-### Szintek
+- **A pálya a kijelölt játéktérre van vágva:** a kamera a játéktér szélén
+  megáll (a határt sárga vonal jelzi), azon túl semmi nem látszik – a térképen sem.
+- **A tank sávja:** elöl a tank szintje, utána ami éppen nála van – a fegyver
+  (nehéz lövedék, rakéta, lézer), a megmaradó képességek (pattanó lövedék), a
+  hármas lövés hátralévő lövései, a pajzs- és olajtöltetek, valamint az időre
+  szóló tárgyak a hátralévő másodpercekkel.
+- A térkép a tank kb. 700 m-es környékét mutatja (kis játéktérnél az egészet); az M az egész játékteret mutatja nagyban. A botok piros, a többi játékos narancssárga pontként látszik
+  (a játékosok mindig, bármilyen messze vannak).
+- A saját tank zöld, a botok vörösek, a többi játékos tankja kék.
+- A tankok fölött az életerősáv; a sajátod fölött még az életeid (sárga
+  pontok) és – használat közben – a gyorsító hőfoka.
+- Az **információs panel** (H vagy az *i* gomb): az irányítás az aktuális
+  billentyűkkel, a tankod állapota (életerő, szint, életek, fegyver, aktív
+  tárgyak), a játékosok állása, a forrásmegjelölés és a *Kilépés a meccsből* gomb.
+- A fontos események rövid értesítésként jelennek meg felül (felvett tárgy,
+  kilövés, kiesés, szintlépés).
+- A tájékozódási pontok (hivatal, templom, rendőrség…) felirata a pályán marad.
 
-A játékos tankja minden kilőtt ellenfél után egy szintet lép (legfeljebb a
-20. szintig). Szintenként:
+### Szabályok
 
-- 3%-kal nagyobb a tank (a képe és az ütközési mérete is – a 20. szinten
-  már nem fér be mindenhová, ahová az elején);
-- 12-vel több a legnagyobb életereje (a többletet a szintlépéskor azonnal
-  megkapja);
-- 8%-kal többet sebez minden lövése.
+- **Mozgás:** burkolt úton teljes sebesség (előre 17 m/s, tolatva 9 m/s),
+  terepen 72%. A zöldterületeken szabadon lehet menni.
+- **Gyorsító (Shift):** amíg nyomva van, a tank 30%-kal gyorsabb. Összesen
+  3 másodpercig bírja: ekkor túlmelegszik, és nem használható, amíg teljesen
+  le nem hűl (kb. 6 másodperc). Ha előbb elengeded, a hő fokozatosan csökken.
+- **Akadályok:** az épületek, vízfelületek, kerítések, parkoló autók és a
+  roncsok nem járhatók át. A fák és a villanyoszlopok nem akadályok: a tank
+  kidönti őket. A bokrokon és a patakokon át lehet hajtani.
+- **A játéktér határa** fal: a tank nem megy át rajta, a lövedék ott becsapódik.
+- **Sebzés:** a tank életereje 100 (szintenként több). Egy sima lövedék 25-öt
+  sebez, a nehéz 50-et, a rakéta 55-öt (a robbanása 7 m-en belül további
+  30-at), a lézer 18-at.
+- **Kilövés:** a kilőtt tank 4 másodperc múlva éled újra – véletlen helyen, a
+  többi játékostól távol –, rövid sebezhetetlenséggel, alapfegyverrel. Ha nincs
+  több élete, kiesik. A roncsa ott marad, ahol kilőtték (akadály; egy ideig ég).
+- **Szintek:** a játékos tankja minden kilőtt tank után szintet lép (legfeljebb
+  a 20. szintig): szintenként 3%-kal nagyobb, 12-vel több a legnagyobb
+  életereje, és 8%-kal többet sebez. A szint a kilövés után is megmarad. A
+  botok nem lépnek szintet.
 
-A szint a kilövés után is megmarad, csak új körnél (`R`) indul újra 1-ről.
-A botok nem lépnek szintet. A szint a HUD-on látszik.
+### A pálya rombolása
 
-### Ellenséges tankok (botok)
+- **Fák, oszlopok:** kidőlnek, ha a tank nekimegy vagy lövés éri őket (a
+  rakéta robbanása a közelieket is kidönti), és úgy maradnak.
+- **Épületek:** minden épületnek életereje van az alapterülete szerint
+  (60 + 0,9 × m², legalább 80, legfeljebb 600). A találatok fogyasztják
+  (ugyanannyit, amennyit egy tankon sebeznének, a lövő szintjével növelve);
+  ha elfogy, **az épület összedől**: rom marad a helyén, amelyen át lehet
+  hajtani. Egy 100 m²-es ház 6 sima vagy 3 nehéz lövedéket, illetve 3 rakétát bír.
+- **Magas szintű tank:** a 6. szinttől a tank az ütközésével is rombolja az
+  épületet, amelynek nekifeszül (szintenként egyre gyorsabban), a 12. szinttől
+  pedig az épület érintésre összedől.
+- **A Polgármesteri Hivatal nem dönthető le.**
+- **Tűz:** a találatot kapott háztető, a lövéstől kidőlt fa, az összedőlő
+  épület és a kilőtt tank kigyullad, és egy ideig ég (kb. 10–45 másodperc).
+  A tűz csak látvány: nem sebez és nem terjed.
+- **Lövésnyomok:** a becsapódás helyén maradandó nyom keletkezik (kráter a
+  talajon, beszakadt, kormos folt a tetőn).
 
-A gép vezérelte, vörös tankok száma 0 és 100 között állítható a HUD
-„Ellenfelek" sorának gombjaival (−10, −, +, +10) vagy a − / + billentyűvel
-(nyomva tartva gyorsan változik); a beállítás a böngészőben megmarad
-(`settings.ts`). Az alapérték 3. A botok a város útjain szétszórva, a
-játékostól legalább 140 m-re jelennek meg.
+### Időjárás
 
-- **Járőr:** az utakat követik, a jobb oldali sávban, a játékosnál lassabban.
-- **Támadás:** ha 75 m-en belül rálátnak a játékosra (fal nem takarja),
+- **Nappal:** az alapállapot.
+- **Eső:** a burkolatlan talaj (fű, kert, park, szántó) **sáros és csúszik**:
+  a tank lassabb rajta, nehezen gyorsul, fékezéskor sokáig csúszik, gyors
+  kanyarban pedig megcsúszik és rövid ideig irányíthatatlanul sodródik. A
+  burkolt út nem csúszik; a terepjáró lánctalp megvéd. A zöld felületek sár
+  színűek, esik az eső.
+- **Este:** sötét van, de nem teljesen – a pálya kivehető marad. Világít a
+  közvilágítás (az álló villanyoszlopok és a lámpák; a kidöntött oszlop nem),
+  a tankok fényszórója, a tüzek, a torkolattüzek és a robbanások.
+
+### Botok
+
+A gép vezérelte, vörös tankok száma a szoba „Botok" csúszkájától és a pálya
+méretétől függ. Egymásra nem céloznak és egymást nem sebzik; bármelyik
+játékost megtámadják. Életük korlátlan: kilövés után máshol élednek újra.
+
+- **Járőr:** az utakat követik, a jobb oldali sávban; az út végén és a
+  játéktér határánál megfordulnak.
+- **Támadás:** ha 75 m-en belül rálátnak egy játékosra (fal nem takarja),
   0,7 másodperc múlva tüzelni kezdenek, és lőtávolságon belülre mennek. A
-  játékosnál lassabban lőnek (1,2 másodpercenként), és nem céloznak tökéletesen.
-- **Üldözés:** ha szem elől tévesztik a játékost, 9 másodpercig az utolsó
-  ismert helye felé tartanak, utána újra járőröznek.
-- **Akadályok:** tapogatókkal kerülik a falakat és a roncsokat; az út végén
-  (zsákutca, a pálya széle) megfordulnak. Ha mégsem haladnak – állnak, vagy
-  ugyanazon a helyen köröznek –, kitolatnak, körbenéznek, és a legszabadabb
-  irányba indulnak; ismételt elakadásnál egyre messzebbre mennek el onnan.
-  Ha egy bot így sem szabadul ki, a játék új helyre teszi, de csak akkor, ha
-  110 m-en belül nincs játékos (hogy senki ne lássa eltűnni).
-- Egymásra nem céloznak, és egymást nem sebzik.
-- A felvehető tárgyakat ők is felveszik, ha áthajtanak rajtuk, és az olajon
-  ők is megcsúsznak.
-
-A botok „agya" (`sim/bots.ts`) ugyanazt a bemenetet adja a szimulációnak, mint
-egy játékos, így később a szerveren is futhat.
+  játékosnál lassabban lőnek, és nem céloznak tökéletesen.
+- **Üldözés:** ha szem elől tévesztik, 9 másodpercig az utolsó ismert helye
+  felé tartanak.
+- **Akadályok:** tapogatókkal kerülik a falakat és a roncsokat. Ha mégsem
+  haladnak, kitolatnak, körbenéznek, és a legszabadabb irányba indulnak; ha
+  így sem szabadulnak, a játék új helyre teszi őket (csak ha 110 m-en belül
+  nincs játékos).
+- A felvehető tárgyakat ők is felveszik, a felvett fegyverük náluk is megmarad
+  a kilövésükig.
 
 ### Felvehető tárgyak
 
-Egyszerre 350 tárgy van szétszórva a város útjain (ebből 24 a kezdőpont
-300 m-es körzetében); a felvett tárgy helyett 12 másodperc múlva új jelenik
-meg, máshol. A tank érintésre veszi fel őket.
-
-A tárgyak négyfélék:
-
-- **Fegyver** (nehéz lövedék, rakéta, lézer): egyszerre egy lehet a tanknál.
-  Nem jár le: addig marad, amíg a tank másik fegyvert nem vesz fel (az lép a
-  helyére), vagy ki nem lövik. Újraéledés után csak az alaplövedék van.
-- **Megmaradó képesség** (pattanó lövedék): a fegyvertől függetlenül megmarad
-  a kilövésig.
-- **Lövésszámra szóló** (hármas lövés): 25 lövésig tart, az idő nem fogyasztja.
-- **Időre szóló** (gyorstöltő, turbó, terepjáró lánctalp, sebezhetetlenség,
-  radar) és **töltetes** (pajzs, olajfolt), illetve az azonnal ható javítókészlet.
+A tárgyak a játéktér útjain vannak szétszórva (a számuk a „Felvehető tárgyak"
+csúszkától és a pálya méretétől függ); a felvett tárgy helyett 12 másodperc
+múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 
 | Tárgy | Hatás | Meddig tart |
 |---|---|---|
-| Nehéz lövedék | fegyver: nagyobb robbanás és lőtáv, dupla sebzés; vaskos, sötét lövedék vörös gyűrűvel | a következő fegyverig vagy a kilövésig |
+| Nehéz lövedék | fegyver: nagyobb robbanás és lőtáv, dupla sebzés | a következő fegyverig vagy a kilövésig |
 | Rakéta | fegyver: lassan indul, felgyorsul, kb. 200 m-re repül, területre sebez | a következő fegyverig vagy a kilövésig |
 | Lézer | fegyver: azonnal célba érő sugár 130 m-ig | a következő fegyverig vagy a kilövésig |
-| Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan, mielőtt robban (a rakéta és a lézer nem pattan) | a kilövésig |
-| Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (több felvéve összeadódik, legfeljebb 75) |
+| Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan (a rakéta és a lézer nem) | a kilövésig |
+| Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
-| Olajfolt | 3 lerakható folt (`E` vagy jobb egérgomb); aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
+| Olajfolt | 3 lerakható folt; aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
 | Javítókészlet | azonnal visszaad 50 életerőt | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
-| Terepjáró lánctalp | terepen sem lassul a tank, olajon sem csúszik meg | 25 mp |
+| Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg | 25 mp |
 | Pajzs | egy töltet egy találatot nyel el (legfeljebb 3) | töltet |
-| Sebezhetetlenség | semmi nem sebez, olajon sem csúszik meg | 10 mp |
-| Radar | a térképeken látszanak a felvehető tárgyak | 30 mp |
+| Sebezhetetlenség | semmi nem sebez, nem csúszik meg | 10 mp |
+| Radar | a térképen látszanak a felvehető tárgyak | 30 mp |
 
-Az olajfolt a lerakójára is hat, miután egyszer lehajtott róla. A fegyver, a
-képességek és az aktív tárgyak a HUD bal felső részén látszanak (a hátralévő
-idővel, lövésszámmal vagy töltetszámmal). A botokra ugyanezek a szabályok
-érvényesek: a felvett fegyverük náluk is megmarad, amíg ki nem lövik őket.
+Egyszerre egy fegyver lehet a tanknál: az újonnan felvett a régi helyére lép.
 
 ### Ami még nincs kész
 
-- menürendszer a beállításokhoz (a beállítások tárolása már külön modulban van);
-- meccs időkorláttal és végeredménnyel, 2 csapatos mód;
-- ledönthető épületek, kerítések (a fák és oszlopok már kidönthetők);
-- érintőképernyős irányítás (mobilon a játék nincs kipróbálva);
-- online többjátékos mód.
+- csapatos mód, időkorlátos meccs;
+- visszatérés megszakadt kapcsolat után a folyamatban lévő meccsbe;
+- ledönthető kerítések;
+- érintőképernyős irányítás (a játék asztali gépre készül);
+- e-mailes jelszó-visszaállítás, eredmények és ranglista a fiókokhoz.
 
 ## Megjelenítés
 
-- A látómező mindig 160 × 90 méter. A belső felbontás a részletességtől
-  függ: 12 pixel/méternél 1920 × 1080. Más ablakméretnél a kép arányosan,
-  simítva méreteződik.
-- A térkép nem előre megrajzolt kép és nem csempékből áll: a vektoros
-  pályaadatot a `raster.ts` 256 × 256 pixeles darabokban, futás közben
-  rajzolja ki, mindig csak a kamera környékét. Ugyanez a rajzoló készíti a
-  minitérképet is, kisebb felbontásban.
-- A korábbi, 4 pixel/méteres „nagy pixeles" megjelenést a részletesebb kép
-  váltotta fel; a stílus (kézzel rajzolt hatású, határozott körvonalak,
-  korlátozott színpaletta) megmaradt.
+- A látómező mindig 160 × 90 méter, minden játékosnál ugyanannyi. A belső
+  felbontás a kijelzőhöz igazodik (legfeljebb 12, legalább 8 pixel/méter;
+  12-nél 1920 × 1080), az URL `?ppm=8` paraméterével kézzel csökkenthető.
+- A térkép nem előre megrajzolt kép: a vektoros pályaadatot a `raster.ts`
+  256 × 256 pixeles darabokban, futás közben rajzolja ki, mindig csak a
+  kamera környékét. Ugyanez a rajzoló készíti a kis térképet és a
+  pályakijelölő képét is.
+- A pálya változásai (kidőlt fa, lövésnyom, összedőlt ház) bekerülnek a pálya
+  állapotába, és csak az érintett darabok rajzolódnak újra a háttérben; a régi
+  kép addig kint marad, így nincs villanás.
 
-## Teljesítmény
+### Teljesítmény
 
-A cél: gyengébb asztali gépen is egyenletes kép. Ami ezt szolgálja:
+A cél: gyengébb asztali gépen is egyenletes kép.
 
-- **Háttérszálak.** A térképdarabokat legfeljebb három Web Worker rajzolja
-  (`chunkWorker.ts`); a fő szál csak a kész pixeleket tölti textúrába,
-  képkockánként korlátozott időkerettel. Háttérszál nélkül a rajzolás
-  tartalékként a fő szálon fut.
-- **A kijelzőhöz igazodó részletesség.** Induláskor annyi pixel/méter
-  állítódik be, amennyit a kijelző teljes képernyőn meg tud mutatni
-  (legfeljebb 12, legalább 8). A `Q` billentyűvel vagy az URL `?ppm=8`
-  paraméterével kézzel is csökkenthető.
-- **Takarékos rajzoló.** A tetők alatti talajt és a később felülírt füvet
-  nem számolja ki.
-- **Térbeli indexek.** A fák, bokrok, oszlopok, épületek és utak rácsba
-  rendezve kereshetők, így a rajzoló és a szimuláció a pálya méretétől
-  függetlenül csak a közeli elemekkel dolgozik.
-- **Kevés textúra és rajzolási hívás.** A térképdarabok közvetlenül a
-  pixelekből lesznek textúrák (vászon nélkül), a látómezőn kívüliek nem
-  rajzolódnak ki, a messzire kerültek fokozatosan törlődnek. Az útra írt
-  utcanevek és az effektek sprite-jai csak szükség szerint jönnek létre, és
-  újrahasznosulnak.
-- **Nincs teljes képernyős élsimítás (MSAA)**, két videokártyás gépen a
-  játék az erősebbet kéri.
-- **A HUD csak változáskor ír a DOM-ba**, a minitérkép csak akkor rajzolódik
-  újra, ha a tank elmozdult.
-- **A sérülések csak a saját térképdarabjukat rajzoltatják újra.** A kidőlt
-  fa vagy a lövésnyom bekerül a pálya állapotába (a háttérszálak is
-  megkapják), és csak az érintett 256 × 256 pixeles darabok készülnek el
-  újra a háttérben; a régi kép addig kint marad, így nincs villanás.
+- **Háttérszálak.** A térképdarabokat legfeljebb három Web Worker rajzolja; a
+  fő szál csak a kész pixeleket tölti textúrába, képkockánként korlátozott
+  időkerettel.
+- **Takarékos rajzoló és térbeli indexek.** A tetők alatti talaj nem
+  számolódik ki; a fák, bokrok, oszlopok, épületek és utak rácsba rendezve
+  kereshetők.
+- **Kevés textúra és rajzolási hívás.** A látómezőn kívüli elemeknek nincs
+  megjelenítőjük; az effektek sprite-jai újrahasznosulnak.
+- **Este** a sötétség fél felbontású rétegre készül, a fények ebből
+  „radírozódnak ki".
+- **A felület csak változáskor ír a DOM-ba.**
 
-Sok ellenfélnél a képernyőn kívüli tankoknak nincs megjelenítője, a botok
-pedig eltolva, néhány lépésenként keresnek utat és ellenfelet: 100 bottal és
-350 tárggyal egy szimulációs lépés kb. 0,5 ms.
-
-Mérés: `npm run perf` (futó játék mellett). Intel Iris Xe videokártyás
-gépen, a teljes városi pályával a fő szál képkockánként átlagosan 0,4–1 ms-ot
-dolgozik (60 FPS-hez 16,7 ms fér bele), 6–8 rajzolási hívással; a pálya
-nagyobbítása ezen nem változtatott.
+Mérés (Intel Iris Xe, 1920 × 1080): a jelenet frissítése képkockánként
+átlagosan 0,4–0,7 ms (60 FPS-hez 16,7 ms fér bele), este, botokkal is.
 
 ## Felépítés
 
 ```
+server/                   a játékszerver (lásd multiplayer.md)
 src/
-  main.ts                 belépési pont: pálya betöltése, Phaser indítása
+  main.ts                 belépési pont: pálya, menü, a meccs indítása
   game/
-    sim/                  JÁTÉKLOGIKA – nincs Phaser- vagy DOM-függés
-      collision.ts        szakaszrács: kör–fal ütközés, sugárvetés
+    sim/                  JÁTÉKLOGIKA – nincs Phaser- vagy DOM-függés; a szerver és a kliens közösen használja
+      collision.ts        szakaszrács: kör–fal ütközés, sugárvetés; a falaknak gazdája lehet (épület)
       props.ts            kidönthető tereptárgyak (fák, oszlopok) állapota
-      world.ts            tankok, lövedékek, sebzés, szintek, gyorsító, roncsok, tárgyak, olajfoltok; rögzített lépésközű step()
+      structures.ts       ledönthető épületek életereje
+      world.ts            tankok, lövedékek, sebzés, szintek, gyorsító, sár, roncsok, tárgyak; rögzített lépésközű step()
       pickups.ts          a felvehető tárgyak típusai és szabályai
       bots.ts             a gép vezérelte tankok viselkedése
+      match.ts            a meccs szabályai: létszámok a pálya méretéből, életek, kiesés, győztes
+    net/                  HÁLÓZAT: protokoll, kapcsolat, a szerverállapot tükre előrejelzéssel
     maps/                 PÁLYA
       types.ts            a pályafájl szerkezete
-      GameMap.ts          betöltés, ütközési rács, út-keresés, kezdőpont
+      GameMap.ts          betöltés, ütközési rács, játéktér, út-keresés, a pálya változó állapota
       rasterCore.ts       a rajzoló alapjai: színek, zaj, sokszög- és vonalrajzolás
-      raster.ts           térképrajzoló (vektor → pixel): talaj- és lombréteg
+      raster.ts           térképrajzoló (vektor → pixel): talaj- és lombréteg, romok, sár
       landmarkRaster.ts   a hivatal és környezete a fotók alapján felvett adatokból
       roadLabels.ts       az útra írt utcanevek helyének kiszámítása
       ChunkLayer.ts       a rajzolt rétegek darabonkénti, igény szerinti előállítása
       chunkWorker.ts      a térképdarabok kirajzolása háttérszálon
       RoadLabelLayer.ts   az útra írt utcanevek, csak a kamera közelében
-    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, tüzek (FireLayer.ts), kódból rajzolt sprite-ok
-    settings.ts           a játék beállításai (pl. a botok száma), a böngészőben megőrizve
+    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, tüzek, időjárás, kódból rajzolt sprite-ok
+    scenes/GameScene.ts   bemenet → szerver; szerverállapot → megjelenítés
+    settings.ts           a játékos beállításai (név, belépés, billentyűk), a böngészőben megőrizve
     systems/audio.ts      szintetizált hangok (Web Audio)
-    ui/Hud.ts             HUD: utcanév, minitérkép, feliratok, forrásmegjelölés
-    ui/fullscreen.ts      teljes képernyős mód (F billentyű, gomb)
+    ui/Menu.ts            menük: belépés, beállítások, játékok listája, új játék, váró, eredmény
+    ui/Hud.ts             játék közbeni felület: térkép, információs panel, értesítések
     quality.ts            a részletesség (pixel/méter) megválasztása
-    scenes/GameScene.ts   bemenet → szimuláció → megjelenítés
 assets/maps/osm/          nyers OSM-adat + lekérdezés, kiegészítő épületalaprajzok
-assets/maps/landmarks/    fotók alapján kézzel felvett részletek (hivatal)
+assets/maps/landmarks/    fotók alapján kézzel felvett részletek
 assets/maps/processed/    feldolgozott pályafájl
+data/                     a szerver adatai: fiókok (nincs verziókezelés alatt)
 pictures/                 fotók mintának (nincs verziókezelés alatt)
-scripts/                  letöltő, feldolgozó, képernyőkép-készítő és mérő scriptek
-inditas.bat               a játék indítása (éles változat)
+scripts/                  letöltő és feldolgozó scriptek, böngészős próba (e2e.mjs)
+inditas.bat               a játék indítása ezen a gépen
+szerver.bat               nyilvános szerver indítása alagúttal
 commit.bat                mentés és feltöltés a GitHubra
-tests/                    Vitest tesztek (szimuláció, pályaadat)
+tests/                    Vitest tesztek
 ```
 
 A három terület – **térképi adat**, **játéklogika**, **megjelenítés** – külön
@@ -251,8 +254,9 @@ modulokban van:
 - A térképi adat egyetlen JSON-fájl; új pálya másik kivágásból ugyanazzal a
   két scripttel készíthető.
 - A játéklogika (`sim/`) méterben és másodpercben számol, a megjelenítésről
-  semmit nem tud.
-- A megjelenítés csak olvassa a szimuláció állapotát.
+  és a hálózatról semmit nem tud; determinisztikus, rögzített lépésközű.
+- A megjelenítés csak olvassa az állapotot, és eseményekből készíti a
+  hangokat, effekteket.
 
 ### Pályarétegek
 
@@ -261,72 +265,17 @@ A rajzolási sorrend egyben a rétegrend:
 1. alap talaj és területhasználat (fű, kert, szántó, erdőtalaj, park, víz…);
 2. patakok;
 3. gyalogutak, kerékpárutak, földutak;
-4. járdák (a lakóutcák füves sávja mögött), padka a főutak mellett, úttest, felezővonal, zebrák;
+4. járdák, padka, úttest, felezővonal, zebrák;
 5. kerítések;
-6. bokrok;
+6. bokrok, az összedőlt épületek romjai;
 7. vetett árnyékok (épületek, fák, oszlopok);
 8. fatörzsek, villanyoszlopok, a kidőlt fák és oszlopok;
-9. épületek (tetők, kémények), majd a lövésnyomok (kráterek, beszakadt tetőfoltok);
+9. épületek (tetők, kémények), majd a lövésnyomok;
 10. az útra írt utcanevek;
 11. olajfoltok, roncsok, majd a **mozgó elemek:** tankok, lövedékek, rakétafüst, lézersugár;
-12. **lombréteg:** az álló fák koronája, vezetékek (a kidőlt oszlopnál megszakadnak), a hivatal előtti zászlók – a
-    tank fölött, kissé áttetszően;
-13. tüzek és füstjük, felvehető tárgyak, a tankok életerősávja, robbanások, valamint egy sárga
-    gyűrű és nyíl, amely a lombkorona alatt álló saját tank helyét és irányát mutatja.
+12. **lombréteg:** az álló fák koronája, vezetékek, zászlók – a tank fölött, kissé áttetszően;
+13. tüzek és füstjük, felvehető tárgyak, a tankok életerősávja, robbanások;
+14. időjárás: az eső, illetve az esti sötétség a fényekkel.
 
 Az ütközési geometria ettől független réteg (`GameMap.walls`), ugyanabból az
 adatból készül.
-
-## Előkészítés az online többjátékos módra
-
-Ez még nincs megvalósítva, de a kód már ehhez igazodik.
-
-**Ami már így működik:**
-
-- A `World` (`sim/world.ts`) tiszta, determinisztikus, rögzített lépésközű
-  (60 Hz) szimuláció; Node.js alatt változtatás nélkül futtatható (a tesztek
-  így futtatják).
-- A kliens **bemenetet** ad (`TankInput`: gáz, forgatás, célzás, tűz, olajfolt, gyorsító),
-  nem állapotot; a botok is ugyanezen a felületen keresztül irányítanak. A `GameScene` soha nem írja közvetlenül a tank helyzetét.
-- A szimuláció **eseményeket** ad vissza (lövés, becsapódás, találat, kilövés,
-  tárgyfelvétel, megcsúszás, fadöntés, szintlépés, túlmelegedés…), a hangok és effektek ezekből készülnek –
-  hálózaton ugyanezek küldhetők.
-- A véletlen elemek (a tárgyak helye és típusa, a botok döntései) rögzített
-  magú generátorból jönnek: azonos magból és bemenetekből azonos játék lesz.
-- A pálya sérülései (kidőlt fák, roncsok) a szimuláció állapotának részei,
-  így a szerver és minden kliens ugyanazt látja; a lövésnyomok a becsapódás
-  eseményeiből készülnek.
-- A csapatok és a sebzés szabályai a szimulációban vannak (azonos csapat nem
-  sebzi egymást) – a 2 csapatos mód erre épülhet.
-- A megjelenítés két szimulációs állapot között interpolál; ugyanez a
-  mechanizmus használható a szerverről érkező állapotokra.
-- A látómező rögzített (160 × 90 m), nem függ az ablak méretétől, így
-  minden játékos ugyanannyit lát.
-
-**Tervezett szerver-authoritatív modell:**
-
-- A szerver (Node.js + Socket.IO vagy hasonló) futtatja a `World`-öt
-  szobánként; ő kezeli a pozíciókat, lövéseket, találatokat és pontokat.
-- A kliens `input` üzeneteket küld sorszámmal; a szerver ellenőrzi a
-  mozgást és a találatokat (a kliens állapotát nem fogadja el).
-- A szerver 20–30 Hz-en állapot-pillanatképeket küld; a kliens a saját
-  tankját előre számolja (prediction) és a szerver állapotához igazítja, a
-  többieket interpolálja.
-- Szobák: 2–8 játékos, 5 perces meccs, FFA, később 2 csapat. Újracsatlakozás
-  szoba- és játékosazonosítóval.
-- Verziózható üzenetek: minden üzenet `{ v, type, ... }` alakú, a `v`
-  protokollverzió; a szerver az ismeretlen verziót elutasítja.
-
-Tervezett üzenettípusok (vázlat):
-
-| Irány | Típus | Tartalom |
-|---|---|---|
-| kliens → szerver | `join` | becenév, szobakód, (újracsatlakozási token) |
-| kliens → szerver | `input` | sorszám, `TankInput` |
-| szerver → kliens | `welcome` | játékosazonosító, pálya neve, szimulációs paraméterek |
-| szerver → kliens | `snapshot` | tick, tankok és lövedékek állapota, utolsó feldolgozott inputsorszám |
-| szerver → kliens | `event` | `SimEvent`-ek, kiütések, pontok |
-| szerver → kliens | `matchEnd` | végeredmény |
-
-Becenevek: a játékosok csak becenevet adnak meg; személyes adat nem kerül a
-játékba.

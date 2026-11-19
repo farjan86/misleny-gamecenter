@@ -3,7 +3,8 @@
 
 import { SegmentGrid } from '../sim/collision';
 import { FELLABLE, Fellables, type FellableItem } from '../sim/props';
-import type { RoadGuide, Terrain } from '../sim/world';
+import { Structures } from '../sim/structures';
+import type { RoadGuide, Terrain, Weather } from '../sim/world';
 import type { LandmarkBuilding, MapData, RoadFeature } from './types';
 
 export type Box = [minX: number, minY: number, maxX: number, maxY: number];
@@ -192,6 +193,13 @@ export class GameMap implements Terrain {
   readonly poleOffset: number;
   /** oszlop koordinátája → az oszlop sorszáma (a vezetékek rajzolásához) */
   readonly poleAt = new Map<string, number>();
+  /** Ledönthető épületek (a data.buildings sorrendjében); a hivatal nem dönthető le. */
+  readonly structures: Structures;
+  /** a játéktér, ha a meccs a pályának csak egy részén folyik */
+  bounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  private borderOwner = -10;
+  /** időjárás: a rajzolást (sár) és a talaj tapadását befolyásolja */
+  weather: Weather = 'day';
   /** maradandó lövésnyomok, lapítva: x, y, sugár */
   readonly scars: number[] = [];
   scarIndex: SpatialIndex;
@@ -230,10 +238,17 @@ export class GameMap implements Terrain {
 
     this.walls = new SegmentGrid(width, height, 16);
     const walls = options.collision === false ? null : this.walls;
-    for (const b of data.buildings) {
-      walls?.addPolygon(b.pts);
-      for (const h of b.holes ?? []) walls?.addPolygon(h);
-    }
+    // az épületek falainak gazdája az épület sorszáma: összedőléskor így kapcsolhatók ki
+    data.buildings.forEach((b, i) => {
+      walls?.addPolygon(b.pts, i);
+      for (const h of b.holes ?? []) walls?.addPolygon(h, i);
+    });
+    this.structures = new Structures(
+      data.buildings.map((b, i) => {
+        const box = this.buildingBoxes[i];
+        return { area: b.area, x: (box[0] + box[2]) / 2, y: (box[1] + box[3]) / 2, indestructible: b.townhall === true };
+      }),
+    );
     for (const a of data.areas) {
       if (SOLID_AREAS.has(a.kind)) for (const ring of a.rings) walls?.addPolygon(ring);
     }
@@ -332,7 +347,7 @@ export class GameMap implements Terrain {
   roofNear(x: number, y: number, reach = 1.5): { x: number; y: number } | null {
     const { buildings } = this.data;
     const onRoof = (px: number, py: number): boolean => {
-      for (const n of this.buildingIndex.query(px, py, px, py)) if (pointInPolygon(px, py, buildings[n].pts)) return true;
+      for (const n of this.buildingIndex.query(px, py, px, py)) if (!this.structures.collapsed[n] && pointInPolygon(px, py, buildings[n].pts)) return true;
       return false;
     };
     if (onRoof(x, y)) return { x, y };
@@ -362,15 +377,19 @@ export class GameMap implements Terrain {
    * oszlanak el a városban. null, ha a kisorsolt hely nem használható.
    */
   pickupSpot(rnd: () => number): { x: number; y: number } | null {
+    const area = this.bounds;
     if (!this.spotRoads) {
       this.spotRoads = [];
-      for (const road of this.data.roads) {
-        if (!DRIVABLE.has(road.kind) || road.kind.startsWith('motorway')) continue;
+      this.spotTotal = 0;
+      this.data.roads.forEach((road, ri) => {
+        if (!DRIVABLE.has(road.kind) || road.kind.startsWith('motorway')) return;
+        // a játéktéren kívüli utak kimaradnak
+        if (area && !boxesOverlap(this.roadBoxes[ri], area.minX, area.minY, area.maxX, area.maxY)) return;
         let length = 0;
         for (let i = 0; i + 3 < road.pts.length; i += 2) length += Math.hypot(road.pts[i + 2] - road.pts[i], road.pts[i + 3] - road.pts[i + 1]);
-        this.spotRoads.push({ road, length });
+        this.spotRoads!.push({ road, length });
         this.spotTotal += length;
-      }
+      });
     }
     let roll = rnd() * this.spotTotal;
     let pick = this.spotRoads[0];
@@ -396,6 +415,7 @@ export class GameMap implements Terrain {
       const x = pts[i] + dx * t - (dy / (len || 1)) * side;
       const y = pts[i + 1] + dy * t + (dx / (len || 1)) * side;
       if (x < 6 || y < 6 || x > this.width - 6 || y > this.height - 6) return null;
+      if (area && (x < area.minX + 6 || y < area.minY + 6 || x > area.maxX - 6 || y > area.maxY - 6)) return null;
       if (this.walls.resolveCircle(x, y, 2).hit) return null;
       return { x, y };
     }
@@ -436,8 +456,29 @@ export class GameMap implements Terrain {
     this.scarIndex.add(n, x - r, y - r, x + r, y + r);
   }
 
-  /** Új kör: minden fa és oszlop újra áll, a lövésnyomok eltűnnek. */
+  /**
+   * A játéktér kijelölése (méterben; null: a teljes pálya). A határ fal: a
+   * tankok nem mennek át rajta, a lövedék ott becsapódik.
+   */
+  setArea(area: { minX: number; minY: number; maxX: number; maxY: number } | null): void {
+    this.walls.setOwnerEnabled(this.borderOwner, false);
+    this.bounds = area;
+    this.spotRoads = null;
+    if (!area) return;
+    this.borderOwner--;
+    this.walls.addPolygon([area.minX, area.minY, area.maxX, area.minY, area.maxX, area.maxY, area.minX, area.maxY], this.borderOwner);
+  }
+
+  /** Épület összedőlése (a szimuláció eseményéből, a megjelenítés oldalán): a falai eltűnnek. */
+  collapse(index: number): void {
+    this.structures.damage(index, Infinity);
+    this.walls.setOwnerEnabled(index, false);
+  }
+
+  /** Új kör: minden fa, oszlop és épület újra áll, a lövésnyomok eltűnnek. */
   resetDamage(): void {
+    for (let i = 0; i < this.structures.count; i++) if (this.structures.collapsed[i]) this.walls.setOwnerEnabled(i, true);
+    this.structures.reset();
     this.fellables.reset();
     this.scars.length = 0;
     this.scarIndex = new SpatialIndex(this.width, this.height);

@@ -9,6 +9,8 @@ export interface RayHit {
   /** az eltalált fal egységnyi normálisa, a sugár kiindulási oldala felé mutat */
   nx: number;
   ny: number;
+  /** az eltalált fal gazdája (pl. az épület sorszáma), −1 ha nincs */
+  owner: number;
 }
 
 export class SegmentGrid {
@@ -18,6 +20,10 @@ export class SegmentGrid {
   private readonly segs: number[] = [];
   private stamp = 0;
   private readonly seen: number[] = [];
+  /** szakaszonként a gazda (−1: nincs) és az, hogy ki van-e kapcsolva */
+  private readonly owners: number[] = [];
+  private readonly off: number[] = [];
+  private readonly byOwner = new Map<number, number[]>();
 
   constructor(
     readonly width: number,
@@ -33,10 +39,17 @@ export class SegmentGrid {
     return this.segs.length / 4;
   }
 
-  addSegment(ax: number, ay: number, bx: number, by: number): void {
+  addSegment(ax: number, ay: number, bx: number, by: number, owner = -1): void {
     const idx = this.segs.length / 4;
     this.segs.push(ax, ay, bx, by);
     this.seen.push(0);
+    this.owners.push(owner);
+    this.off.push(0);
+    if (owner !== -1) {
+      const list = this.byOwner.get(owner);
+      if (list) list.push(idx);
+      else this.byOwner.set(owner, [idx]);
+    }
     const [c0, c1] = this.range(Math.min(ax, bx), Math.max(ax, bx), this.cols);
     const [r0, r1] = this.range(Math.min(ay, by), Math.max(ay, by), this.rows);
     for (let r = r0; r <= r1; r++) {
@@ -45,11 +58,21 @@ export class SegmentGrid {
   }
 
   /** Zárt sokszög élei; a pontlista lapított [x0,y0,x1,y1,...]. */
-  addPolygon(pts: ArrayLike<number>): void {
+  addPolygon(pts: ArrayLike<number>, owner = -1): void {
     const n = pts.length / 2;
     for (let i = 0, j = n - 1; i < n; j = i++) {
-      this.addSegment(pts[j * 2], pts[j * 2 + 1], pts[i * 2], pts[i * 2 + 1]);
+      this.addSegment(pts[j * 2], pts[j * 2 + 1], pts[i * 2], pts[i * 2 + 1], owner);
     }
+  }
+
+  /** A megadott gazda minden falának ki- vagy visszakapcsolása (pl. összedőlt épület). */
+  setOwnerEnabled(owner: number, enabled: boolean): void {
+    for (const i of this.byOwner.get(owner) ?? []) this.off[i] = enabled ? 0 : 1;
+  }
+
+  /** Minden kikapcsolt fal visszakapcsolása (új kör). */
+  enableAll(): void {
+    this.off.fill(0);
   }
 
   addPolyline(pts: ArrayLike<number>): void {
@@ -84,7 +107,7 @@ export class SegmentGrid {
           const i = list[k];
           if (this.seen[i] !== stamp) {
             this.seen[i] = stamp;
-            fn(i);
+            if (this.off[i] === 0) fn(i);
           }
         }
       }
@@ -92,11 +115,13 @@ export class SegmentGrid {
   }
 
   /**
-   * Kör kitolása a falakból. Visszaadja a korrigált középpontot és azt,
-   * hogy volt-e érintkezés.
+   * Kör kitolása a falakból. Visszaadja a korrigált középpontot, azt, hogy
+   * volt-e érintkezés, és az (egyik) érintett fal gazdáját (−1, ha nincs).
    */
-  resolveCircle(x: number, y: number, r: number): { x: number; y: number; hit: boolean } {
+  resolveCircle(x: number, y: number, r: number): { x: number; y: number; hit: boolean; owner: number } {
     let hit = false;
+    let owner = -1;
+    const owners = this.owners;
     const s = this.segs;
     for (let iter = 0; iter < 4; iter++) {
       let moved = false;
@@ -127,11 +152,12 @@ export class SegmentGrid {
         x += nx * (r - d);
         y += ny * (r - d);
         hit = true;
+        if (owners[i] >= 0) owner = owners[i];
         moved = true;
       });
       if (!moved) break;
     }
-    return { x, y, hit };
+    return { x, y, hit, owner };
   }
 
   /** Az (ax,ay)→(bx,by) szakasz első metszése a falakkal. */
@@ -166,6 +192,6 @@ export class SegmentGrid {
       nx = -nx;
       ny = -ny;
     }
-    return { t: best, x: ax + rx * best, y: ay + ry * best, nx, ny };
+    return { t: best, x: ax + rx * best, y: ay + ry * best, nx, ny, owner: this.owners[bestSeg] };
   }
 }

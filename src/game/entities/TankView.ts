@@ -29,26 +29,36 @@ export class TankView {
   private readonly hullFrames: readonly string[];
   private readonly prev: Snapshot;
   private readonly scale: number;
+  private readonly enemy: boolean;
   private frame = -1;
   private level = 0;
+  private lastHull = 0;
+  private lastTurret = 0;
+  /** a saját tank fölötti kiegészítők: a gyorsító hőfoka és az életek */
+  private heatBack: Phaser.GameObjects.Image | null = null;
+  private heatFill: Phaser.GameObjects.Image | null = null;
+  private readonly pips: Phaser.GameObjects.Image[] = [];
   private shown = true;
   /** az utolsó kirajzolt (interpolált) hely világpixelben */
   px = 0;
   py = 0;
 
   constructor(
-    scene: Phaser.Scene,
+    private readonly scene: Phaser.Scene,
     private readonly ppm: number,
     tank: TankState,
-    private readonly enemy: boolean,
+    /** a saját tank zöld, a botok vörösek, a többi játékos kék */
+    kind: 'own' | 'bot' | 'rival',
   ) {
     const scale = ppm / BASE_PPM;
     this.scale = scale;
-    this.hullFrames = enemy ? GTEX.enemyHull : TEX.hull;
+    const enemy = kind !== 'own';
+    this.enemy = enemy;
+    this.hullFrames = kind === 'bot' ? GTEX.enemyHull : kind === 'rival' ? GTEX.rivalHull : TEX.hull;
     this.shadow = scene.add.image(0, 0, TEX.shadow).setAlpha(0.3).setDepth(9).setScale(scale);
     this.hull = scene.add.image(0, 0, this.hullFrames[0]).setDepth(10).setScale(scale);
     this.turret = scene.add
-      .image(0, 0, enemy ? GTEX.enemyTurret : TEX.turret)
+      .image(0, 0, kind === 'bot' ? GTEX.enemyTurret : kind === 'rival' ? GTEX.rivalTurret : TEX.turret)
       .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
       .setDepth(11)
       .setScale(scale);
@@ -69,6 +79,48 @@ export class TankView {
     p.y = tank.y;
     p.hull = tank.hullAngle;
     p.turret = tank.turretAngle;
+  }
+
+  /**
+   * Új szerverállapot érkezett: az interpoláció onnan indul, ahol a tank éppen
+   * látszik (nem az előző állapotból), így a mozgás nem ugrik.
+   */
+  rebase(tank: TankState): void {
+    const p = this.prev;
+    const x = this.px / this.ppm;
+    const y = this.py / this.ppm;
+    // nagy ugrásnál (újraéledés) nem csúsztatjuk át a pályán
+    if (!this.shown || Math.hypot(tank.x - x, tank.y - y) > 12) {
+      this.remember(tank);
+      return;
+    }
+    p.x = x;
+    p.y = y;
+    p.hull = this.lastHull;
+    p.turret = this.lastTurret;
+  }
+
+  /** A saját tank fölött: a gyorsító hőfoka (0..1) és a hátralévő életek (−1: nincs kijelzés). */
+  setOwnStatus(heat: number, overheated: boolean, lives: number): void {
+    if (!this.heatBack || !this.heatFill) {
+      this.heatBack = this.scene.add.image(0, 0, GTEX.px).setDepth(17).setTint(0x101418).setAlpha(0.85);
+      this.heatFill = this.scene.add.image(0, 0, GTEX.px).setDepth(18).setOrigin(0, 0.5);
+      this.heatBack.setDisplaySize((BAR.width + 2) * this.scale, 5 * this.scale);
+    }
+    const visible = this.shown;
+    const top = this.barBack.y + 6 * this.scale;
+    this.heatBack.setVisible(visible && heat > 0).setPosition(this.barBack.x, top);
+    this.heatFill
+      .setVisible(visible && heat > 0)
+      .setPosition(this.barBack.x - (BAR.width / 2) * this.scale, top)
+      .setDisplaySize(Math.max(1, BAR.width * Math.min(1, heat) * this.scale), 3 * this.scale)
+      .setTint(overheated ? 0xe0483a : 0xe8a02a);
+    const count = Math.max(0, Math.min(5, lives));
+    while (this.pips.length < count) this.pips.push(this.scene.add.image(0, 0, GTEX.px).setDepth(18).setTint(0xffd84a).setDisplaySize(6 * this.scale, 6 * this.scale));
+    this.pips.forEach((pip, i) => {
+      pip.setVisible(visible && i < count);
+      if (i < count) pip.setPosition(this.barBack.x + (i - (count - 1) / 2) * 9 * this.scale, this.barBack.y - 8 * this.scale);
+    });
   }
 
   /** Ugrás (újraéledés, áthelyezés) után: ne interpoláljon a régi helyről. */
@@ -97,6 +149,8 @@ export class TankView {
     const turret = p.turret + angleDiff(tank.turretAngle, p.turret) * alpha;
     this.px = x;
     this.py = y;
+    this.lastHull = hull;
+    this.lastTurret = turret;
     // szintlépéskor a tank megnő
     const size = this.scale * tankSize(tank);
     if (tank.level !== this.level) {
@@ -161,7 +215,9 @@ export class TankView {
   }
 
   destroy(): void {
-    for (const part of [this.shadow, this.hull, this.turret, this.ring, this.barBack, this.barFill]) part.destroy();
+    for (const part of [this.shadow, this.hull, this.turret, this.ring, this.barBack, this.barFill, ...this.pips]) part.destroy();
+    this.heatBack?.destroy();
+    this.heatFill?.destroy();
     this.marker?.destroy();
   }
 }

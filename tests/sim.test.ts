@@ -24,7 +24,7 @@ describe('SegmentGrid', () => {
   it('nem mozdítja a faltól távoli kört', () => {
     const grid = new SegmentGrid(100, 100);
     grid.addSegment(50, 0, 50, 100);
-    expect(grid.resolveCircle(20, 40, 2)).toEqual({ x: 20, y: 40, hit: false });
+    expect(grid.resolveCircle(20, 40, 2)).toEqual({ x: 20, y: 40, hit: false, owner: -1 });
   });
 
   it('a sugárvetés a legközelebbi falat találja el', () => {

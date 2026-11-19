@@ -5,3 +5,6 @@ screenshots/
 .DS_Store
 pictures/
 .scratch/
+dist-server/
+data/
+alagut.txt

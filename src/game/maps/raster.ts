@@ -589,10 +589,11 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
   scratch(t.w * t.h);
 
   // a térbeli indexekből csak a kép közelében lévő elemek kerülnek elő
-  const buildings = map.buildingIndex
-    .query(minX, minY, maxX, maxY)
-    .filter((n) => visible(map.buildingBoxes[n]))
-    .map((n) => data.buildings[n]);
+  const buildingIds = map.buildingIndex.query(minX, minY, maxX, maxY).filter((n) => visible(map.buildingBoxes[n]));
+  // az összedőlt épületeknek nincs tetejük és árnyékuk: a helyükön rom van a talajon
+  const collapsed = map.structures.collapsed;
+  const buildings = buildingIds.filter((n) => !collapsed[n]).map((n) => data.buildings[n]);
+  const ruins = buildingIds.filter((n) => collapsed[n]);
   const specOf = (b: BuildingFeature): LandmarkBuilding | undefined => map.landmarkBuildings.get(b.id);
 
   // Takarékosság: ahol tető lesz, ott a talajt nem számoljuk ki, a füvet pedig
@@ -757,6 +758,9 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       drawBush(t, bushes[n * 3], bushes[n * 3 + 1], bushes[n * 3 + 2], hash(n * 3, 313));
     }
 
+    // az összedőlt épületek romjai a talajon
+    for (const n of ruins) drawRuin(t, data.buildings[n], n);
+
     // 7. vetett árnyékok (épületek, álló fák és oszlopok) – maszkba gyűjtve, hogy az átfedés ne sötétedjen kétszer
     const mark: Put = (idx) => {
       maskBuf[idx] = 1;
@@ -833,8 +837,81 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
     for (const n of map.scarIndex.query(minX, minY, maxX, maxY)) {
       drawScar(t, map.scars[n * 3], map.scars[n * 3 + 1], map.scars[n * 3 + 2], n);
     }
+    if (map.weather === 'rain') muddy(t);
   } else {
     for (const b of buildings) drawBuilding(t, b, 0);
+    const ruin = c(0x6e6860);
+    for (const n of ruins) fillRings(t, [data.buildings[n].pts], 0, 0, (idx) => {
+      buf[idx] = ruin;
+    });
+  }
+  // a játéktéren kívüli rész nem látszik (a pálya itt le van vágva), a határon sárga vonal fut
+  const area = map.bounds;
+  if (area) {
+    const x0 = area.minX * s - t.ox;
+    const y0 = area.minY * s - t.oy;
+    const x1 = area.maxX * s - t.ox;
+    const y1 = area.maxY * s - t.oy;
+    const line = Math.max(1, 0.35 * s);
+    const edge = c(0xf2c230);
+    const outside = c(0x101418);
+    for (let py = 0; py < t.h; py++) {
+      const outY = py < y0 || py >= y1;
+      for (let px = 0; px < t.w; px++) {
+        const idx = py * t.w + px;
+        if (outY || px < x0 || px >= x1) {
+          buf[idx] = outside;
+          continue;
+        }
+        if (px < x0 + line || px >= x1 - line || py < y0 + line || py >= y1 - line) buf[idx] = edge;
+      }
+    }
+  }
+}
+
+/** Esőben a zöld (burkolatlan) felületek sárosak: a zöld árnyalatok barnába hajlanak. */
+function muddy(t: RasterTarget): void {
+  const { buf } = t;
+  for (let idx = 0; idx < buf.length; idx++) {
+    const px = buf[idx];
+    const r = px & 255;
+    const g = (px >>> 8) & 255;
+    const b = (px >>> 16) & 255;
+    // csak a zöld túlsúlyú pixelek (fű, kert, park, erdőtalaj)
+    if (g <= r * 1.06 || g <= b * 1.12) continue;
+    const n = (hash((idx % t.w) + t.ox, Math.floor(idx / t.w) + t.oy) & 255) / 255;
+    const k = 0.5 + 0.18 * n;
+    const nr = r + (104 - r) * k;
+    const ng = g + (84 - g) * k;
+    const nb = b + (52 - b) * k;
+    buf[idx] = ((px & 0xff000000) | ((nb & 255) << 16) | ((ng & 255) << 8) | (nr & 255)) >>> 0;
+  }
+}
+
+/** Összedőlt épület: törmelékkupac az alaprajzon, a falak csonkjával. */
+function drawRuin(t: RasterTarget, b: BuildingFeature, seed: number): void {
+  const { buf, scale: s } = t;
+  const k = 1 / (0.45 * s);
+  const tones = [c(0x7d756c), c(0x8f877c), c(0x6a625a), c(0x9a8f80)];
+  const brick = c(0x9a4a34);
+  const char = c(0x3a3531);
+  fillRings(t, [b.pts], 0, 0, (idx) => {
+    const wx = (idx % t.w) + t.ox;
+    const wy = Math.floor(idx / t.w) + t.oy;
+    const n = vnoise(wx * k + seed * 3.1, wy * k + seed * 1.7);
+    const h = (hash(wx + seed, wy) & 1023) / 1023;
+    buf[idx] = h > 0.93 ? brick : h < 0.08 ? char : tones[Math.min(3, Math.floor(n * 4))];
+    coverBuf[idx] = 0;
+  });
+  // a falak csonkja: szaggatott, sötét körvonal
+  const wall = c(0x4a443e);
+  const pts = b.pts;
+  const count = pts.length / 2;
+  for (let i = 0, j = count - 1; i < count; j = i++) {
+    if ((hash(seed * 7 + i, i * 13) & 255) < 77) continue;
+    strokeLine(t, [pts[j * 2], pts[j * 2 + 1], pts[i * 2], pts[i * 2 + 1]], Math.max(1, 0.4 * s), (idx) => {
+      buf[idx] = wall;
+    });
   }
 }
 
@@ -949,5 +1026,19 @@ export function renderCanopy(map: GameMap, t: RasterTarget): boolean {
     drawn = true;
   }
   if (drawLandmarkOverlay(map, t)) drawn = true;
+  // a játéktéren kívülre eső lomb és vezeték nem látszik
+  const area = map.bounds;
+  if (area && drawn) {
+    const x0 = area.minX * s - t.ox;
+    const y0 = area.minY * s - t.oy;
+    const x1 = area.maxX * s - t.ox;
+    const y1 = area.maxY * s - t.oy;
+    if (x0 > 0 || y0 > 0 || x1 < t.w || y1 < t.h) {
+      for (let py = 0; py < t.h; py++) {
+        const outY = py < y0 || py >= y1;
+        for (let px = 0; px < t.w; px++) if (outY || px < x0 || px >= x1) buf[py * t.w + px] = 0;
+      }
+    }
+  }
   return drawn;
 }

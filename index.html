@@ -9,51 +9,123 @@
   </head>
   <body>
     <div id="game"></div>
-    <div id="hud">
-      <div id="hud-top-left">
-        <div class="panel title">TANK MISLENY <span>· KOZÁRMISLENY</span></div>
-        <div class="panel" id="hud-street">–</div>
-        <div class="panel" id="hud-townhall">Hivatal: –</div>
-        <div class="panel" id="hud-status">
-          <div id="hud-health"><div id="hud-health-fill"></div><span id="hud-health-text">100 / 100</span></div>
-          <div id="hud-boost"><div id="hud-boost-fill"></div><span id="hud-boost-text">Gyorsító (Shift)</span></div>
-          <div id="hud-score">Szint: 1 · Kilőtt: 0 · Kilőttek: 0</div>
-        </div>
-        <div class="panel" id="hud-bots">
-          Ellenfelek:
-          <span class="btn wide" id="hud-bots-minus10" role="button" title="Tízzel kevesebb ellenfél">−10</span>
-          <span class="btn" id="hud-bots-minus" role="button" title="Kevesebb ellenfél (−)">−</span>
-          <span id="hud-bots-count">3</span>
-          <span class="btn" id="hud-bots-plus" role="button" title="Több ellenfél (+)">+</span>
-          <span class="btn wide" id="hud-bots-plus10" role="button" title="Tízzel több ellenfél">+10</span>
-        </div>
-        <div class="panel hidden" id="hud-effects"></div>
-        <div class="panel" id="hud-fullscreen" role="button">⛶ Teljes képernyő (F)</div>
-      </div>
+
+    <!-- A játék közbeni felület: csak a térkép és az információ gombja látszik állandóan. -->
+    <div id="hud" class="hidden">
       <div id="hud-minimap" class="panel">
         <canvas id="minimap" width="220" height="220"></canvas>
-        <div class="hint">M – nagy térkép</div>
       </div>
-      <div id="hud-help" class="panel">
-        <b>Irányítás</b><br />
-        W / ↑ – előre · S / ↓ – tolatás<br />
-        A D / ← → – a tank forgatása<br />
-        Egér – célzás · Kattintás / Space – lövés<br />
-        Shift – gyorsító (3 mp, aztán le kell hűlnie)<br />
-        E / jobb egérgomb – olajfolt lerakása<br />
-        + / − – ellenfelek száma (legfeljebb 100)<br />
-        M – térkép · F – teljes képernyő<br />
-        R – újraindítás · H – súgó<br />
-        Q – részletesség: <span id="hud-quality">–</span>
-      </div>
-      <div id="hud-attribution" class="panel">
-        Térképadat:
-        <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a>
-        (ODbL)<span id="hud-extra-attribution"></span>
+      <div id="hud-info-button" class="panel" role="button" title="Irányítás és információ">i</div>
+      <!-- ami éppen a tanknál van: fegyver, képességek, aktív tárgyak -->
+      <div id="hud-loadout"></div>
+      <div id="hud-info" class="panel hidden">
+        <div id="hud-info-body"></div>
+        <div class="row">
+          <span class="btn" id="hud-info-close" role="button">Bezárás</span>
+          <span class="btn danger" id="hud-info-leave" role="button">Kilépés a meccsből</span>
+        </div>
       </div>
       <div id="hud-toast" class="panel"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
+    </div>
+
+    <!-- Menük: főképernyő, beállítások, játékok listája, új játék, váró, eredmény. -->
+    <div id="menu">
+      <div class="screen" id="screen-main">
+        <h1>TANK MISLENY</h1>
+        <p class="sub">Tankcsata Kozármisleny utcáin</p>
+        <p class="sub" id="server-status"></p>
+        <!-- belépés előtt: név és jelszó -->
+        <div id="auth-box">
+          <label class="field">Játékosnév<input id="auth-name" maxlength="18" autocomplete="username" spellcheck="false" placeholder="pl. Páncélos Pista" /></label>
+          <label class="field">Jelszó<input id="auth-password" type="password" maxlength="72" autocomplete="current-password" /></label>
+          <div class="buttons">
+            <span class="btn big" id="auth-login" role="button">Belépés</span>
+            <span class="btn big" id="auth-register" role="button">Regisztráció</span>
+          </div>
+          <p class="note">
+            Regisztrációhoz csak egy játékosnév (3–18 karakter) és egy jelszó (legalább 6 karakter) kell. E-mail-címet nem kérünk, ezért az elfelejtett jelszót nem tudjuk visszaállítani.
+          </p>
+          <div class="buttons"><span class="btn" id="auth-settings" role="button">Beállítások</span></div>
+        </div>
+        <!-- belépés után: a főmenü -->
+        <div id="user-box" class="hidden">
+          <p class="big-note" id="user-greeting"></p>
+          <div class="buttons column">
+            <span class="btn big" id="main-multiplayer" role="button">Multiplayer</span>
+            <span class="btn big" id="main-settings" role="button">Beállítások</span>
+            <span class="btn" id="main-logout" role="button">Kijelentkezés</span>
+          </div>
+        </div>
+        <p class="credit">
+          Térképadat: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a> (ODbL)<span id="extra-attribution"></span>
+        </p>
+      </div>
+
+      <div class="screen hidden" id="screen-settings">
+        <h2>Beállítások</h2>
+        <p class="sub">Billentyűk – kattints egy mezőre, majd nyomd meg az új billentyűt (Esc: mégsem, Delete: törlés)</p>
+        <div id="key-table"></div>
+        <p class="note">Az egér mindig céloz; a bal gomb lő, a jobb gomb olajfoltot rak le.</p>
+        <div class="buttons">
+          <span class="btn" id="settings-reset" role="button">Alapértékek</span>
+          <span class="btn" id="settings-back" role="button">Vissza</span>
+        </div>
+      </div>
+
+      <div class="screen hidden wide" id="screen-lobby">
+        <h2>Multiplayer – játékok</h2>
+        <p class="sub" id="lobby-status">Kapcsolódás a szerverhez…</p>
+        <div id="room-list"></div>
+        <div class="buttons">
+          <span class="btn big" id="lobby-create" role="button">Új játék</span>
+          <span class="btn" id="lobby-back" role="button">Vissza</span>
+        </div>
+      </div>
+
+      <div class="screen hidden wide" id="screen-create">
+        <h2>Új játék</h2>
+        <div class="split">
+          <div>
+            <p class="sub">Pálya: húzd az egeret a térképen a játéktér kijelöléséhez</p>
+            <canvas id="area-map"></canvas>
+            <p class="note" id="area-text"></p>
+          </div>
+          <div class="sliders">
+            <label class="field">A játék neve<input id="create-name" maxlength="28" autocomplete="off" spellcheck="false" /></label>
+            <label class="slider">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
+            <label class="slider">Életek <b id="val-lives"></b><input type="range" id="sl-lives" min="0" max="2" step="1" /></label>
+            <label class="slider">Botok <b id="val-bots"></b><input type="range" id="sl-bots" min="0" max="5" step="1" /></label>
+            <label class="slider">Felvehető tárgyak <b id="val-pickups"></b><input type="range" id="sl-pickups" min="0" max="5" step="1" /></label>
+            <label class="slider">Időjárás <b id="val-weather"></b><input type="range" id="sl-weather" min="0" max="2" step="1" /></label>
+            <div class="buttons">
+              <span class="btn big" id="create-ok" role="button">Létrehozás</span>
+              <span class="btn" id="create-back" role="button">Vissza</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="screen-room">
+        <h2 id="room-title">Játék</h2>
+        <p class="sub" id="room-summary"></p>
+        <div id="room-players"></div>
+        <p class="big-note" id="room-state"></p>
+        <div class="buttons">
+          <span class="btn" id="room-leave" role="button">Kilépés</span>
+        </div>
+      </div>
+
+      <div class="screen hidden" id="screen-results">
+        <h2 id="results-title">Vége a játéknak</h2>
+        <div id="results-table"></div>
+        <div class="buttons">
+          <span class="btn big" id="results-back" role="button">Vissza a játékokhoz</span>
+        </div>
+      </div>
+
+      <div id="menu-error" class="hidden"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

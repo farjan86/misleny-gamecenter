@@ -4,14 +4,16 @@
 
 import { GameMap } from './GameMap';
 import { renderCanopy, renderMap } from './raster';
+import type { Weather } from '../sim/world';
 import type { MapData } from './types';
 
 export type ChunkRequest =
-  | { type: 'init'; data: MapData; ppm: number; size: number }
+  | { type: 'init'; data: MapData; ppm: number; size: number; weather: Weather; area: { minX: number; minY: number; maxX: number; maxY: number } | null }
   | { type: 'render'; key: number; cx: number; cy: number }
   // a pálya változó állapota: a fő szál minden változást elküld, mielőtt újrarajzolást kér
   | { type: 'felled'; index: number; angle: number }
   | { type: 'scar'; x: number; y: number; r: number }
+  | { type: 'collapse'; index: number }
   | { type: 'reset' };
 
 export interface ChunkReply {
@@ -39,6 +41,8 @@ scope.onmessage = (ev) => {
   const msg = ev.data;
   if (msg.type === 'init') {
     map = new GameMap(msg.data, { collision: false });
+    map.weather = msg.weather;
+    map.bounds = msg.area;
     ppm = msg.ppm;
     size = msg.size;
     return;
@@ -50,6 +54,10 @@ scope.onmessage = (ev) => {
   }
   if (msg.type === 'scar') {
     map.addScar(msg.x, msg.y, msg.r);
+    return;
+  }
+  if (msg.type === 'collapse') {
+    map.collapse(msg.index);
     return;
   }
   if (msg.type === 'reset') {

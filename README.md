@@ -1,82 +1,92 @@
 # TANK MISLENY
 
-Böngészőben futó, felülnézetes tankos játék prototípusa. A pálya
-**Kozármisleny** teljes beépített területe (kb. 2 × 3,5 km), valós
-térképadatokból; a kiindulópont a **Polgármesteri Hivatal** (Pécsi utca 124.).
+Böngészőben futó, felülnézetes, többjátékos tankos játék. A pálya
+**Kozármisleny** beépített területe (kb. 2 × 3,5 km), valós térképadatokból;
+a tájékozódási pont a **Polgármesteri Hivatal** (Pécsi utca 124.).
 
-A pályán gép vezérelte ellenséges tankok járőröznek (a számuk állítható), az
-utakon pedig felvehető tárgyak vannak: másféle lövedékek, pajzs, turbó,
-olajfolt és társaik. A felvett fegyver megmarad, amíg másikat nem veszel fel
-vagy ki nem lőnek. A fák és az oszlopok kidönthetők, az eltalált háztetők, fák
-és tankok kigyulladnak, a lövések nyoma és a kilőtt tankok roncsa megmarad, a saját tank pedig minden kilövéssel szintet lép. Látszanak az utak, a járdák, a zebrák, az épületek, a
-parkok, a fák és a tájékozódási pontok; az utcanevek az útburkolatra vannak írva.
+A játékosok regisztráció után szobákat (játékokat) hozhatnak létre vagy
+léphetnek be mások szobájába. A szoba létrehozója csúszkákkal állítja be a
+játékteret (a térkép egy kijelölt részét), a játékosok számát, az életeket, a
+botok és a felvehető tárgyak mennyiségét és az időjárást (nappal, eső, este).
+Mindenki mindenki ellen játszik; az nyer, aki utolsónak marad életben.
+
+A pályán felvehető tárgyak vannak (másféle fegyverek, pajzs, turbó, olajfolt…),
+a fák és az oszlopok kidönthetők, az épületek a találatoktól összedőlnek, az
+eltalált tetők, fák és tankok kigyulladnak, a tank pedig minden kilövéssel
+szintet lép.
 
 ## Indítás
 
 Előfeltétel: Node.js 20 vagy újabb.
 
-Windows alatt a legegyszerűbb az `inditas.bat` fájlra duplán kattintani: ez
-az optimalizált (éles) változatot állítja össze és nyitja meg a böngészőben.
+A játékhoz szerver kell: ez adja ki a játék oldalát, tartja a szobák listáját,
+és futtatja a meccseket. Windows alatt két indítófájl van:
+
+- **`inditas.bat`** – összeállítja a játékot, elindítja a szervert ezen a
+  gépen, és megnyitja a böngészőt (<http://localhost:8787/>). Egyedül vagy a
+  helyi hálózaton játszáshoz, kipróbáláshoz.
+- **`szerver.bat`** – ugyanez, de a szervert az interneten is elérhetővé
+  teszi egy alagúton keresztül. Beállítása: [docs/multiplayer.md](docs/multiplayer.md).
+
 A `commit.bat` a változásokat menti és feltölti a GitHub-tárolóba.
 
-Fejlesztéshez, parancssorból:
+Fejlesztéshez, parancssorból (két ablakban):
 
 ```bash
 npm install
-npm run dev
+npm run server   # a játékszerver a 8787-es porton
+npm run dev      # fejlesztői oldal: http://localhost:5173/ (a szerverhez továbbít)
 ```
-
-Ezután nyisd meg a böngészőben a kiírt címet (alapesetben
-<http://localhost:5173/>).
 
 ## Irányítás
 
-Klasszikus tankirányítás. A tank elejét a sárga, hegyes orr jelöli.
+Klasszikus tankirányítás; a tank elejét a sárga, hegyes orr jelöli. A
+billentyűk a főmenü **Beállítások** pontjában átállíthatók; ezek az alapértékek:
 
 | Bemenet | Hatás |
 |---|---|
 | W / ↑ | előre, amerre a tank eleje néz |
 | S / ↓ | tolatás |
 | A D / ← → | a tank forgatása (helyben is) |
-| Egér | a torony célzása |
-| Bal kattintás / Space | lövés |
+| Egér | a torony célzása; bal gomb: lövés, jobb gomb: olajfolt |
+| Szóköz | lövés |
 | Shift | gyorsító: +30% sebesség legfeljebb 3 másodpercig, utána le kell hűlnie |
-| M | az egész város térképe utcanevekkel (a sarokban lévő kis térkép a tank környékét mutatja) |
-| F | teljes képernyős mód be/ki (a bal felső gombbal is) |
-| E / jobb egérgomb | olajfolt lerakása (ha van töltet) |
-| + / − | több / kevesebb ellenséges tank, legfeljebb 100 (a HUD gombjaival tízesével is) |
-| R | új kör |
-| H | súgó be/ki |
-| Q | részletesség váltása (12 → 10 → 8 pixel/méter); gyengébb gépen az alacsonyabb érték gyorsabb |
+| E | olajfolt lerakása (ha van töltet) |
+| M | az egész város térképe utcanevekkel |
+| F | teljes képernyős mód |
+| H | információ: az irányítás, a tank állapota, a játékosok – és a kilépés |
+
+Játék közben a képernyőn csak a térkép és az információ gombja (**i**) látszik
+állandóan; a tank fölött az életereje, az életei és a gyorsító hőfoka.
 
 ## Parancsok
 
 | Parancs | Mit csinál |
 |---|---|
-| `npm run dev` | fejlesztői szerver |
-| `npm run build` | típusellenőrzés + éles build a `dist/` mappába |
-| `npm run preview` | az éles build kipróbálása |
-| `npm test` | Vitest tesztek (szimuláció, ütközés, pályaadat) |
+| `npm run server` | a szerver összeállítása és indítása (a `dist/` mappából adja ki az oldalt) |
+| `npm run dev` | fejlesztői oldal (a `/ws` kéréseket a helyben futó szervernek továbbítja) |
+| `npm run build` | típusellenőrzés + éles build: az oldal a `dist/`, a szerver a `dist-server/` mappába |
+| `npm start` | a már összeállított szerver indítása |
+| `npm test` | Vitest tesztek (szimuláció, meccsszabályok, szerver, fiókok, pályaadat) |
+| `npm run e2e` | végigjátszott próba két böngészővel a futó szerveren, képernyőképekkel (telepített Chrome kell hozzá) |
 | `npm run map` | térképadatok újraletöltése (OSM + kiegészítő épületek) és feldolgozása |
 | `npm run map:fetch` / `map:buildings` | csak az OSM-adat, illetve csak a kiegészítő épületalaprajzok letöltése |
 | `npm run map:process` | csak feldolgozás a meglévő nyers adatból |
-| `npm run perf` | teljesítménymérés a futó játékon (betöltés, képkockánkénti számítási idő, memória) |
-| `npm run shots` | füstteszt + képernyőképek a futó játékról (a gépen telepített Chrome/Edge kell hozzá, és közben fusson az `npm run dev`) |
 
 ## Technológia
 
-TypeScript, Vite, Phaser 3; tesztek: Vitest; képernyőképek: playwright-core.
-A játék legfeljebb Full HD (1920 × 1080) belső felbontásban, 12 pixel/méter
-részletességgel rajzol; kisebb kijelzőn magától kevesebb pixellel dolgozik.
-A térkép kirajzolása háttérszálakon fut. A térkép, a sprite-ok és a hangok kódból készülnek,
-külső kép- vagy hangfájl nincs.
+TypeScript, Vite, Phaser 3 a kliensen; Node.js és WebSocket (`ws`) a
+szerveren; tesztek: Vitest; böngészős próba: playwright-core. A játéklogika
+(`src/game/sim/`) közös: a szerver számol vele mindent, a kliens ugyanezzel
+jelzi előre a saját tank mozgását. A térkép kirajzolása háttérszálakon fut; a
+térkép, a sprite-ok és a hangok kódból készülnek, külső kép- vagy hangfájl nincs.
 
 ## Dokumentáció
 
 - [docs/map-data.md](docs/map-data.md) – adatforrás, a hivatal azonosítása,
   lekérdezés, feldolgozás, mi valós adat és mi generált, ismert hiányosságok
-- [docs/gameplay.md](docs/gameplay.md) – játékmenet, kódfelépítés, a
-  többjátékos mód előkészítése
+- [docs/gameplay.md](docs/gameplay.md) – játékmenet, szabályok, megjelenítés, kódfelépítés
+- [docs/multiplayer.md](docs/multiplayer.md) – a szerver működése, indítása a saját gépen, elérés az internetről saját domainnel, fiókok, költöztetés
 
 ## Térképadat és licenc
 
@@ -86,7 +96,7 @@ feltételei szerint. Ahol az OSM-ben nincs épületkontúr (főleg a város dél
 és keleti részén), ott az épületek alaprajza a
 [Microsoft Global ML Building Footprints](https://github.com/microsoft/GlobalMLBuildingFootprints)
 nyílt adatbázisából származik (szintén ODbL). A forrásmegjelölés a játékban
-is látható (jobb alsó sarok).
+is látható (a főképernyőn és az információs panelen).
 
 A pálya stilizált játéktér. **Az OSM-ből származik:** az utak nyomvonala és
 neve, az épületek alaprajza és helye, a területhasználat, a vizek, a

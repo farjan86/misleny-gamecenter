@@ -2,6 +2,10 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   base: './',
+  server: {
+    // fejlesztés közben a játékszerver külön fut (npm run server): a /ws kéréseket oda továbbítjuk
+    proxy: { '/ws': { target: 'ws://localhost:8787', ws: true } },
+  },
   worker: {
     format: 'es',
   },

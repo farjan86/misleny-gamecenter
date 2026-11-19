@@ -21,20 +21,27 @@ if not exist "node_modules\" (
   )
 )
 
-rem Az optimalizált, éles változat készül el és indul - ez gyorsabban tölt be
-rem és kevesebb erőforrást kér, mint a fejlesztői mód.
-echo A játék előkészítése, néhány másodperc...
+echo A játék és a szerver előkészítése, néhány másodperc...
 call npx vite build --logLevel warn
 if errorlevel 1 (
   echo A játék összeállítása nem sikerült.
   pause
   exit /b 1
 )
+call npm run --silent server:build
+if errorlevel 1 (
+  echo A szerver összeállítása nem sikerült.
+  pause
+  exit /b 1
+)
 
 echo.
-echo TANK MISLENY indul, a böngésző magától megnyílik.
+echo TANK MISLENY indul ezen a gépen: http://localhost:8787/
+echo A böngésző magától megnyílik. Ugyanezen a hálózaton lévő gépek a
+echo gép IP-címén érik el, pl. http://192.168.1.20:8787/
 echo Leállítás: Ctrl+C, vagy zárd be ezt az ablakot.
 echo.
-call npx vite preview --open
+start "" "http://localhost:8787/"
+node dist-server\server.mjs
 
 pause
