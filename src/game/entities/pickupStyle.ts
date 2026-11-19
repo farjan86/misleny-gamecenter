@@ -46,7 +46,7 @@ function shell(ctx: Ctx, x: number, y: number, length: number, width: number, co
 export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   heavy: {
     label: 'Nehéz lövedék',
-    hint: 'nagyobb robbanás, dupla sebzés',
+    hint: 'nagyobb robbanás, dupla sebzés – megmarad, amíg másik fegyvert nem veszel fel',
     color: '#b8322c',
     icon: (ctx) => {
       shell(ctx, 24, 24, 26, 14);
@@ -56,7 +56,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   triple: {
     label: 'Hármas lövés',
-    hint: 'három lövedék legyezőben',
+    hint: '25 lövésig három lövedék legyezőben',
     color: '#d8742a',
     icon: (ctx) => {
       for (const [dy, rot] of [[-9, -0.3], [0, 0], [9, 0.3]] as const) {
@@ -82,7 +82,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   ricochet: {
     label: 'Pattanó lövedék',
-    hint: 'a falról kétszer visszapattan',
+    hint: 'a lövedéked a falról kétszer visszapattan – megmarad, amíg ki nem lőnek',
     color: '#7a4ac0',
     icon: (ctx) => {
       stroke(ctx, 4);
@@ -95,7 +95,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   rocket: {
     label: 'Rakéta',
-    hint: 'messzire repül, nagyot robban',
+    hint: 'messzire repül, nagyot robban – megmarad, amíg másik fegyvert nem veszel fel',
     color: '#5a6672',
     icon: (ctx) => {
       ctx.save();
@@ -115,7 +115,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   laser: {
     label: 'Lézer',
-    hint: 'azonnal célba érő sugár',
+    hint: 'azonnal célba érő sugár – megmarad, amíg másik fegyvert nem veszel fel',
     color: '#c01e5a',
     icon: (ctx) => {
       stroke(ctx, 5, '#ffb0c8');

@@ -6,8 +6,9 @@ térképadatokból; a kiindulópont a **Polgármesteri Hivatal** (Pécsi utca 12
 
 A pályán gép vezérelte ellenséges tankok járőröznek (a számuk állítható), az
 utakon pedig felvehető tárgyak vannak: másféle lövedékek, pajzs, turbó,
-olajfolt és társaik. A fák és az oszlopok kidönthetők, a lövések nyoma és a
-kilőtt tankok roncsa megmarad, a saját tank pedig minden kilövéssel szintet lép. Látszanak az utak, a járdák, a zebrák, az épületek, a
+olajfolt és társaik. A felvett fegyver megmarad, amíg másikat nem veszel fel
+vagy ki nem lőnek. A fák és az oszlopok kidönthetők, az eltalált háztetők, fák
+és tankok kigyulladnak, a lövések nyoma és a kilőtt tankok roncsa megmarad, a saját tank pedig minden kilövéssel szintet lép. Látszanak az utak, a járdák, a zebrák, az épületek, a
 parkok, a fák és a tájékozódási pontok; az utcanevek az útburkolatra vannak írva.
 
 ## Indítás

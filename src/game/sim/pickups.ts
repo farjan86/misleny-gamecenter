@@ -17,29 +17,45 @@ export const PICKUP_KINDS = [
   'radar',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
-/** Nem időzített tárgyak: töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
+/**
+ * Fegyverek: a tanknál egyszerre egy lehet. A felvett fegyver addig marad meg,
+ * amíg a tank másikat nem vesz fel, vagy ki nem lövik (utána újra az
+ * alaplövedék van).
+ */
+export const WEAPON_KINDS = ['heavy', 'rocket', 'laser'] as const;
+export type WeaponKind = (typeof WEAPON_KINDS)[number];
+export const isWeapon = (kind: PickupKind): kind is WeaponKind => (WEAPON_KINDS as readonly string[]).includes(kind);
+/** Lövésszámra szóló tárgy: a hármas lövés PICKUP.tripleShots lövésig tart, bármelyik fegyverrel. */
+export type AmmoKind = 'triple';
+/**
+ * Megmaradó képesség: a pattanó lövedék a fegyvertől függetlenül megmarad, amíg
+ * a tankot ki nem lövik (az alap- és a nehéz lövedék pattan, a rakéta és a lézer nem).
+ */
+export type AbilityKind = 'ricochet';
+/** Töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
 export type ChargeKind = 'shield' | 'oil' | 'repair';
 /** Az időzített hatások. */
-export type TimedKind = Exclude<PickupKind, ChargeKind>;
-export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => k !== 'shield' && k !== 'oil' && k !== 'repair');
+export type TimedKind = Exclude<PickupKind, ChargeKind | WeaponKind | AmmoKind | AbilityKind>;
+export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair');
 
 /**
- * duration: a hatás ideje másodpercben (a töltetes tárgyaknál 0);
+ * duration: a hatás ideje másodpercben (csak az időzített tárgyaknál; a
+ * fegyvereknél, a lövésszámra szóló és a töltetes tárgyaknál 0);
  * weight: milyen gyakran kerül ilyen tárgy a pályára a többihez képest.
  */
 export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> = {
   /** nehéz lövedék: nagyobb robbanás, nagyobb lőtáv, dupla sebzés */
-  heavy: { duration: 20, weight: 12 },
-  /** hármas lövés: egyszerre három lövedék (rakéta, lézersugár) legyezőben */
-  triple: { duration: 20, weight: 12 },
+  heavy: { duration: 0, weight: 12 },
+  /** hármas lövés: egyszerre három lövedék (rakéta, lézersugár) legyezőben, PICKUP.tripleShots lövésig */
+  triple: { duration: 0, weight: 12 },
   /** gyorstöltő: jóval rövidebb idő két lövés között */
   rapid: { duration: 15, weight: 10 },
-  /** pattanó lövedék: a falról kétszer visszapattan, mielőtt robban */
-  ricochet: { duration: 20, weight: 9 },
+  /** pattanó lövedék: a falról kétszer visszapattan, mielőtt robban; megmaradó képesség */
+  ricochet: { duration: 0, weight: 9 },
   /** rakéta: lassan indul, felgyorsul, messzire repül, nagyot robban */
-  rocket: { duration: 20, weight: 10 },
+  rocket: { duration: 0, weight: 10 },
   /** lézer: azonnal célba érő sugár, nagy lőtávval */
-  laser: { duration: 15, weight: 9 },
+  laser: { duration: 0, weight: 9 },
   /** olajfolt: lerakható töltetek; aki ráhajt, megcsúszik */
   oil: { duration: 0, weight: 10 },
   /** javítókészlet: azonnal visszaad PICKUP.repairAmount életerőt */
@@ -62,6 +78,9 @@ export const PICKUP = {
   /** felvétel után ennyi idővel jelenik meg helyette egy új, máshol (mp) */
   respawnDelay: 12,
   maxShield: 3,
+  /** egy hármas lövés tárgy ennyi lövésre elég; több felvéve összeadódik eddig a határig */
+  tripleShots: 25,
+  maxTripleShots: 75,
   /** egy olajos tárgy ennyi lerakható foltot ad */
   oilPerPickup: 3,
   maxOil: 6,

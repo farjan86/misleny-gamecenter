@@ -743,5 +743,98 @@ describe('a botok nem ragadnak be', () => {
     expect(relocated).toBeLessThanOrEqual(3);
     // egyik bot sem tölt 30 másodpercnél többet 8 méteres körön belül
     expect(longest).toBeLessThan(30);
+  }, 30000); // 100 bot négy percnyi szimulációja lassabb gépen tovább tart az alap 5 másodpercnél
+});
+
+describe('megmaradó fegyverek', () => {
+  it('a felvett fegyver nem jár le: addig marad, amíg másikat nem vesz fel a tank', () => {
+    const world = new World(arena(4000));
+    const tank = world.addTank(200, 2000, 0);
+    give(world, tank, 'rocket');
+    expect(tank.weapon).toBe('rocket');
+    run(world, {}, seconds(90)); // jóval több, mint a régi 20 másodperc
+    expect(tank.weapon).toBe('rocket');
+    run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
+    expect(world.bullets[0].kind).toBe('rocket');
+    // másik fegyver felvétele: az lép a helyére
+    give(world, tank, 'laser');
+    expect(tank.weapon).toBe('laser');
+    give(world, tank, 'heavy');
+    expect(tank.weapon).toBe('heavy');
+  });
+
+  it('a kilőtt tank újraéledve csak az alaplövedéket kapja vissza', () => {
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
+    const target = world.addTank(140, 200, Math.PI, { team: TEAM.bots });
+    give(world, target, 'laser');
+    give(world, target, 'ricochet');
+    give(world, target, 'triple');
+    expect(target.weapon).toBe('laser');
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    expect(target.alive).toBe(false);
+    run(world, {}, seconds(TANK.respawnDelay + 0.5));
+    expect(target.alive).toBe(true);
+    expect(target.weapon).toBeNull();
+    expect(target.ricochet).toBe(false);
+    expect(target.tripleShots).toBe(0);
+  });
+
+  it('a pattanó lövedék megmaradó képesség: fegyvercsere után is megvan, a nehéz lövedék is pattan', () => {
+    const world = new World(arena(4000));
+    const tank = world.addTank(200, 2000, 0);
+    give(world, tank, 'ricochet');
+    run(world, {}, seconds(60));
+    expect(tank.ricochet).toBe(true);
+    give(world, tank, 'heavy');
+    expect(tank.ricochet).toBe(true);
+    run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
+    expect(world.bullets[0].kind).toBe('heavy');
+    expect(world.bullets[0].bounces).toBe(BOOST.ricochetBounces);
+    // a rakéta nem pattan, de a képesség megmarad mellette
+    give(world, tank, 'rocket');
+    tank.cooldown = 0;
+    run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
+    expect(world.bullets[world.bullets.length - 1].bounces).toBe(0);
+    expect(tank.ricochet).toBe(true);
+  });
+
+  it('a hármas lövés lövésszámra szól, nem időre', () => {
+    const world = new World(arena(4000));
+    const tank = world.addTank(200, 2000, 0);
+    give(world, tank, 'triple');
+    expect(tank.tripleShots).toBe(PICKUP.tripleShots);
+    run(world, {}, seconds(120)); // az idő múlása nem fogyasztja
+    expect(tank.tripleShots).toBe(PICKUP.tripleShots);
+    let volleys = 0;
+    let lastTriple = 0;
+    for (let i = 0; i < PICKUP.tripleShots + 3; i++) {
+      tank.cooldown = 0;
+      const shots = run(world, { [tank.id]: { fire: true, aim: 0 } }, 1).filter((e) => e.type === 'shot').length;
+      expect(shots).toBe(1);
+      const fresh = world.bullets.filter((b) => b.life > BULLET.life - 2 * SIM_DT).length;
+      volleys++;
+      if (fresh === 3) lastTriple = volleys;
+      world.bullets.length = 0;
+    }
+    expect(lastTriple).toBe(PICKUP.tripleShots);
+    expect(tank.tripleShots).toBe(0);
+    // több tárgy összeadódik, de csak a felső határig
+    for (let i = 0; i < 5; i++) give(world, tank, 'triple');
+    expect(tank.tripleShots).toBe(PICKUP.maxTripleShots);
+  });
+
+  it('a lövéstől kidőlt fa eseménye jelzi, hogy lövés döntötte ki', () => {
+    const props = new Fellables(400, 400, [
+      { x: 150, y: 200, r: 0.4, kind: FELLABLE.tree },
+      { x: 150, y: 260, r: 0.4, kind: FELLABLE.tree },
+    ]);
+    const world = new World(arena(400, { fellables: props }));
+    const shooter = world.addTank(120, 200, 0);
+    const driver = world.addTank(130, 260, 0);
+    const events = [...run(world, { [shooter.id]: { fire: true, aim: 0 }, [driver.id]: { throttle: 1 } }, 2), ...run(world, { [driver.id]: { throttle: 1 } }, seconds(3))];
+    const felled = events.filter((e) => e.type === 'felled');
+    expect(felled.find((e) => e.type === 'felled' && e.index === 0)).toMatchObject({ shot: true });
+    expect(felled.find((e) => e.type === 'felled' && e.index === 1)).toMatchObject({ shot: false });
   });
 });

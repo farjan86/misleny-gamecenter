@@ -7,7 +7,7 @@
 
 import { SegmentGrid } from './collision';
 import { FELLABLE, type Fellables } from './props';
-import { BOOST, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind } from './pickups';
+import { BOOST, isWeapon, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind, type WeaponKind } from './pickups';
 
 export const SIM_DT = 1 / 60;
 
@@ -137,6 +137,12 @@ export interface TankState {
   homeY: number;
   homeAngle: number;
   effects: Effects;
+  /** a felvett fegyver (null: alaplövedék); megmarad, amíg másikat nem vesz fel, vagy ki nem lövik */
+  weapon: WeaponKind | null;
+  /** ennyi lövésig hármas még a lövés */
+  tripleShots: number;
+  /** pattanó lövedék: megmaradó képesség, a kilövésig tart */
+  ricochet: boolean;
   /** pajzstöltetek száma */
   shield: number;
   /** lerakható olajfoltok száma */
@@ -211,7 +217,7 @@ export type SimEvent =
   | { type: 'slip'; tank: number; x: number; y: number }
   | { type: 'bump'; tank: number; x: number; y: number }
   /** kidőlt egy fa vagy oszlop (index: a pálya kidönthető tárgyainak sorszáma) */
-  | { type: 'felled'; index: number; x: number; y: number; angle: number }
+  | { type: 'felled'; index: number; x: number; y: number; angle: number; shot: boolean }
   /** találat: `absorbed` jelzi, ha pajzs vagy sebezhetetlenség fogta fel */
   | { type: 'hit'; tank: number; by: number; x: number; y: number; absorbed: 'shield' | 'invulnerable' | null }
   | { type: 'destroyed'; tank: number; by: number; x: number; y: number }
@@ -262,7 +268,7 @@ function rotateToward(current: number, target: number, maxStep: number): number 
 }
 
 function noEffects(): Effects {
-  return { heavy: 0, triple: 0, rapid: 0, ricochet: 0, rocket: 0, laser: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0 };
+  return { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0 };
 }
 
 /**
@@ -330,6 +336,9 @@ export class World {
       homeY: y,
       homeAngle: angle,
       effects: noEffects(),
+      weapon: null,
+      tripleShots: 0,
+      ricochet: false,
       shield: 0,
       oil: 0,
       dropCooldown: 0,
@@ -454,6 +463,10 @@ export class World {
     tank.hp = tankMaxHp(tank);
     tank.alive = true;
     tank.effects = noEffects();
+    // a felvett fegyver a kilövéssel elveszett: újra az alaplövedék van
+    tank.weapon = null;
+    tank.tripleShots = 0;
+    tank.ricochet = false;
     // rövid védelem újraéledés után
     tank.effects.invulnerable = 2.5;
     tank.shield = 0;
@@ -547,7 +560,7 @@ export class World {
     if (props && Math.abs(tank.speed) > 0.5) {
       const dir = tank.speed >= 0 ? heading : heading + Math.PI;
       props.forEachTouching(nx, ny, radius, (i) => {
-        if (!this.fell(i, dir)) return;
+        if (!this.fell(i, dir, false)) return;
         tank.speed *= props.kind[i] === FELLABLE.pole ? 0.8 : 0.9;
       });
     }
@@ -591,10 +604,10 @@ export class World {
   }
 
   /** Fa vagy oszlop kidöntése a megadott irányba; false, ha már ki volt döntve. */
-  private fell(index: number, angle: number): boolean {
+  private fell(index: number, angle: number, shot = true): boolean {
     const props = this.terrain.fellables;
     if (!props || !props.fell(index, angle)) return false;
-    this.events.push({ type: 'felled', index, x: props.x[index], y: props.y[index], angle });
+    this.events.push({ type: 'felled', index, x: props.x[index], y: props.y[index], angle, shot });
     return true;
   }
 
@@ -633,9 +646,9 @@ export class World {
   private fire(tank: TankState): void {
     const { terrain } = this;
     const fx = tank.effects;
-    const laser = fx.laser > 0;
-    const rocket = !laser && fx.rocket > 0;
-    const kind: ShellKind = rocket ? 'rocket' : fx.heavy > 0 ? 'heavy' : 'shell';
+    const laser = tank.weapon === 'laser';
+    const rocket = tank.weapon === 'rocket';
+    const kind: ShellKind = rocket ? 'rocket' : tank.weapon === 'heavy' ? 'heavy' : 'shell';
     tank.cooldown = TANK.fireCooldown * (fx.rapid > 0 ? BOOST.rapidCooldown : 1) * (laser ? LASER.cooldown : rocket ? ROCKET.cooldown : 1);
 
     const barrel = TANK.barrelLength * tankSize(tank);
@@ -649,8 +662,10 @@ export class World {
       return;
     }
 
-    // hármas lövésnél a lövedékek (sugarak) legyezőben indulnak
-    const spread = fx.triple > 0 ? [-BOOST.tripleSpread, 0, BOOST.tripleSpread] : [0];
+    // hármas lövésnél a lövedékek (sugarak) legyezőben indulnak; lövésenként egy töltet fogy
+    const triple = tank.tripleShots > 0;
+    if (triple) tank.tripleShots--;
+    const spread = triple ? [-BOOST.tripleSpread, 0, BOOST.tripleSpread] : [0];
     for (const offset of spread) {
       const angle = tank.turretAngle + offset;
       const cos = Math.cos(angle);
@@ -670,7 +685,7 @@ export class World {
         vx: cos * speed,
         vy: sin * speed,
         life: rocket ? ROCKET.life : BULLET.life * (kind === 'heavy' ? BOOST.heavyLife : 1),
-        bounces: !rocket && fx.ricochet > 0 ? BOOST.ricochetBounces : 0,
+        bounces: tank.ricochet && !rocket ? BOOST.ricochetBounces : 0,
       });
     }
   }
@@ -862,6 +877,9 @@ export class World {
     if (kind === 'shield') tank.shield = Math.min(PICKUP.maxShield, tank.shield + 1);
     else if (kind === 'oil') tank.oil = Math.min(PICKUP.maxOil, tank.oil + PICKUP.oilPerPickup);
     else if (kind === 'repair') tank.hp = Math.min(tankMaxHp(tank), tank.hp + PICKUP.repairAmount);
+    else if (isWeapon(kind)) tank.weapon = kind; // az előző fegyver helyére lép
+    else if (kind === 'ricochet') tank.ricochet = true;
+    else if (kind === 'triple') tank.tripleShots = Math.min(PICKUP.maxTripleShots, tank.tripleShots + PICKUP.tripleShots);
     else tank.effects[kind] = PICKUPS[kind].duration;
   }
 

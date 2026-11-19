@@ -4,6 +4,7 @@
 // később a szerveren fut.
 
 import Phaser from 'phaser';
+import { FireLayer } from '../entities/FireLayer';
 import { createGameTextures, GTEX, PICKUP_ICON_SIZE } from '../entities/gameTextures';
 import { PICKUP_STYLE, pickupTexture } from '../entities/pickupStyle';
 import { TankView } from '../entities/TankView';
@@ -27,6 +28,15 @@ const PICKUPS = { total: 350, nearStart: 24, nearRadius: 300 };
 const BLAST: Record<ShotKind, number> = { shell: 1, heavy: 1.7, rocket: 2.4, laser: 0.45 };
 /** A maradandó lövésnyom sugara méterben, a találat fajtája szerint. */
 const SCAR: Record<ShotKind, number> = { shell: 1.1, heavy: 1.8, rocket: 2.6, laser: 0.45 };
+/** A találattól kigyulladó háztető tüze: a láng fél szélessége (m) és az égés ideje (mp). */
+const ROOF_FIRE: Record<ShotKind, { size: number; life: number }> = {
+  shell: { size: 1.7, life: 24 },
+  heavy: { size: 2.3, life: 34 },
+  rocket: { size: 2.9, life: 42 },
+  laser: { size: 1.2, life: 15 },
+};
+/** A kilőtt tank roncsa ennyi ideig ég (mp). */
+const WRECK_FIRE = { size: 2.4, life: 45 };
 /** Ennél messzebbi események hangja nem hallatszik (m). */
 const HEARING = 140;
 
@@ -43,6 +53,7 @@ export class GameScene extends Phaser.Scene {
   private bots!: BotManager;
   private player!: TankState;
   private ground!: ChunkLayer;
+  private fires!: FireLayer;
   private roadLabels!: RoadLabelLayer;
   private hud!: Hud;
   private keys!: Keys;
@@ -97,6 +108,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setRoundPixels(true);
 
     this.ground = new ChunkLayer(this, this.map, this.ppm);
+    this.fires = new FireLayer(this, this.ppm);
     this.hud = new Hud(this.map, this.ppm);
     this.hud.setQualityText(`${this.ppm} px/m`);
     this.hud.onBotChange((delta) => this.changeBots(delta));
@@ -152,6 +164,7 @@ export class GameScene extends Phaser.Scene {
     // a pálya sérülései (kidőlt fák, lövésnyomok) is eltűnnek
     this.map.resetDamage();
     this.ground.reset();
+    this.fires.clear();
     this.inputs.clear();
     this.accumulator = 0;
 
@@ -232,6 +245,7 @@ export class GameScene extends Phaser.Scene {
     // amíg a töltőképernyő látszik, a kész darabok átvétele több időt kaphat
     this.ground.update(view, this.ready ? 3 : 12);
     this.roadLabels.update(view);
+    this.fires.update(view, Math.min(0.1, deltaMs / 1000));
     this.syncPickups(view, seconds);
 
     if (!this.ready && (this.ground.isReady(view) || performance.now() - this.startedAt > LOADING_TIMEOUT_MS)) {
@@ -269,6 +283,9 @@ export class GameScene extends Phaser.Scene {
     // az aktív bónuszok listája
     const lines = this.effectLines;
     lines.length = 0;
+    if (p.weapon) lines.push(`Fegyver: ${PICKUP_STYLE[p.weapon].label}`);
+    if (p.ricochet) lines.push(PICKUP_STYLE.ricochet.label);
+    if (p.tripleShots > 0) lines.push(`${PICKUP_STYLE.triple.label} · ${p.tripleShots} lövés`);
     for (const kind of TIMED_KINDS) {
       if (p.effects[kind] > 0) lines.push(`${PICKUP_STYLE[kind].label} · ${Math.ceil(p.effects[kind])} mp`);
     }
@@ -314,6 +331,9 @@ export class GameScene extends Phaser.Scene {
         if (volume > 0 && ev.kind !== 'laser') this.sfx.explosion(Math.max(0.15, volume) * (ev.kind === 'shell' ? 1 : 1.3));
         this.boom(ev.x, ev.y, BLAST[ev.kind]);
         this.scar(ev.x, ev.y, SCAR[ev.kind]);
+        // az eltalált épület teteje kigyullad
+        const roof = this.map.roofNear(ev.x, ev.y);
+        if (roof) this.fires.ignite(roof.x, roof.y, ROOF_FIRE[ev.kind].size, ROOF_FIRE[ev.kind].life);
         break;
       }
       case 'laser':
@@ -356,6 +376,7 @@ export class GameScene extends Phaser.Scene {
       case 'destroyed':
         this.boom(ev.x, ev.y, 3.2);
         this.scar(ev.x, ev.y, 3);
+        this.fires.ignite(ev.x, ev.y, WRECK_FIRE.size, WRECK_FIRE.life);
         this.sfx.explosion(Math.max(0.4, this.loudness(ev.x, ev.y)) * 1.6);
         if (mine) {
           this.cameras.main.shake(400, 0.009);
@@ -371,6 +392,12 @@ export class GameScene extends Phaser.Scene {
         this.ground.invalidate(ev.x - reach, ev.y - reach, ev.x + reach, ev.y + reach);
         const volume = this.loudness(ev.x, ev.y);
         if (volume > 0) this.sfx.crack(volume);
+        // a lövéstől kidőlt fa (oszlop) kigyullad; amit a tank döntött ki, az nem
+        if (ev.shot) {
+          const tree = this.map.trees[ev.index];
+          const r = tree ? tree.r : 0.6;
+          this.fires.ignite(ev.x + Math.cos(ev.angle) * r * 0.9, ev.y + Math.sin(ev.angle) * r * 0.9, tree ? Math.min(3, 1.2 + r * 0.55) : 1, tree ? 22 : 10);
+        }
         break;
       }
       case 'overheat':
@@ -524,12 +551,12 @@ export class GameScene extends Phaser.Scene {
       let view = this.bulletViews.get(b.id);
       if (!view) {
         const rocket = b.kind === 'rocket';
+        const heavy = b.kind === 'heavy';
         view = this.add
-          .image(0, 0, rocket ? GTEX.rocket : TEX.bullet)
-          .setOrigin(rocket ? 0.7 : 0.85, 0.5)
-          .setScale(this.spriteScale * (b.kind === 'heavy' ? 1.6 : 1))
+          .image(0, 0, rocket ? GTEX.rocket : heavy ? GTEX.heavyShell : TEX.bullet)
+          .setOrigin(rocket ? 0.7 : heavy ? 0.8 : 0.85, 0.5)
+          .setScale(this.spriteScale * (heavy ? 1.15 : 1))
           .setDepth(12);
-        if (b.kind === 'heavy') view.setTint(0xffb0a0);
         this.bulletViews.set(b.id, view);
       }
       // a pattanó lövedék iránya menet közben változhat
@@ -613,6 +640,8 @@ export class GameScene extends Phaser.Scene {
       bots: this.bots.count,
       pickups: this.world.pickups.length,
       oils: this.world.oils.length,
+      fires: this.fires.count,
+      firesVisible: this.fires.visibleCount,
       level: p.level,
       heat: p.heat,
       overheated: p.overheated,

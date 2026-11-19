@@ -324,6 +324,26 @@ export class GameMap implements Terrain {
     return OFF_ROAD_FACTOR;
   }
 
+  /**
+   * A ponthoz legközelebbi tetőpont: maga a pont, ha épületen van, különben a
+   * `reach` méterre lévő környezetének első olyan pontja, amely épületre esik
+   * (a lövedék a falnál robban, a tűz a tetőn ég). null, ha nincs a közelben épület.
+   */
+  roofNear(x: number, y: number, reach = 1.5): { x: number; y: number } | null {
+    const { buildings } = this.data;
+    const onRoof = (px: number, py: number): boolean => {
+      for (const n of this.buildingIndex.query(px, py, px, py)) if (pointInPolygon(px, py, buildings[n].pts)) return true;
+      return false;
+    };
+    if (onRoof(x, y)) return { x, y };
+    for (let k = 0; k < 8; k++) {
+      const px = x + Math.cos((k * Math.PI) / 4) * reach;
+      const py = y + Math.sin((k * Math.PI) / 4) * reach;
+      if (onRoof(px, py)) return { x: px, y: py };
+    }
+    return null;
+  }
+
   /** Igaz, ha a pont valamelyik fa lombkoronája alatt van. */
   underCanopy(x: number, y: number): boolean {
     for (const i of this.treeIndex.query(x, y, x, y)) {

@@ -48,8 +48,13 @@ látszanak.
   becsapódás helyén pedig maradandó nyom keletkezik – kráter a talajon,
   beszakadt, kormos folt a tetőn. Ez csak látvány: az épületek fala ettől
   még áll. Legfeljebb 3000 nyom marad meg, utána a legrégebbiek eltűnnek.
+- **Tűz:** a találatot kapott háztető, a lövéstől kidőlt fa vagy oszlop és
+  a kilőtt tank kigyullad, és egy ideig ég (a találat fajtájától függően
+  kb. 15–45 másodpercig; ugyanoda érkező újabb találattól nagyobb lesz és
+  tovább ég). A tűz csak látvány: nem sebez és nem terjed. Amit a tank
+  dönt ki, az nem gyullad meg.
 - **Roncsok:** a kilőtt tank kiégett roncsa ott marad, ahol kilőtték
-  (egy ideig füstöl). A roncs akadály a tankoknak és a lövedékeknek is.
+  (egy ideig ég és füstöl). A roncs akadály a tankoknak és a lövedékeknek is.
   Legfeljebb 150 roncs marad a pályán.
 - A pálya széle fal; a kamera a pálya határán megáll.
 - A tank életereje 100. Egy sima lövedék 25-öt sebez, a nehéz 50-et, a
@@ -108,14 +113,25 @@ Egyszerre 350 tárgy van szétszórva a város útjain (ebből 24 a kezdőpont
 300 m-es körzetében); a felvett tárgy helyett 12 másodperc múlva új jelenik
 meg, máshol. A tank érintésre veszi fel őket.
 
-| Tárgy | Hatás | Időtartam |
+A tárgyak négyfélék:
+
+- **Fegyver** (nehéz lövedék, rakéta, lézer): egyszerre egy lehet a tanknál.
+  Nem jár le: addig marad, amíg a tank másik fegyvert nem vesz fel (az lép a
+  helyére), vagy ki nem lövik. Újraéledés után csak az alaplövedék van.
+- **Megmaradó képesség** (pattanó lövedék): a fegyvertől függetlenül megmarad
+  a kilövésig.
+- **Lövésszámra szóló** (hármas lövés): 25 lövésig tart, az idő nem fogyasztja.
+- **Időre szóló** (gyorstöltő, turbó, terepjáró lánctalp, sebezhetetlenség,
+  radar) és **töltetes** (pajzs, olajfolt), illetve az azonnal ható javítókészlet.
+
+| Tárgy | Hatás | Meddig tart |
 |---|---|---|
-| Nehéz lövedék | nagyobb robbanás és lőtáv, dupla sebzés | 20 mp |
-| Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben | 20 mp |
+| Nehéz lövedék | fegyver: nagyobb robbanás és lőtáv, dupla sebzés; vaskos, sötét lövedék vörös gyűrűvel | a következő fegyverig vagy a kilövésig |
+| Rakéta | fegyver: lassan indul, felgyorsul, kb. 200 m-re repül, területre sebez | a következő fegyverig vagy a kilövésig |
+| Lézer | fegyver: azonnal célba érő sugár 130 m-ig | a következő fegyverig vagy a kilövésig |
+| Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan, mielőtt robban (a rakéta és a lézer nem pattan) | a kilövésig |
+| Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (több felvéve összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
-| Pattanó lövedék | a falról kétszer visszapattan, mielőtt robban | 20 mp |
-| Rakéta | lassan indul, felgyorsul, kb. 200 m-re repül, területre sebez | 20 mp |
-| Lézer | azonnal célba érő sugár 130 m-ig | 15 mp |
 | Olajfolt | 3 lerakható folt (`E` vagy jobb egérgomb); aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
 | Javítókészlet | azonnal visszaad 50 életerőt | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
@@ -124,9 +140,10 @@ meg, máshol. A tank érintésre veszi fel őket.
 | Sebezhetetlenség | semmi nem sebez, olajon sem csúszik meg | 10 mp |
 | Radar | a térképeken látszanak a felvehető tárgyak | 30 mp |
 
-A lézer elsőbbséget élvez a rakétával szemben, ha mindkettő aktív. Az olajfolt
-a lerakójára is hat, miután egyszer lehajtott róla. Az aktív tárgyak a HUD bal
-felső részén látszanak a hátralévő idővel.
+Az olajfolt a lerakójára is hat, miután egyszer lehajtott róla. A fegyver, a
+képességek és az aktív tárgyak a HUD bal felső részén látszanak (a hátralévő
+idővel, lövésszámmal vagy töltetszámmal). A botokra ugyanezek a szabályok
+érvényesek: a felvett fegyverük náluk is megmarad, amíg ki nem lövik őket.
 
 ### Ami még nincs kész
 
@@ -211,7 +228,7 @@ src/
       ChunkLayer.ts       a rajzolt rétegek darabonkénti, igény szerinti előállítása
       chunkWorker.ts      a térképdarabok kirajzolása háttérszálon
       RoadLabelLayer.ts   az útra írt utcanevek, csak a kamera közelében
-    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, kódból rajzolt sprite-ok
+    entities/             MEGJELENÍTÉS: tankok, tárgyikonok, tüzek (FireLayer.ts), kódból rajzolt sprite-ok
     settings.ts           a játék beállításai (pl. a botok száma), a böngészőben megőrizve
     systems/audio.ts      szintetizált hangok (Web Audio)
     ui/Hud.ts             HUD: utcanév, minitérkép, feliratok, forrásmegjelölés
@@ -254,7 +271,7 @@ A rajzolási sorrend egyben a rétegrend:
 11. olajfoltok, roncsok, majd a **mozgó elemek:** tankok, lövedékek, rakétafüst, lézersugár;
 12. **lombréteg:** az álló fák koronája, vezetékek (a kidőlt oszlopnál megszakadnak), a hivatal előtti zászlók – a
     tank fölött, kissé áttetszően;
-13. felvehető tárgyak, a tankok életerősávja, robbanások, valamint egy sárga
+13. tüzek és füstjük, felvehető tárgyak, a tankok életerősávja, robbanások, valamint egy sárga
     gyűrű és nyíl, amely a lombkorona alatt álló saját tank helyét és irányát mutatja.
 
 Az ütközési geometria ettől független réteg (`GameMap.walls`), ugyanabból az

@@ -13,6 +13,10 @@ export const GTEX = {
   wreckHull: 'wreck-hull',
   wreckTurret: 'wreck-turret',
   rocket: 'rocket',
+  heavyShell: 'heavy-shell',
+  /** lángok: FIRE_FRAMES képkocka egymás mellett */
+  fire: 'fx-fire',
+  glow: 'fx-glow',
   oil: 'oil-slick',
   ring: 'fx-ring',
   smoke: 'fx-smoke',
@@ -21,6 +25,9 @@ export const GTEX = {
 } as const;
 
 export const PICKUP_ICON_SIZE = 48;
+/** a láng-animáció képkockáinak száma és mérete (pixel) */
+export const FIRE_FRAMES = 8;
+const FIRE_SIZE = 48;
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -98,6 +105,78 @@ export function createGameTextures(scene: Phaser.Scene): void {
       style.icon(ctx);
     });
   }
+
+  // nehéz lövedék (jobbra néz): vaskos, sötét acéltest hegyes orral és vörös gyűrűvel, mögötte izzó csóva
+  canvasTexture(scene, GTEX.heavyShell, 34, 14, (ctx) => {
+    const tail = ctx.createLinearGradient(0, 0, 14, 0);
+    tail.addColorStop(0, 'rgba(255,120,30,0)');
+    tail.addColorStop(1, 'rgba(255,210,90,0.95)');
+    ctx.fillStyle = tail;
+    ctx.beginPath();
+    ctx.moveTo(14, 2.5);
+    ctx.lineTo(0, 7);
+    ctx.lineTo(14, 11.5);
+    ctx.fill();
+    ctx.fillStyle = '#4a4f5a';
+    ctx.beginPath();
+    ctx.moveTo(12, 1.5);
+    ctx.lineTo(24, 1.5);
+    ctx.lineTo(33.5, 7);
+    ctx.lineTo(24, 12.5);
+    ctx.lineTo(12, 12.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#15171c';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = '#d8322c';
+    ctx.fillRect(15, 2.2, 3.5, 9.6);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillRect(13, 3.2, 12, 1.6);
+  });
+
+  // lángok felülnézetben: lobogó, szabálytalan folt, kívül vörös, beljebb narancs, sárga, középen fehéren izzó
+  {
+    const tex = scene.textures.createCanvas(GTEX.fire, FIRE_SIZE * FIRE_FRAMES, FIRE_SIZE)!;
+    const ctx = tex.context;
+    const layers: [string, number][] = [['rgba(200,48,20,0.88)', 1], ['#ee7a1c', 0.76], ['#ffc83a', 0.52], ['#fff3c0', 0.27]];
+    const tongues = 7;
+    for (let f = 0; f < FIRE_FRAMES; f++) {
+      const cx = f * FIRE_SIZE + FIRE_SIZE / 2;
+      const cy = FIRE_SIZE / 2;
+      const phase = (f / FIRE_FRAMES) * Math.PI * 2;
+      for (const [color, k] of layers) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 11.5 * k, 0, Math.PI * 2);
+        ctx.fill();
+        for (let t = 0; t < tongues; t++) {
+          // a nyelvek hossza és iránya képkockánként hullámzik (a sorozat körbeér)
+          const angle = (t / tongues) * Math.PI * 2 + 0.28 * Math.sin(phase + t * 2.4);
+          const reach = (9 + 6.5 * (0.5 + 0.5 * Math.sin(phase * 2 + t * 1.9))) * k;
+          const r = (6.2 + 1.8 * Math.sin(phase + t * 3.1)) * k;
+          ctx.beginPath();
+          ctx.arc(cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(cx + Math.cos(angle) * reach * 0.55, cy + Math.sin(angle) * reach * 0.55, r * 1.15, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+    tex.refresh();
+    for (let f = 0; f < FIRE_FRAMES; f++) tex.add(f, 0, f * FIRE_SIZE, 0, FIRE_SIZE, FIRE_SIZE);
+  }
+
+  // a tűz fénye a környezetén
+  canvasTexture(scene, GTEX.glow, 64, 64, (ctx) => {
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,190,90,0.9)');
+    g.addColorStop(0.5, 'rgba(255,120,40,0.35)');
+    g.addColorStop(1, 'rgba(255,90,20,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+  });
 
   // rakéta (jobbra néz), mögötte láng
   canvasTexture(scene, GTEX.rocket, 40, 14, (ctx) => {
