@@ -1,0 +1,27 @@
+{
+  "source": "Microsoft Global ML Building Footprints",
+  "url": "https://github.com/microsoft/GlobalMLBuildingFootprints",
+  "attribution": "Microsoft",
+  "license": "ODbL 1.0 – https://opendatacommons.org/licenses/odbl/",
+  "note": "Műholdképekről gépi felismeréssel készült alaprajzok; típus és cím nélkül.",
+  "fetchedAt": "2026-11-19T14:33:54.473Z",
+  "tiles": [
+    {
+      "quadkey": "120231221",
+      "uploadDate": "2026-02-23",
+      "size": "4.9MB"
+    },
+    {
+      "quadkey": "120231230",
+      "uploadDate": "2026-02-23",
+      "size": "5.8MB"
+    }
+  ],
+  "bbox": {
+    "south": 46.02379,
+    "west": 18.27488,
+    "north": 46.05598,
+    "east": 18.30235
+  },
+  "count": 3229
+}

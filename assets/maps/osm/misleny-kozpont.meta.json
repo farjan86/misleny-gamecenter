@@ -1,0 +1,14 @@
+{
+  "source": "OpenStreetMap (Overpass API)",
+  "attribution": "© OpenStreetMap közreműködők",
+  "license": "ODbL 1.0 – https://www.openstreetmap.org/copyright",
+  "endpoint": "https://overpass-api.de/api/interpreter",
+  "fetchedAt": "2026-11-19T14:31:51.198Z",
+  "osmBaseTimestamp": "2026-11-19T14:30:20Z",
+  "queryFile": "assets/maps/osm/misleny-kozpont.overpassql",
+  "elementCounts": {
+    "node": 102,
+    "way": 2121,
+    "relation": 26
+  }
+}

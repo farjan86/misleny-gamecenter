@@ -1,0 +1,172 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #101418;
+  overflow: hidden;
+  font-family: 'Consolas', 'Lucida Console', 'Courier New', monospace;
+  color: #f4f0e0;
+  user-select: none;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+}
+
+#game canvas {
+  cursor: crosshair;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.panel {
+  background: rgba(16, 20, 28, 0.82);
+  border: 2px solid #f4f0e0;
+  box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.55);
+  padding: 4px 8px;
+}
+
+#hud-top-left {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.title {
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: #ffd84a;
+}
+
+.title span {
+  color: #f4f0e0;
+  font-weight: normal;
+}
+
+#hud-street {
+  font-weight: bold;
+}
+
+#hud-fullscreen {
+  pointer-events: auto;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#hud-fullscreen:hover {
+  background: rgba(60, 70, 90, 0.9);
+  color: #ffd84a;
+}
+
+#hud-minimap {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px;
+}
+
+#hud-minimap canvas {
+  display: block;
+  width: min(220px, 26vw);
+  height: min(220px, 26vw);
+  image-rendering: pixelated;
+}
+
+#hud-minimap .hint {
+  font-size: 11px;
+  text-align: center;
+  opacity: 0.8;
+  padding-top: 2px;
+}
+
+#hud-minimap.big {
+  top: 50%;
+  right: 50%;
+  transform: translate(50%, -50%);
+  z-index: 5;
+}
+
+/* nagy nézetben az egész (hosszúkás) pálya látszik, a képarány megtartásával */
+#hud-minimap.big canvas {
+  width: auto;
+  height: auto;
+  max-width: 90vw;
+  max-height: 86vh;
+  image-rendering: auto;
+}
+
+#hud-help {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  font-size: 13px;
+}
+
+#hud-help.hidden {
+  display: none;
+}
+
+#hud-attribution {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+#hud-attribution a {
+  color: #9fd0ff;
+}
+
+#labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.world-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 1px 5px;
+  background: rgba(16, 20, 28, 0.8);
+  border: 1px solid #f4f0e0;
+  color: #f4f0e0;
+}
+
+.world-label.townhall {
+  font-size: 14px;
+  background: #b02030;
+  border: 2px solid #ffd84a;
+  color: #fff;
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+}
+
+#loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: #101418;
+}
+
+#loading.hidden {
+  display: none;
+}
