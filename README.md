@@ -6,7 +6,8 @@ térképadatokból; a kiindulópont a **Polgármesteri Hivatal** (Pécsi utca 12
 
 A pályán gép vezérelte ellenséges tankok járőröznek (a számuk állítható), az
 utakon pedig felvehető tárgyak vannak: másféle lövedékek, pajzs, turbó,
-olajfolt és társaik. Látszanak az utak, a járdák, a zebrák, az épületek, a
+olajfolt és társaik. A fák és az oszlopok kidönthetők, a lövések nyoma és a
+kilőtt tankok roncsa megmarad, a saját tank pedig minden kilövéssel szintet lép. Látszanak az utak, a járdák, a zebrák, az épületek, a
 parkok, a fák és a tájékozódási pontok; az utcanevek az útburkolatra vannak írva.
 
 ## Indítás
@@ -38,10 +39,11 @@ Klasszikus tankirányítás. A tank elejét a sárga, hegyes orr jelöli.
 | A D / ← → | a tank forgatása (helyben is) |
 | Egér | a torony célzása |
 | Bal kattintás / Space | lövés |
+| Shift | gyorsító: +30% sebesség legfeljebb 3 másodpercig, utána le kell hűlnie |
 | M | az egész város térképe utcanevekkel (a sarokban lévő kis térkép a tank környékét mutatja) |
 | F | teljes képernyős mód be/ki (a bal felső gombbal is) |
 | E / jobb egérgomb | olajfolt lerakása (ha van töltet) |
-| + / − | több / kevesebb ellenséges tank (a HUD gombjaival is) |
+| + / − | több / kevesebb ellenséges tank, legfeljebb 100 (a HUD gombjaival tízesével is) |
 | R | új kör |
 | H | súgó be/ki |
 | Q | részletesség váltása (12 → 10 → 8 pixel/méter); gyengébb gépen az alacsonyabb érték gyorsabb |
@@ -87,7 +89,9 @@ is látható (jobb alsó sarok).
 
 A pálya stilizált játéktér. **Az OSM-ből származik:** az utak nyomvonala és
 neve, az épületek alaprajza és helye, a területhasználat, a vizek, a
-tájékozódási pontok és a zebrák helye. **Nem valós adat:** az útszélességek,
+tájékozódási pontok és a zebrák helye. **Nem valós adat:** az útszélességek
+(a valóságosnál szélesebbek; az így útra kerülő házak alaprajzát a
+feldolgozó az út széléhez vágja, néhányat kihagy – lásd `docs/map-data.md`),
 a tetők formája és színe, a kémények, valamint a fák, bokrok és
 villanyoszlopok helye (ezek generáltak). **Fotók alapján, kézzel felvett:**
 a Polgármesteri Hivatal, a református templom és a rendőrség megjelenése és

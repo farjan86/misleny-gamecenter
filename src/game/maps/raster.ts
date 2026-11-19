@@ -746,7 +746,8 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
   });
 
   if (detail) {
-    const trees = map.treeIndex.query(minX, minY, maxX, maxY).map((i) => map.trees[i]);
+    const props = map.fellables;
+    const treeIds = map.treeIndex.query(minX, minY, maxX, maxY);
     const bushes = data.decor.bushes;
     const poles = data.decor.poles;
     const poleIds = map.poleIndex.query(minX, minY, maxX, maxY);
@@ -756,7 +757,7 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       drawBush(t, bushes[n * 3], bushes[n * 3 + 1], bushes[n * 3 + 2], hash(n * 3, 313));
     }
 
-    // 7. vetett árnyékok (épületek, fák, oszlopok) – maszkba gyűjtve, hogy az átfedés ne sötétedjen kétszer
+    // 7. vetett árnyékok (épületek, álló fák és oszlopok) – maszkba gyűjtve, hogy az átfedés ne sötétedjen kétszer
     const mark: Put = (idx) => {
       maskBuf[idx] = 1;
     };
@@ -764,7 +765,9 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       const len = shadowLength(b, specOf(b)) * s;
       for (let step = 1; step <= 3; step++) fillRings(t, [b.pts], (len * step) / 3, (len * step) / 3, mark);
     }
-    for (const tree of trees) {
+    for (const n of treeIds) {
+      if (props.fallen[n]) continue;
+      const tree = map.trees[n];
       const off = (tree.r * 0.35 + 0.5) * s;
       const rp = tree.r * 0.9 * s;
       forDisc(t, tree.x * s + off, tree.y * s + off, rp, (idx, dx, dy) => {
@@ -772,6 +775,7 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       });
     }
     for (const n of poleIds) {
+      if (props.fallen[map.poleOffset + n]) continue;
       const x = poles[n * 2];
       const y = poles[n * 2 + 1];
       strokeLine(t, [x, y, x + 2.6, y + 2.6], Math.max(0.75, 0.08 * s), mark);
@@ -781,16 +785,38 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
       if (maskBuf[idx] && buf[idx] !== 0) buf[idx] = shade(buf[idx], 0.68);
     }
 
-    // 8. fatörzsek és (beton) villanyoszlopok
-    for (const tree of trees) {
+    // 8. fatörzsek és (beton) villanyoszlopok; a kidőltek a földön fekszenek
+    for (const n of treeIds) {
+      const tree = map.trees[n];
+      if (props.fallen[n]) {
+        drawFallenTree(t, tree, props.angle[n], hash(n, 991));
+        continue;
+      }
       const rp = 0.28 * s;
       forDisc(t, tree.x * s, tree.y * s, rp, (idx, dx, dy) => {
         if (dx * dx + dy * dy <= rp * rp) buf[idx] = c(0x4a3424);
       });
     }
     for (const n of poleIds) {
+      const x = poles[n * 2];
+      const y = poles[n * 2 + 1];
+      if (props.fallen[map.poleOffset + n]) {
+        // kidőlt oszlop: a földön fekvő betonrúd a keresztkarral
+        const a = props.angle[map.poleOffset + n];
+        const ex = x + Math.cos(a) * 7;
+        const ey = y + Math.sin(a) * 7;
+        strokeLine(t, [x, y, ex, ey], Math.max(1, 0.2 * s), (idx, _wx, _wy, d) => {
+          buf[idx] = d > 0.1 * s ? c(0x5e5e64) : c(0xb4b4b8);
+        });
+        const cx = x + Math.cos(a) * 6;
+        const cy = y + Math.sin(a) * 6;
+        strokeLine(t, [cx - Math.sin(a) * 0.9, cy + Math.cos(a) * 0.9, cx + Math.sin(a) * 0.9, cy - Math.cos(a) * 0.9], Math.max(1, 0.1 * s), (idx) => {
+          buf[idx] = c(0x4a4a50);
+        });
+        continue;
+      }
       const rp = 0.24 * s;
-      forDisc(t, poles[n * 2] * s, poles[n * 2 + 1] * s, rp, (idx, dx, dy) => {
+      forDisc(t, x * s, y * s, rp, (idx, dx, dy) => {
         const d2 = dx * dx + dy * dy;
         if (d2 <= rp * rp) buf[idx] = d2 < rp * rp * 0.35 ? c(0xc6c6ca) : c(0x5e5e64);
       });
@@ -803,12 +829,90 @@ export function renderMap(map: GameMap, t: RasterTarget): void {
     buildings.forEach((b, i) => drawBuilding(t, b, i + 1, specOf(b)));
     // biztonsági háló: ha egy fedettnek jelölt pixelre mégsem került tető
     fillEmpty(true);
+    // 10. maradandó lövésnyomok: a talajon kráter, a tetőn lyuk
+    for (const n of map.scarIndex.query(minX, minY, maxX, maxY)) {
+      drawScar(t, map.scars[n * 3], map.scars[n * 3 + 1], map.scars[n * 3 + 2], n);
+    }
   } else {
     for (const b of buildings) drawBuilding(t, b, 0);
   }
 }
 
+/** Kidőlt fa: a földön fekvő törzs és az összenyomott, megbarnult lomb. */
+function drawFallenTree(t: RasterTarget, tree: Tree, angle: number, seed: number): void {
+  const s = t.scale;
+  const { buf } = t;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const length = tree.r * 1.5 + 1;
+  // törzs
+  strokeLine(t, [tree.x, tree.y, tree.x + cos * length, tree.y + sin * length], Math.max(1, 0.24 * s), (idx, _wx, _wy, d) => {
+    buf[idx] = d > 0.14 * s ? c(0x3a2818) : c(0x6a4a2c);
+  });
+  // a lomb a törzs végénél terül el, a dőlés irányában megnyúlva
+  const cx = (tree.x + cos * length * 0.8) * s;
+  const cy = (tree.y + sin * length * 0.8) * s;
+  const ra = tree.r * 0.95 * s;
+  const rb = tree.r * 0.62 * s;
+  const k = 1 / (0.42 * s);
+  const conifer = tree.kind === 1;
+  const tones = conifer ? [c(0x16302a), c(0x234436), c(0x30563e)] : [c(0x2a4420), c(0x47622a), c(0x6a7a34)];
+  forDisc(t, cx, cy, ra + 1, (idx, dx, dy, wx, wy) => {
+    const u = (dx * cos + dy * sin) / ra;
+    const v = (dy * cos - dx * sin) / rb;
+    const q = u * u + v * v;
+    const edge = 0.78 + 0.22 * vnoise(wx * k + seed, wy * k);
+    if (q > edge) return;
+    if (q > edge - 0.14) {
+      buf[idx] = c(0x1e3018);
+      return;
+    }
+    const n = vnoise(wx * k * 1.6 + seed, wy * k * 1.6 + seed * 3);
+    buf[idx] = tones[n < 0.38 ? 0 : n < 0.66 ? 1 : 2];
+  });
+  // a tő helyén a csonk
+  const rp = 0.3 * s;
+  forDisc(t, tree.x * s, tree.y * s, rp, (idx, dx, dy) => {
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= rp * rp) buf[idx] = d2 < rp * rp * 0.4 ? c(0xc8a878) : c(0x4a3424);
+  });
+}
+
+/** Lövésnyom: a talajon kormos kráter törmelékkel, a tetőn beszakadt lyuk a szarufákkal. */
+function drawScar(t: RasterTarget, x: number, y: number, r: number, seed: number): void {
+  const s = t.scale;
+  const { buf } = t;
+  const rp = r * s;
+  const k = 1 / (0.5 * s);
+  forDisc(t, x * s, y * s, rp * 1.25, (idx, dx, dy, wx, wy) => {
+    const n = vnoise(wx * k + seed * 1.3, wy * k + seed * 0.7);
+    const q = Math.sqrt(dx * dx + dy * dy) / rp + (n - 0.5) * 0.45;
+    if (q >= 1.15) return;
+    const onRoof = coverBuf[idx] === 1;
+    if (q >= 1) {
+      // kormos perem, szétszórt törmelék
+      if ((hash(wx, wy) & 7) === 0) buf[idx] = onRoof ? c(0x2a1c16) : c(0x8a8478);
+      else buf[idx] = shade(buf[idx], 0.72);
+      return;
+    }
+    if (onRoof) {
+      if (q < 0.62) buf[idx] = (wx + wy * 2) % Math.max(3, Math.round(0.45 * s)) === 0 ? c(0x5a4028) : c(0x16100e);
+      else buf[idx] = shade(buf[idx], 0.42);
+      return;
+    }
+    if (q < 0.45) buf[idx] = n > 0.6 ? c(0x2e2822) : c(0x221c18);
+    else if (q < 0.72) buf[idx] = c(0x3e362e);
+    else buf[idx] = shade(buf[idx], 0.55);
+  });
+}
+
 // --- a lombréteg -------------------------------------------------------------------
+
+/** Kidőlt-e az adott koordinátán álló villanyoszlop. */
+function poleDown(map: GameMap, x: number, y: number): boolean {
+  const n = map.poleAt.get(`${x},${y}`);
+  return n !== undefined && map.fellables.fallen[map.poleOffset + n] === 1;
+}
 
 /**
  * Lombkoronák és vezetékek átlátszó háttérrel (a tank fölé kerülő réteg).
@@ -829,6 +933,7 @@ export function renderCanopy(map: GameMap, t: RasterTarget): boolean {
       const bx = line[i + 2];
       const by = line[i + 3];
       if (Math.max(ax, bx) < minX || Math.min(ax, bx) > maxX || Math.max(ay, by) < minY || Math.min(ay, by) > maxY) continue;
+      if (poleDown(map, ax, ay) || poleDown(map, bx, by)) continue;
       strokeLine(t, [ax, ay, bx, by], Math.max(0.6, 0.05 * s), (idx) => {
         buf[idx] = wire;
         drawn = true;
@@ -837,6 +942,7 @@ export function renderCanopy(map: GameMap, t: RasterTarget): boolean {
   }
 
   for (const n of map.treeIndex.query(minX, minY, maxX, maxY)) {
+    if (map.fellables.fallen[n]) continue;
     const tree = map.trees[n];
     if (tree.x < minX || tree.x > maxX || tree.y < minY || tree.y > maxY) continue;
     drawCanopy(t, tree, hash(n, 991));

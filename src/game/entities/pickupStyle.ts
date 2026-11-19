@@ -150,6 +150,16 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
       ctx.fill();
     },
   },
+  repair: {
+    label: 'Javítókészlet',
+    hint: '+50 életerő',
+    color: '#2e9a4a',
+    icon: (ctx) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(19.5, 11, 9, 26);
+      ctx.fillRect(11, 19.5, 26, 9);
+    },
+  },
   speed: {
     label: 'Turbó',
     hint: 'nagyobb sebesség és gyorsulás',

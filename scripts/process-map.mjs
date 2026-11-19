@@ -34,16 +34,18 @@ const EARTH_R = 6371008.8;
 // Stilizált (játékmenethez igazított) útszélességek méterben – nem mért adat.
 // A közutak kétsávosak: két tank kényelmesen elfér egymás mellett.
 const ROAD_WIDTH = {
-  motorway: 15, trunk: 13, primary: 13, secondary: 12, tertiary: 11,
-  motorway_link: 8, trunk_link: 8, primary_link: 8, secondary_link: 8, tertiary_link: 8,
-  unclassified: 9.5, residential: 9.5, living_street: 8.5, pedestrian: 7, service: 5.5,
+  motorway: 16, trunk: 16, primary: 16, secondary: 16, tertiary: 13,
+  motorway_link: 9, trunk_link: 9, primary_link: 9, secondary_link: 9, tertiary_link: 9,
+  unclassified: 11, residential: 11, living_street: 9.5, pedestrian: 7, service: 6.5,
   track: 4.5, cycleway: 3, footway: 2.5, path: 2, steps: 2.5,
 };
 // Ha egy épület közelebb van az út tengelyéhez, az út eddig az értékig szűkülhet.
 const ROAD_MIN_WIDTH = {
-  motorway: 12, trunk: 9, primary: 9, secondary: 9, tertiary: 8, unclassified: 7, residential: 7,
-  living_street: 6.5, service: 4,
+  motorway: 12, trunk: 12, primary: 12, secondary: 12, tertiary: 10, unclassified: 8.5, residential: 8.5,
+  living_street: 7.5, service: 4.5,
 };
+/** Az úttest széle és az épületek között legalább ennyi hely marad (m). */
+const ROAD_CLEARANCE = 0.6;
 /** Főutak: nincs mellettük járda, csak padka és széles füves sáv fasorral. */
 const MAIN = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
 /** Lakóutcák: úttest, füves sáv, majd járda. */
@@ -601,13 +603,17 @@ let narrowedRoads = 0;
 for (const road of roads) {
   const min = ROAD_MIN_WIDTH[road.kind];
   if (!min) continue;
-  let clear = Infinity;
+  const clears = [];
   for (const [x, y] of walkLine(road.pts, 2)) {
-    const d = buildingDist(x, y, 10);
+    const d = buildingDist(x, y, 12);
     // ahol az út épületen megy át (áthajtó, pontatlan adat), azt nem vesszük figyelembe
-    if (d > 0.5) clear = Math.min(clear, d);
+    if (d > 0.5) clears.push(d);
   }
-  const fit = Math.max(min, Math.min(road.width, 2 * (clear - 0.4)));
+  clears.sort((a, b) => a - b);
+  // A legközelebb álló épületek (a minták legszűkebb negyede) nem szűkítik az egész
+  // útdarabot: azokat az út széléhez igazítjuk (lásd „az utakra belógó épületek”).
+  const clear = clears.length ? clears[Math.floor(clears.length * 0.25)] : Infinity;
+  const fit = Math.max(min, Math.min(road.width, 2 * (clear - ROAD_CLEARANCE)));
   if (fit < road.width) {
     road.width = r2(fit);
     narrowedRoads++;
@@ -630,6 +636,145 @@ function nearRoad(x, y, reachOf) {
 const onRoadBand = (x, y, margin) => nearRoad(x, y, (road) => halfBand(road) + margin);
 /** Igaz, ha a pont valamelyik út burkolatára esik (a füves sáv nem számít). */
 const onAsphalt = (x, y, margin) => nearRoad(x, y, (road) => road.width / 2 + margin);
+
+// --- az utakra belógó épületek igazítása -----------------------------------------
+// A közutak úttestje (és mellette ROAD_CLEARANCE) szabad marad: ahol egy épület
+// alaprajza belelógna, ott az út szélével párhuzamosan levágjuk. Ha így túl kevés
+// maradna belőle, vagy az út az épület közepén megy át, az épület kimarad.
+// Ez az alaprajzok szándékos módosítása a játszhatóság kedvéért; a számát a
+// statisztika és a figyelmeztetések közlik. A fotók alapján felvett épületek kimaradnak.
+
+const protectedIds = new Set((landmarks?.buildings ?? []).map((b) => b.id));
+const toPairs = (f) => {
+  const out = [];
+  for (let i = 0; i < f.length; i += 2) out.push([f[i], f[i + 1]]);
+  return out;
+};
+/** Sokszög vágása félsíkra: a (px,py) ponton átmenő, (nx,ny) normálisú egyenes pozitív oldala marad. */
+function clipHalfPlane(ring, px, py, nx, ny) {
+  const out = [];
+  for (let i = 0; i < ring.length; i++) {
+    const cur = ring[i];
+    const prev = ring[(i + ring.length - 1) % ring.length];
+    const dc = (cur[0] - px) * nx + (cur[1] - py) * ny;
+    const dp = (prev[0] - px) * nx + (prev[1] - py) * ny;
+    if (dc >= 0 !== dp >= 0) {
+      const t = dp / (dp - dc);
+      out.push([prev[0] + (cur[0] - prev[0]) * t, prev[1] + (cur[1] - prev[1]) * t]);
+    }
+    if (dc >= 0) out.push(cur);
+  }
+  return out;
+}
+let trimmedBuildings = 0;
+let removedBuildings = 0;
+for (let bi = buildings.length - 1; bi >= 0; bi--) {
+  const b = buildings[bi];
+  if (b.townhall || protectedIds.has(b.id)) continue;
+  let ring = toPairs(b.pts);
+  let changed = false;
+  let drop = false;
+  const [minX, minY, maxX, maxY] = boxOfFlat(b.pts);
+  for (let ri = 0; ri < roads.length && !drop; ri++) {
+    const road = roads[ri];
+    if (!DRIVABLE.has(road.kind)) continue;
+    const reach = road.width / 2 + ROAD_CLEARANCE;
+    const box = roadBoxes[ri];
+    if (maxX < box[0] - reach || minX > box[2] + reach || maxY < box[1] - reach || minY > box[3] + reach) continue;
+    const f = road.pts;
+    for (let i = 0; i + 3 < f.length && !drop; i += 2) {
+      const ax = f[i];
+      const ay = f[i + 1];
+      const dx = f[i + 2] - ax;
+      const dy = f[i + 3] - ay;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.05 || ring.length < 3) continue;
+      // belelóg-e az alaprajz ennek a szakasznak a sávjába? (az élek mentén méterenként vizsgálva)
+      let intrudes = false;
+      for (let k = 0; k < ring.length && !intrudes; k++) {
+        const p0 = ring[k];
+        const p1 = ring[(k + 1) % ring.length];
+        const steps = Math.max(1, Math.ceil(Math.hypot(p1[0] - p0[0], p1[1] - p0[1])));
+        for (let st = 0; st <= steps; st++) {
+          const x = p0[0] + ((p1[0] - p0[0]) * st) / steps;
+          const y = p0[1] + ((p1[1] - p0[1]) * st) / steps;
+          const along = ((x - ax) * dx + (y - ay) * dy) / len;
+          if (along < 0 || along > len) continue;
+          if (Math.abs((x - ax) * dy - (y - ay) * dx) / len < reach - 0.05) {
+            intrudes = true;
+            break;
+          }
+        }
+      }
+      if (!intrudes) continue;
+      // az épület azon az oldalon marad, amelyiken a közepe van
+      const [cx, cy] = centre(ring);
+      const side = (cx - ax) * -dy + (cy - ay) * dx; // > 0: az út bal oldalán
+      if (Math.abs(side) / len < 1) {
+        drop = true; // az út az épület közepén megy át
+        break;
+      }
+      const sign = side > 0 ? 1 : -1;
+      const nx = (-dy / len) * sign;
+      const ny = (dx / len) * sign;
+      ring = clipHalfPlane(ring, ax + nx * reach, ay + ny * reach, nx, ny);
+      changed = true;
+    }
+  }
+  if (!changed && !drop) continue;
+  const area = ring.length >= 3 ? Math.abs(ringArea(ring)) : 0;
+  if (drop || area < Math.max(12, b.area * 0.35)) {
+    buildings.splice(bi, 1);
+    removedBuildings++;
+    continue;
+  }
+  b.pts = flat(ring);
+  b.area = r1(area);
+  delete b.holes;
+  trimmedBuildings++;
+}
+// az épületek változtak: a rácsindex újraépül
+bGrid.clear();
+buildings.forEach((_, i) => indexBuilding(i));
+
+// --- a kézzel felvett tereptárgyak nem kerülhetnek az úttestre -------------------
+// A lámpákat, fákat, padokat és zászlórudakat a fotók alapján, a korábbi
+// (keskenyebb) úthoz mérve vettük fel; ha a kiszélesített közút rájuk érne,
+// az út tengelyére merőlegesen a padka külső szélére toljuk őket.
+let movedProps = 0;
+function offRoad(x, y, margin) {
+  for (let ri = 0; ri < roads.length; ri++) {
+    const road = roads[ri];
+    if (!DRIVABLE.has(road.kind)) continue;
+    const reach = road.width / 2 + SHOULDER + margin;
+    const box = roadBoxes[ri];
+    if (x < box[0] - reach || x > box[2] + reach || y < box[1] - reach || y > box[3] + reach) continue;
+    const f = road.pts;
+    for (let i = 0; i + 3 < f.length; i += 2) {
+      const dx = f[i + 2] - f[i];
+      const dy = f[i + 3] - f[i + 1];
+      const len2 = dx * dx + dy * dy;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - f[i]) * dx + (y - f[i + 1]) * dy) / len2)) : 0;
+      const px = f[i] + dx * t;
+      const py = f[i + 1] + dy * t;
+      const d = Math.hypot(x - px, y - py);
+      if (d >= reach || d < 0.01) continue;
+      movedProps++;
+      return [r2(px + ((x - px) / d) * reach), r2(py + ((y - py) / d) * reach)];
+    }
+  }
+  return [x, y];
+}
+if (landmarks) {
+  const moved = (o, margin) => {
+    const [x, y] = offRoad(o.x, o.y, margin);
+    return { ...o, x, y };
+  };
+  landmarks.trees = landmarks.trees.map((t) => moved(t, 1.6));
+  landmarks.benches = landmarks.benches.map((b) => moved(b, 1.2));
+  landmarks.flagpoles = landmarks.flagpoles.map((p) => moved(p, 0.6));
+  landmarks.lamps = landmarks.lamps.map(([x, y]) => offRoad(x, y, 0.5));
+}
 
 // --- gyalogátkelők (zebrák) ------------------------------------------------------
 // Forrás: az OSM highway=crossing pontjai, valamint azok a helyek, ahol egy
@@ -971,6 +1116,7 @@ for (const info of areaInfo) {
 const unnamedDrivable = roads.filter((r) => DRIVABLE.has(r.kind) && !r.kind.endsWith('_link') && !r.name).length;
 if (unnamedDrivable) warn(`${unnamedDrivable} közút-darabnak nincs neve az OSM-ben.`);
 if (narrowedRoads) warn(`${narrowedRoads} útdarab a közeli épületek miatt keskenyebb a típusára jellemző szélességnél.`);
+if (trimmedBuildings || removedBuildings) warn(`${trimmedBuildings} épület alaprajzát az út széléhez igazítottuk, ${removedBuildings} épület kimaradt, mert az útra esett.`);
 const genericBuildings = buildings.filter((b) => b.kind === 'yes' && !b.src).length;
 
 const countBy = (arr) => arr.reduce((m, o) => ((m[o.kind] = (m[o.kind] ?? 0) + 1), m), {});
@@ -991,6 +1137,8 @@ const stats = {
   pois: pois.length,
   crossings: crossings.length,
   narrowedRoads,
+  trimmedBuildings,
+  removedBuildings,
   generatedTrees: decorTrees.length / 4,
   generatedBushes: decorBushes.length / 3,
   generatedPoles: decorPoles.length / 2,
@@ -1058,7 +1206,7 @@ console.log(`  útdarab: ${stats.roads}`, stats.roadKinds);
 console.log(`  terület: ${stats.areas}`, stats.areaKinds);
 console.log(`  patak: ${stats.streams}, kerítés: ${stats.barriers}, fa (OSM): ${stats.trees}, POI: ${stats.pois}`);
 console.log(`  hivatal épülete: ${out.townhall.building ?? 'NINCS'} (${thMatch}, ${thNear.dist.toFixed(1)} m)`);
-console.log(`  zebra: ${crossings.length}, szűkített útdarab: ${narrowedRoads}`);
+console.log(`  zebra: ${crossings.length}, szűkített útdarab: ${narrowedRoads}, útszélhez igazított épület: ${trimmedBuildings}, kihagyott: ${removedBuildings}, útról letolt tereptárgy: ${movedProps}`);
 console.log(`  generált: ${decorTrees.length / 4} fa, ${decorBushes.length / 3} bokor, ${decorPoles.length / 2} villanyoszlop`);
 console.log(`  utcanevek: ${stats.streetNames.length}`);
 console.log(`  figyelmeztetések: ${warnings.length}`);

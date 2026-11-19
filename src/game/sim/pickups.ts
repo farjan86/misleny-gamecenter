@@ -9,6 +9,7 @@ export const PICKUP_KINDS = [
   'rocket',
   'laser',
   'oil',
+  'repair',
   'speed',
   'allTerrain',
   'shield',
@@ -16,11 +17,11 @@ export const PICKUP_KINDS = [
   'radar',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
-/** Töltetekben számolt tárgyak: nem időre szólnak, hanem darabra. */
-export type ChargeKind = 'shield' | 'oil';
+/** Nem időzített tárgyak: töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
+export type ChargeKind = 'shield' | 'oil' | 'repair';
 /** Az időzített hatások. */
 export type TimedKind = Exclude<PickupKind, ChargeKind>;
-export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => k !== 'shield' && k !== 'oil');
+export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => k !== 'shield' && k !== 'oil' && k !== 'repair');
 
 /**
  * duration: a hatás ideje másodpercben (a töltetes tárgyaknál 0);
@@ -41,6 +42,8 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
   laser: { duration: 15, weight: 9 },
   /** olajfolt: lerakható töltetek; aki ráhajt, megcsúszik */
   oil: { duration: 0, weight: 10 },
+  /** javítókészlet: azonnal visszaad PICKUP.repairAmount életerőt */
+  repair: { duration: 0, weight: 14 },
   /** turbó: nagyobb végsebesség és gyorsulás */
   speed: { duration: 12, weight: 12 },
   /** terepjáró lánctalp: terepen sem lassul a tank, és olajon sem csúszik meg */
@@ -57,13 +60,15 @@ export const PICKUP = {
   /** a tárgy sugara méterben (a tank érintésre veszi fel) */
   radius: 1.5,
   /** felvétel után ennyi idővel jelenik meg helyette egy új, máshol (mp) */
-  respawnDelay: 25,
+  respawnDelay: 12,
   maxShield: 3,
   /** egy olajos tárgy ennyi lerakható foltot ad */
   oilPerPickup: 3,
   maxOil: 6,
+  /** a javítókészlet ennyi életerőt ad vissza */
+  repairAmount: 50,
   /** két tárgy legkisebb távolsága egymástól (m) */
-  minGap: 14,
+  minGap: 12,
 } as const;
 
 /** A hatások mértéke. */

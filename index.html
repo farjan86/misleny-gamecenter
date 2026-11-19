@@ -16,13 +16,16 @@
         <div class="panel" id="hud-townhall">Hivatal: –</div>
         <div class="panel" id="hud-status">
           <div id="hud-health"><div id="hud-health-fill"></div><span id="hud-health-text">100 / 100</span></div>
-          <div id="hud-score">Kilőtt ellenfél: 0 · Kilőttek: 0</div>
+          <div id="hud-boost"><div id="hud-boost-fill"></div><span id="hud-boost-text">Gyorsító (Shift)</span></div>
+          <div id="hud-score">Szint: 1 · Kilőtt: 0 · Kilőttek: 0</div>
         </div>
         <div class="panel" id="hud-bots">
           Ellenfelek:
+          <span class="btn wide" id="hud-bots-minus10" role="button" title="Tízzel kevesebb ellenfél">−10</span>
           <span class="btn" id="hud-bots-minus" role="button" title="Kevesebb ellenfél (−)">−</span>
           <span id="hud-bots-count">3</span>
           <span class="btn" id="hud-bots-plus" role="button" title="Több ellenfél (+)">+</span>
+          <span class="btn wide" id="hud-bots-plus10" role="button" title="Tízzel több ellenfél">+10</span>
         </div>
         <div class="panel hidden" id="hud-effects"></div>
         <div class="panel" id="hud-fullscreen" role="button">⛶ Teljes képernyő (F)</div>
@@ -36,8 +39,9 @@
         W / ↑ – előre · S / ↓ – tolatás<br />
         A D / ← → – a tank forgatása<br />
         Egér – célzás · Kattintás / Space – lövés<br />
+        Shift – gyorsító (3 mp, aztán le kell hűlnie)<br />
         E / jobb egérgomb – olajfolt lerakása<br />
-        + / − – ellenfelek száma<br />
+        + / − – ellenfelek száma (legfeljebb 100)<br />
         M – térkép · F – teljes képernyő<br />
         R – újraindítás · H – súgó<br />
         Q – részletesség: <span id="hud-quality">–</span>

@@ -6,6 +6,7 @@
 // Mértékegységek: méter, másodperc, radián.
 
 import { SegmentGrid } from './collision';
+import { FELLABLE, type Fellables } from './props';
 import { BOOST, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind } from './pickups';
 
 export const SIM_DT = 1 / 60;
@@ -33,6 +34,43 @@ export const TANK = {
   maxHp: 100,
   /** kilövés után ennyi idővel éled újra a tank (mp) */
   respawnDelay: 4,
+} as const;
+
+/** Gyorsító (Shift): rövid ideig gyorsabb a tank, aztán túlmelegszik. */
+export const BOOSTER = {
+  /** a sebesség szorzója gyorsítás közben */
+  speed: 1.3,
+  /** ennyi ideig használható folyamatosan (mp) */
+  duration: 3,
+  /** túlmelegedés után ennyi idő alatt hűl le teljesen (mp); addig nem kapcsolható be */
+  cooldown: 6,
+} as const;
+
+/**
+ * Fejlődés: minden kilőtt tank után egy szinttel erősebb a tank – kicsit
+ * nagyobb, több az életereje, és nagyobbat sebez a lövedéke.
+ */
+export const LEVEL = {
+  max: 20,
+  /** méretnövekedés szintenként */
+  size: 0.03,
+  /** többlet életerő szintenként */
+  hp: 12,
+  /** többlet sebzés szintenként */
+  damage: 0.08,
+} as const;
+
+/** A tank mérete az alapmérethez képest (1. szint = 1). */
+export const tankSize = (tank: { level: number }): number => 1 + LEVEL.size * (tank.level - 1);
+export const tankRadius = (tank: { level: number }): number => TANK.radius * tankSize(tank);
+export const tankMaxHp = (tank: { level: number }): number => TANK.maxHp + LEVEL.hp * (tank.level - 1);
+const damageBoost = (tank: { level: number }): number => 1 + LEVEL.damage * (tank.level - 1);
+
+/** Kilőtt tankok roncsai: ott maradnak, akadályként. */
+export const WRECK = {
+  radius: 1.5,
+  /** ennyi roncs marad a pályán; fölötte a legrégebbiek tűnnek el */
+  max: 150,
 } as const;
 
 export const BULLET = {
@@ -64,6 +102,8 @@ export interface TankInput {
   fire: boolean;
   /** olajfolt lerakása a tank mögé (ha van töltet) */
   drop?: boolean;
+  /** gyorsító (amíg nem melegszik túl) */
+  boost?: boolean;
 }
 
 /** Az időzített bónuszok hátralévő ideje másodpercben (0 = nem aktív). */
@@ -90,6 +130,8 @@ export interface TankState {
   respawn: number;
   kills: number;
   deaths: number;
+  /** szint: 1-ről indul, minden kilövéssel eggyel nő (LEVEL.max-ig) */
+  level: number;
   /** az újraéledés helye (a játékosnál a kezdőpont) */
   homeX: number;
   homeY: number;
@@ -105,6 +147,23 @@ export interface TankState {
   /** a sodródás iránya és a pörgés sebessége megcsúszás közben */
   slideAngle: number;
   spin: number;
+  /** a gyorsító hőfoka: 0 = hideg, BOOSTER.duration = túlmelegedett */
+  heat: number;
+  /** túlmelegedett: amíg teljesen le nem hűl, a gyorsító nem használható */
+  overheated: boolean;
+  /** éppen gyorsít-e */
+  boosting: boolean;
+}
+
+export interface WreckState {
+  id: number;
+  x: number;
+  y: number;
+  hullAngle: number;
+  turretAngle: number;
+  team: number;
+  /** a kilövés óta eltelt idő (mp) – a füstöléshez */
+  age: number;
 }
 
 /** A lövedék fajtája: sima, nehéz vagy rakéta. */
@@ -151,10 +210,15 @@ export type SimEvent =
   | { type: 'oil'; tank: number; x: number; y: number }
   | { type: 'slip'; tank: number; x: number; y: number }
   | { type: 'bump'; tank: number; x: number; y: number }
+  /** kidőlt egy fa vagy oszlop (index: a pálya kidönthető tárgyainak sorszáma) */
+  | { type: 'felled'; index: number; x: number; y: number; angle: number }
   /** találat: `absorbed` jelzi, ha pajzs vagy sebezhetetlenség fogta fel */
   | { type: 'hit'; tank: number; by: number; x: number; y: number; absorbed: 'shield' | 'invulnerable' | null }
   | { type: 'destroyed'; tank: number; by: number; x: number; y: number }
-  | { type: 'respawn'; tank: number; x: number; y: number };
+  | { type: 'respawn'; tank: number; x: number; y: number }
+  /** a gyorsító túlmelegedett */
+  | { type: 'overheat'; tank: number }
+  | { type: 'levelup'; tank: number; level: number };
 
 export interface RoadGuide {
   /** az út tengelyének legközelebbi pontja */
@@ -170,6 +234,8 @@ export interface Terrain {
   readonly width: number;
   readonly height: number;
   readonly walls: SegmentGrid;
+  /** fák és oszlopok: nem akadályok, a tank és a lövedék kidönti őket */
+  readonly fellables?: Fellables;
   /** 1 = burkolt út, kisebb érték = lassabb terep */
   speedFactor(x: number, y: number): number;
   /** Véletlen, járművel elérhető hely (felvehető tárgynak, újraéledő botnak), ha a pálya tud ilyet adni. */
@@ -224,6 +290,7 @@ export class World {
   readonly bullets: BulletState[] = [];
   readonly pickups: PickupState[] = [];
   readonly oils: OilState[] = [];
+  readonly wrecks: WreckState[] = [];
   /** az utolsó step() eseményei (hang, effektek) */
   events: SimEvent[] = [];
   tick = 0;
@@ -258,6 +325,7 @@ export class World {
       respawn: 0,
       kills: 0,
       deaths: 0,
+      level: 1,
       homeX: x,
       homeY: y,
       homeAngle: angle,
@@ -268,6 +336,9 @@ export class World {
       slip: 0,
       slideAngle: 0,
       spin: 0,
+      heat: 0,
+      overheated: false,
+      boosting: false,
     };
     this.tanks.push(tank);
     return tank;
@@ -280,6 +351,28 @@ export class World {
 
   tank(id: number): TankState | undefined {
     return this.tanks.find((t) => t.id === id);
+  }
+
+  /**
+   * Végképp beragadt bot áthelyezése egy szabad útpontra. Csak akkor történik
+   * meg, ha `clear` méteren belül nincs ellenséges tank (hogy senki ne lássa),
+   * és az új hely is távol van tőlük.
+   */
+  relocate(id: number, clear: number): boolean {
+    const tank = this.tank(id);
+    if (!tank || !tank.alive || !tank.bot) return false;
+    if (this.tanks.some((t) => t.alive && t.team !== tank.team && Math.hypot(t.x - tank.x, t.y - tank.y) < clear)) return false;
+    const enemyTeam = this.tanks.find((t) => t.team !== tank.team)?.team ?? -1;
+    const spot = this.freeSpot(clear, enemyTeam);
+    if (!spot) return false;
+    tank.x = spot.x;
+    tank.y = spot.y;
+    tank.speed = 0;
+    tank.turnSpeed = 0;
+    tank.hullAngle = this.rnd() * Math.PI * 2;
+    tank.turretAngle = tank.hullAngle;
+    this.events.push({ type: 'respawn', tank: tank.id, x: tank.x, y: tank.y });
+    return true;
   }
 
   /** Tárgy elhelyezése megadott helyre (pályaszerkesztéshez, tesztekhez). */
@@ -308,6 +401,7 @@ export class World {
       const spot = spotOf(this.rnd);
       if (!spot) continue;
       if (this.tanks.some((t) => t.alive && Math.hypot(t.x - spot.x, t.y - spot.y) < (t.team === avoidTeam ? Math.max(minDist, 8) : 8))) continue;
+      if (this.wrecks.some((w) => Math.hypot(w.x - spot.x, w.y - spot.y) < 7)) continue;
       return spot;
     }
     return null;
@@ -336,6 +430,7 @@ export class World {
       else this.stepRespawn(tank, dt);
     }
     this.separateTanks();
+    for (const w of this.wrecks) w.age += dt;
     this.stepBullets(dt);
     this.stepPickups(dt);
     this.stepOil(dt);
@@ -353,7 +448,10 @@ export class World {
     tank.speed = 0;
     tank.turnSpeed = 0;
     tank.slip = 0;
-    tank.hp = TANK.maxHp;
+    tank.heat = 0;
+    tank.overheated = false;
+    tank.boosting = false;
+    tank.hp = tankMaxHp(tank);
     tank.alive = true;
     tank.effects = noEffects();
     // rövid védelem újraéledés után
@@ -366,6 +464,7 @@ export class World {
   private stepTank(tank: TankState, input: TankInput, dt: number): void {
     const { terrain } = this;
     const fx = tank.effects;
+    const radius = tankRadius(tank);
     for (const kind of TIMED_KINDS) if (fx[kind] > 0) fx[kind] = Math.max(0, fx[kind] - dt);
 
     let heading: number;
@@ -376,6 +475,7 @@ export class World {
       tank.hullAngle += tank.spin * dt;
       tank.spin *= 1 - 1.2 * dt;
       tank.turnSpeed = 0;
+      this.stepBooster(tank, false, dt);
       tank.speed = Math.sign(tank.speed) * Math.max(0, Math.abs(tank.speed) - OIL.friction * dt);
       heading = tank.slideAngle;
       // a csúszás végén a lendület a test iránya szerint számít tovább
@@ -393,7 +493,8 @@ export class World {
       tank.hullAngle += tank.turnSpeed * dt;
 
       const throttle = clampUnit(input.throttle);
-      const boost = fx.speed > 0 ? BOOST.speed : 1;
+      this.stepBooster(tank, input.boost === true && throttle !== 0, dt);
+      const boost = (fx.speed > 0 ? BOOST.speed : 1) * (tank.boosting ? BOOSTER.speed : 1);
       // terepjáró lánctalppal a terep nem lassít
       const ground = fx.allTerrain > 0 ? 1 : terrain.speedFactor(tank.x, tank.y);
       const targetSpeed = throttle * (throttle >= 0 ? TANK.maxSpeed : TANK.maxReverse) * boost * ground;
@@ -409,10 +510,24 @@ export class World {
     let nx = tank.x + Math.cos(heading) * stepLen;
     let ny = tank.y + Math.sin(heading) * stepLen;
 
-    const res = terrain.walls.resolveCircle(nx, ny, TANK.radius);
-    nx = Math.max(TANK.radius, Math.min(terrain.width - TANK.radius, res.x));
-    ny = Math.max(TANK.radius, Math.min(terrain.height - TANK.radius, res.y));
-    const blocked = res.hit || nx !== res.x || ny !== res.y;
+    const res = terrain.walls.resolveCircle(nx, ny, radius);
+    nx = Math.max(radius, Math.min(terrain.width - radius, res.x));
+    ny = Math.max(radius, Math.min(terrain.height - radius, res.y));
+    let blocked = res.hit || nx !== res.x || ny !== res.y;
+    // a roncsokat ki kell kerülni
+    const clear = radius + WRECK.radius;
+    for (const w of this.wrecks) {
+      const dx = nx - w.x;
+      const dy = ny - w.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= clear * clear) continue;
+      const d = Math.sqrt(d2) || 0.001;
+      // a roncsról letolva a tank ne kerüljön falba
+      const out = terrain.walls.resolveCircle(w.x + (dx / d) * clear, w.y + (dy / d) * clear, radius);
+      nx = out.x;
+      ny = out.y;
+      blocked = true;
+    }
 
     const moved = Math.hypot(nx - tank.x, ny - tank.y);
     if (blocked) {
@@ -427,6 +542,16 @@ export class World {
     tank.x = nx;
     tank.y = ny;
 
+    // az útba kerülő fák és oszlopok kidőlnek – kicsit lassítanak, de nem állítják meg a tankot
+    const props = terrain.fellables;
+    if (props && Math.abs(tank.speed) > 0.5) {
+      const dir = tank.speed >= 0 ? heading : heading + Math.PI;
+      props.forEachTouching(nx, ny, radius, (i) => {
+        if (!this.fell(i, dir)) return;
+        tank.speed *= props.kind[i] === FELLABLE.pole ? 0.8 : 0.9;
+      });
+    }
+
     const aim = input.aim ?? tank.hullAngle;
     tank.turretAngle = rotateToward(tank.turretAngle, aim, TANK.turretRate * dt);
 
@@ -437,9 +562,44 @@ export class World {
     if (input.drop && tank.oil > 0 && tank.dropCooldown === 0) this.dropOil(tank);
   }
 
+  /** A gyorsító hőfoka: használat közben nő, különben csökken; a végén túlmelegszik. */
+  private stepBooster(tank: TankState, wanted: boolean, dt: number): void {
+    if (wanted && !tank.overheated) {
+      tank.boosting = true;
+      tank.heat += dt;
+      if (tank.heat >= BOOSTER.duration) {
+        tank.heat = BOOSTER.duration;
+        tank.overheated = true;
+        tank.boosting = false;
+        this.events.push({ type: 'overheat', tank: tank.id });
+      }
+      return;
+    }
+    tank.boosting = false;
+    tank.heat = Math.max(0, tank.heat - (dt * BOOSTER.duration) / BOOSTER.cooldown);
+    if (tank.heat === 0) tank.overheated = false;
+  }
+
+  /** A szakasz első találata egy roncson (0..limit), vagy −1. */
+  private wreckOnPath(ax: number, ay: number, bx: number, by: number, limit: number): number {
+    let best = -1;
+    for (const w of this.wrecks) {
+      const t = segmentCircle(ax, ay, bx, by, w.x, w.y, WRECK.radius);
+      if (t >= 0 && t <= limit && (best < 0 || t < best)) best = t;
+    }
+    return best;
+  }
+
+  /** Fa vagy oszlop kidöntése a megadott irányba; false, ha már ki volt döntve. */
+  private fell(index: number, angle: number): boolean {
+    const props = this.terrain.fellables;
+    if (!props || !props.fell(index, angle)) return false;
+    this.events.push({ type: 'felled', index, x: props.x[index], y: props.y[index], angle });
+    return true;
+  }
+
   /** Az egymásba csúszott tankok szétválasztása. */
   private separateTanks(): void {
-    const min = TANK.radius * 2;
     const { tanks, terrain } = this;
     for (let i = 0; i < tanks.length; i++) {
       const a = tanks[i];
@@ -450,14 +610,15 @@ export class World {
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const d2 = dx * dx + dy * dy;
+        const min = tankRadius(a) + tankRadius(b);
         if (d2 >= min * min) continue;
         const d = Math.sqrt(d2) || 0.001;
         const push = (min - d) / 2;
         const ux = dx / d;
         const uy = dy / d;
         // a szétválasztás után egyik se kerüljön falba
-        const ra = terrain.walls.resolveCircle(a.x - ux * push, a.y - uy * push, TANK.radius);
-        const rb = terrain.walls.resolveCircle(b.x + ux * push, b.y + uy * push, TANK.radius);
+        const ra = terrain.walls.resolveCircle(a.x - ux * push, a.y - uy * push, tankRadius(a));
+        const rb = terrain.walls.resolveCircle(b.x + ux * push, b.y + uy * push, tankRadius(b));
         a.x = ra.x;
         a.y = ra.y;
         b.x = rb.x;
@@ -477,8 +638,9 @@ export class World {
     const kind: ShellKind = rocket ? 'rocket' : fx.heavy > 0 ? 'heavy' : 'shell';
     tank.cooldown = TANK.fireCooldown * (fx.rapid > 0 ? BOOST.rapidCooldown : 1) * (laser ? LASER.cooldown : rocket ? ROCKET.cooldown : 1);
 
-    const mx = tank.x + Math.cos(tank.turretAngle) * TANK.barrelLength;
-    const my = tank.y + Math.sin(tank.turretAngle) * TANK.barrelLength;
+    const barrel = TANK.barrelLength * tankSize(tank);
+    const mx = tank.x + Math.cos(tank.turretAngle) * barrel;
+    const my = tank.y + Math.sin(tank.turretAngle) * barrel;
     this.events.push({ type: 'shot', tank: tank.id, kind: laser ? 'laser' : kind, x: mx, y: my, angle: tank.turretAngle });
     // ha a cső vége falban van, a lövés azonnal becsapódik
     const blocked = terrain.walls.raycast(tank.x, tank.y, mx, my);
@@ -519,13 +681,19 @@ export class World {
     let ey = my + sin * LASER.range;
     const wall = this.terrain.walls.raycast(mx, my, ex, ey);
     let reach = wall ? wall.t : 1;
+    const wreckT = this.wreckOnPath(mx, my, ex, ey, reach);
+    if (wreckT >= 0) reach = wreckT;
     const target = this.firstTankOnPath(mx, my, ex, ey, tank.team, reach);
     if (target) reach = target.t;
+    // a sugár az útjába eső első fát vagy oszlopot kidönti, és ott megáll
+    const prop = this.terrain.fellables?.raycast(mx, my, ex, ey, reach) ?? null;
+    if (prop) reach = prop.t;
     ex = mx + cos * LASER.range * reach;
     ey = my + sin * LASER.range * reach;
-    if (target || wall) this.events.push({ type: 'impact', kind: 'laser', x: ex, y: ey });
+    if (target || wall || prop || wreckT >= 0) this.events.push({ type: 'impact', kind: 'laser', x: ex, y: ey });
     this.events.push({ type: 'laser', x1: mx, y1: my, x2: ex, y2: ey });
-    if (target) this.damage(target.tank, DAMAGE.laser, tank.id, ex, ey);
+    if (prop) this.fell(prop.index, Math.atan2(sin, cos));
+    else if (target) this.damage(target.tank, DAMAGE.laser, tank.id, ex, ey);
   }
 
   /** Az útvonal első ellenséges (más csapatbeli) tankja a `limit` paraméterig. */
@@ -533,7 +701,7 @@ export class World {
     let best: { tank: TankState; t: number } | null = null;
     for (const other of this.tanks) {
       if (!other.alive || other.team === team) continue;
-      const t = segmentCircle(ax, ay, bx, by, other.x, other.y, TANK.radius + 0.3);
+      const t = segmentCircle(ax, ay, bx, by, other.x, other.y, tankRadius(other) + 0.3);
       if (t >= 0 && t <= limit && (!best || t < best.t)) best = { tank: other, t };
     }
     return best;
@@ -551,7 +719,9 @@ export class World {
       this.events.push({ type: 'hit', tank: tank.id, by, x, y, absorbed: 'shield' });
       return;
     }
-    tank.hp -= amount;
+    // a támadó szintje növeli a sebzést
+    const attacker = this.tank(by);
+    tank.hp -= amount * (attacker ? damageBoost(attacker) : 1);
     this.events.push({ type: 'hit', tank: tank.id, by, x, y, absorbed: null });
     if (tank.hp > 0) return;
     tank.hp = 0;
@@ -559,8 +729,18 @@ export class World {
     tank.respawn = TANK.respawnDelay;
     tank.speed = 0;
     tank.deaths++;
-    const attacker = this.tank(by);
-    if (attacker) attacker.kills++;
+    this.wrecks.push({ id: this.nextId++, x: tank.x, y: tank.y, hullAngle: tank.hullAngle, turretAngle: tank.turretAngle, team: tank.team, age: 0 });
+    if (this.wrecks.length > WRECK.max) this.wrecks.shift();
+    if (attacker) {
+      attacker.kills++;
+      // csak a játékosok tankja fejlődik, a botoké nem
+      if (!attacker.bot && attacker.level < LEVEL.max) {
+        // szintlépés: a többlet életerőt azonnal megkapja
+        attacker.level++;
+        attacker.hp = Math.min(tankMaxHp(attacker), attacker.hp + LEVEL.hp);
+        this.events.push({ type: 'levelup', tank: attacker.id, level: attacker.level });
+      }
+    }
     this.events.push({ type: 'destroyed', tank: tank.id, by, x: tank.x, y: tank.y });
   }
 
@@ -568,8 +748,8 @@ export class World {
     tank.oil--;
     tank.dropCooldown = OIL.dropCooldown;
     // a folt a tank mögé kerül
-    const x = tank.x - Math.cos(tank.hullAngle) * (TANK.radius + OIL.radius * 0.6);
-    const y = tank.y - Math.sin(tank.hullAngle) * (TANK.radius + OIL.radius * 0.6);
+    const x = tank.x - Math.cos(tank.hullAngle) * (tankRadius(tank) + OIL.radius * 0.6);
+    const y = tank.y - Math.sin(tank.hullAngle) * (tankRadius(tank) + OIL.radius * 0.6);
     this.oils.push({ id: this.nextId++, owner: tank.id, x, y, life: OIL.life, ownerSafe: true });
     this.events.push({ type: 'oil', tank: tank.id, x, y });
   }
@@ -578,7 +758,12 @@ export class World {
     this.events.push({ type: 'impact', kind: b.kind, x, y });
     if (direct) this.damage(direct, DAMAGE[b.kind], b.owner, x, y);
     if (b.kind !== 'rocket') return;
-    // a rakéta robbanása a közelben álló ellenséges tankokat is sebzi
+    // a rakéta robbanása kidönti a közeli fákat és oszlopokat (a robbanástól elfelé dőlnek)
+    const props = this.terrain.fellables;
+    props?.forEachTouching(x, y, DAMAGE.splashRadius, (i) => {
+      this.fell(i, Math.atan2(props.y[i] - y, props.x[i] - x));
+    });
+    // … és a közelben álló ellenséges tankokat is sebzi
     for (const other of this.tanks) {
       if (!other.alive || other === direct || other.team === b.team) continue;
       if (Math.hypot(other.x - x, other.y - y) <= DAMAGE.splashRadius) this.damage(other, DAMAGE.splash, b.owner, x, y);
@@ -599,9 +784,24 @@ export class World {
       const nx = b.x + b.vx * dt;
       const ny = b.y + b.vy * dt;
       const wall = terrain.walls.raycast(b.x, b.y, nx, ny);
-      const target = this.firstTankOnPath(b.x, b.y, nx, ny, b.team, wall ? wall.t : 1);
+      const wreckT = this.wreckOnPath(b.x, b.y, nx, ny, wall ? wall.t : 1);
+      const solid = wreckT >= 0 ? wreckT : wall ? wall.t : 1;
+      const target = this.firstTankOnPath(b.x, b.y, nx, ny, b.team, solid);
+      // fa vagy oszlop az útban: kidől, a lövedék ott robban
+      const prop = terrain.fellables?.raycast(b.x, b.y, nx, ny, target ? target.t : solid) ?? null;
+      if (prop) {
+        this.fell(prop.index, Math.atan2(b.vy, b.vx));
+        this.explode(b, b.x + (nx - b.x) * prop.t, b.y + (ny - b.y) * prop.t, null);
+        this.bullets.splice(i, 1);
+        continue;
+      }
       if (target) {
         this.explode(b, b.x + (nx - b.x) * target.t, b.y + (ny - b.y) * target.t, target.tank);
+        this.bullets.splice(i, 1);
+        continue;
+      }
+      if (wreckT >= 0) {
+        this.explode(b, b.x + (nx - b.x) * wreckT, b.y + (ny - b.y) * wreckT, null);
         this.bullets.splice(i, 1);
         continue;
       }
@@ -634,9 +834,9 @@ export class World {
   }
 
   private stepPickups(dt: number): void {
-    const reach = TANK.radius + PICKUP.radius;
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
+      const reach = tankRadius(tank) + PICKUP.radius;
       for (let i = this.pickups.length - 1; i >= 0; i--) {
         const p = this.pickups[i];
         const dx = p.x - tank.x;
@@ -661,6 +861,7 @@ export class World {
   private applyPickup(tank: TankState, kind: PickupKind): void {
     if (kind === 'shield') tank.shield = Math.min(PICKUP.maxShield, tank.shield + 1);
     else if (kind === 'oil') tank.oil = Math.min(PICKUP.maxOil, tank.oil + PICKUP.oilPerPickup);
+    else if (kind === 'repair') tank.hp = Math.min(tankMaxHp(tank), tank.hp + PICKUP.repairAmount);
     else tank.effects[kind] = PICKUPS[kind].duration;
   }
 

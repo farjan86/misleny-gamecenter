@@ -130,6 +130,10 @@ export class Hud {
   private readonly healthFill = el<HTMLDivElement>('hud-health-fill');
   private readonly healthText = el<HTMLSpanElement>('hud-health-text');
   private readonly score = el<HTMLDivElement>('hud-score');
+  private readonly boost = el<HTMLDivElement>('hud-boost');
+  private readonly boostFill = el<HTMLDivElement>('hud-boost-fill');
+  private readonly boostText = el<HTMLSpanElement>('hud-boost-text');
+  private boostKey = '';
   private readonly effects = el<HTMLDivElement>('hud-effects');
   private readonly toastBox = el<HTMLDivElement>('hud-toast');
   private readonly botCount = el<HTMLSpanElement>('hud-bots-count');
@@ -181,8 +185,9 @@ export class Hud {
 
   /** A − és + gomb a botok számát állítja; a visszahívás a változás irányát kapja (−1 vagy +1). */
   onBotChange(callback: (delta: number) => void): void {
-    el<HTMLSpanElement>('hud-bots-minus').addEventListener('click', () => callback(-1));
-    el<HTMLSpanElement>('hud-bots-plus').addEventListener('click', () => callback(1));
+    for (const [id, delta] of [['hud-bots-minus10', -10], ['hud-bots-minus', -1], ['hud-bots-plus', 1], ['hud-bots-plus10', 10]] as const) {
+      el<HTMLSpanElement>(id).addEventListener('click', () => callback(delta));
+    }
   }
 
   setBotCount(count: number): void {
@@ -199,15 +204,26 @@ export class Hud {
   }
 
   /** Életerő és eredmény; respawn > 0: a tank ki van lőve, ennyi mp múlva éled újra. */
-  setStatus(hp: number, maxHp: number, kills: number, deaths: number, respawn: number): void {
-    const key = `${Math.ceil(hp)}|${kills}|${deaths}|${Math.ceil(respawn)}`;
+  setStatus(hp: number, maxHp: number, level: number, kills: number, deaths: number, respawn: number): void {
+    const key = `${Math.ceil(hp)}|${maxHp}|${level}|${kills}|${deaths}|${Math.ceil(respawn)}`;
     if (key === this.statusKey) return;
     this.statusKey = key;
     const ratio = Math.max(0, Math.min(1, hp / maxHp));
     this.healthFill.style.width = `${Math.round(ratio * 100)}%`;
     this.healthFill.style.background = ratio > 0.5 ? '#5ad24a' : ratio > 0.25 ? '#e8c23a' : '#e0483a';
     this.healthText.textContent = respawn > 0 ? `újraéledés: ${Math.ceil(respawn)} mp` : `${Math.ceil(hp)} / ${maxHp}`;
-    this.score.textContent = `Kilőtt ellenfél: ${kills} · Kilőttek: ${deaths}`;
+    this.score.textContent = `Szint: ${level} · Kilőtt: ${kills} · Kilőttek: ${deaths}`;
+  }
+
+  /** A gyorsító hőfoka (0..1); túlmelegedve piros, és nem használható, amíg le nem hűl. */
+  setBoost(heat: number, overheated: boolean, boosting: boolean): void {
+    const percent = Math.round(Math.max(0, Math.min(1, heat)) * 100);
+    const key = `${percent}|${overheated}|${boosting}`;
+    if (key === this.boostKey) return;
+    this.boostKey = key;
+    this.boostFill.style.width = `${percent}%`;
+    this.boost.classList.toggle('overheated', overheated);
+    this.boostText.textContent = overheated ? 'Túlmelegedett – hűl…' : boosting ? 'Gyorsító bekapcsolva' : 'Gyorsító (Shift)';
   }
 
   /** Az aktív bónuszok listája (soronként egy). */
@@ -365,9 +381,9 @@ export class Hud {
     for (const t of f.tanks) {
       if (!t.bot || !t.alive) continue;
       ctx.fillStyle = '#101418';
-      ctx.fillRect(t.x * s - 5, t.y * s - 5, 10, 10);
+      ctx.fillRect(t.x * s - 4, t.y * s - 4, 8, 8);
       ctx.fillStyle = '#ff4a3a';
-      ctx.fillRect(t.x * s - 3.5, t.y * s - 3.5, 7, 7);
+      ctx.fillRect(t.x * s - 2.5, t.y * s - 2.5, 5, 5);
     }
 
     // a tank: irányba forgatott nyíl

@@ -2,13 +2,17 @@
 // a szimuláció számára nincs különbség, így a botok a szerveren is futtathatók.
 //
 // Viselkedés:
-//   járőr   – az utakat követve halad, a jobb oldali sávban;
+//   járőr   – az utakat követve halad, a jobb oldali sávban; az út végén megfordul;
 //   támadás – ha meglát egy ellenséges (más csapatbeli) tankot, tornyát ráfordítja,
 //             lő, és lőtávolságon belülre megy;
-//   üldözés – ha szem elől téveszti, egy ideig az utolsó ismert helye felé tart.
-// A botok egymást nem sebzik (azonos csapat), és egymásra nem is céloznak.
+//   üldözés – ha szem elől téveszti, egy ideig az utolsó ismert helye felé tart,
+//             az utcákat követve (így megkerüli a házakat).
+// Akadályok: tapogatókkal kerüli a falakat és a roncsokat. Ha mégsem halad
+// (rövid távon: áll; hosszabb távon: ugyanott köröz), kitolat, körbenéz, és a
+// legszabadabb irányba indul; ha így sem szabadul, a szimuláció az ellenféltől
+// távol új helyre teszi. A botok egymást nem sebzik, és egymásra nem is céloznak.
 
-import { angleDiff, type TankInput, type TankState, type World } from './world';
+import { angleDiff, TANK, WRECK, type RoadGuide, type TankInput, type TankState, type World } from './world';
 
 export const BOT = {
   /** ilyen messziről veszi észre az ellenfelet, ha rálát (m) */
@@ -24,9 +28,23 @@ export const BOT = {
   /** járőrözés közben a gáz állása */
   patrolThrottle: 0.7,
   /** ennyi ideig keresi az ellenfelet az utolsó ismert helyén (mp) */
-  chaseTime: 7,
+  chaseTime: 9,
   /** ennyi lépésenként ellenőrzi, rálát-e az ellenfélre */
   sightEvery: 8,
+  /** ennyi lépésenként keresi újra a legközelebbi utat */
+  guideEvery: 4,
+  /** rövid távú figyelés: ennyi idő alatt (mp) legalább ennyit (m) kell haladnia */
+  progressEvery: 1.5,
+  progressMin: 2,
+  /** hosszú távú figyelés: ennyi idő alatt (mp) legalább ennyire (m) el kell távolodnia */
+  roamEvery: 10,
+  roamMin: 8,
+  /** ennyi elakadás után kér áthelyezést */
+  rescueAfter: 6,
+  /** áthelyezni csak akkor lehet, ha ennyin belül nincs ellenfél (m) – a játékos ne lássa */
+  rescueClear: 110,
+  /** kiszabaduláskor ilyen messzire néz körbe (m) */
+  escapeLook: 28,
 } as const;
 
 type Mode = 'patrol' | 'attack' | 'chase';
@@ -35,7 +53,7 @@ const clamp = (v: number): number => Math.max(-1, Math.min(1, v));
 
 export class BotBrain {
   private mode: Mode = 'patrol';
-  private readonly input: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false };
+  private readonly input: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false };
   /** a kiszemelt ellenfél, illetve az utolsó ismert helye */
   private targetId = -1;
   private lastSeenX = 0;
@@ -47,10 +65,25 @@ export class BotBrain {
   private aimOffset = 0;
   /** az út melyik irányába halad (az útirány vagy annak ellentettje) */
   private travel: number;
-  // elakadás kezelése
-  private stuck = 0;
-  private reverse = 0;
-  private reverseTurn = 1;
+  private guide: RoadGuide | null | undefined;
+  /** ebben a lépésben haladni szeretne-e (nem csak áll és lő) */
+  private wants = false;
+  // rövid távú figyelés
+  private sampleTime = 0;
+  private sampleX: number;
+  private sampleY: number;
+  private wantedTime = 0;
+  // hosszú távú figyelés
+  private roamTime = 0;
+  private roamX: number;
+  private roamY: number;
+  private roamWanted = 0;
+  private stuckCount = 0;
+  /** a kiszabaduló manőver: előbb röviden tolat, aztán a kiválasztott irányba megy */
+  private backUp = 0;
+  private freeRun = 0;
+  /** az út végén megfordulás után ennyi ideig nem fordul meg újra */
+  private turnedBack = 0;
   private readonly phase: number;
 
   constructor(
@@ -59,7 +92,14 @@ export class BotBrain {
   ) {
     const tank = world.tank(tankId);
     this.travel = tank?.hullAngle ?? 0;
+    this.sampleX = this.roamX = tank?.x ?? 0;
+    this.sampleY = this.roamY = tank?.y ?? 0;
     this.phase = Math.floor(world.rnd() * BOT.sightEvery);
+  }
+
+  /** Hányszor akadt el egymás után (diagnosztikához). */
+  get stuck(): number {
+    return this.stuckCount;
   }
 
   /** A bot bemenete a következő szimulációs lépéshez. */
@@ -70,31 +110,48 @@ export class BotBrain {
     input.turn = 0;
     input.fire = false;
     input.aim = null;
+    this.wants = false;
     if (!tank || !tank.alive) {
       this.mode = 'patrol';
       this.sees = false;
+      this.backUp = 0;
+      this.freeRun = 0;
+      this.stuckCount = 0;
+      this.guide = undefined;
+      if (tank) this.restartWatch(tank);
       return input;
     }
 
     this.look(tank);
     this.fireWait = Math.max(0, this.fireWait - dt);
+    this.freeRun = Math.max(0, this.freeRun - dt);
+    this.turnedBack = Math.max(0, this.turnedBack - dt);
 
     if (this.sees) {
       this.attack(tank, dt);
-    } else if (this.mode === 'chase' && this.chase > 0) {
-      this.chase -= dt;
-      const dist = Math.hypot(this.lastSeenX - tank.x, this.lastSeenY - tank.y);
-      if (dist < 8) this.chase = 0;
-      else this.steerToward(tank, Math.atan2(this.lastSeenY - tank.y, this.lastSeenX - tank.x), 0.85);
-      // a torony arra néz, amerre az ellenfelet utoljára látta
-      input.aim = Math.atan2(this.lastSeenY - tank.y, this.lastSeenX - tank.x);
     } else {
-      this.mode = 'patrol';
-      this.patrol(tank);
+      this.wants = true;
+      let bearing: number | null = null;
+      if (this.mode === 'chase' && this.chase > 0) {
+        this.chase -= dt;
+        const dist = Math.hypot(this.lastSeenX - tank.x, this.lastSeenY - tank.y);
+        bearing = Math.atan2(this.lastSeenY - tank.y, this.lastSeenX - tank.x);
+        // a torony arra néz, amerre az ellenfelet utoljára látta
+        input.aim = bearing;
+        if (dist < 8) this.chase = 0;
+        else if (this.freeRun > 0) this.roam(tank, 0.85);
+        else if (dist < 25) this.steerToward(tank, bearing, 0.85);
+        else this.followRoad(tank, bearing, 0.9); // az utcákon kerül, a célpont iránya felé
+      } else {
+        this.mode = 'patrol';
+        // kiszabadulás után egy ideig a kiválasztott irányba megy, csak utána keresi újra az utat
+        if (this.freeRun > 0) this.roam(tank, 0.8);
+        else this.followRoad(tank, this.travel, BOT.patrolThrottle);
+      }
     }
 
-    this.avoidWalls(tank);
-    this.unstick(tank, dt);
+    this.avoidObstacles(tank);
+    this.watchProgress(tank, dt);
     return input;
   }
 
@@ -145,35 +202,74 @@ export class BotBrain {
     input.aim = bearing + this.aimOffset;
 
     this.reaction = Math.max(0, this.reaction - dt);
-    const aligned = Math.abs(angleDiff(input.aim, tank.turretAngle)) < 0.07;
+    const aligned = Math.abs(angleDiff(input.aim, tank.turretAngle) ) < 0.07;
     if (this.reaction === 0 && this.fireWait === 0 && aligned) {
       input.fire = true;
       this.fireWait = BOT.fireInterval;
     }
 
-    // lőtávolságon belülre megy, de nem megy neki a célpontnak
-    if (dist > BOT.keepDistance + 8) this.steerToward(tank, bearing, 0.8);
-    else if (dist < BOT.keepDistance - 8) this.steerToward(tank, bearing, -0.5);
+    // lőtávolságon belülre megy, de nem megy neki a célpontnak; ha az útja el van
+    // zárva (elakadt), inkább megáll és onnan lő – hiszen rálát a célra
+    if (dist > BOT.keepDistance + 8 && this.stuckCount === 0) {
+      this.wants = true;
+      this.steerToward(tank, bearing, 0.8);
+    } else if (dist < BOT.keepDistance - 8) this.steerToward(tank, bearing, -0.5);
     else input.turn = clamp(angleDiff(bearing, tank.hullAngle) * 1.5);
   }
 
-  /** Útkövetés: az út irányában, a jobb oldali sávban halad. */
-  private patrol(tank: TankState): void {
-    const guide = this.world.terrain.roadGuide?.(tank.x, tank.y) ?? null;
+  /**
+   * Útkövetés a jobb oldali sávban. `prefer`: az út két iránya közül azt
+   * választja, amelyik ehhez az irányhoz közelebb esik (járőrnél az eddigi
+   * haladási irány, üldözésnél a célpont iránya).
+   */
+  private followRoad(tank: TankState, prefer: number, throttle: number): void {
+    const { terrain } = this.world;
+    // a legközelebbi utat csak néhány lépésenként keresi újra (a botok eltolva, nem egyszerre)
+    if ((this.world.tick + this.phase) % BOT.guideEvery === 0 || this.guide === undefined) {
+      this.guide = terrain.roadGuide?.(tank.x, tank.y) ?? null;
+    }
+    const guide = this.guide;
     if (!guide) {
-      // nincs út a közelben: egyenesen megy tovább
-      this.steerToward(tank, this.travel, BOT.patrolThrottle);
+      // nincs út a közelben: toronyiránt megy tovább
+      this.roam(tank, throttle);
       return;
     }
-    // az út két iránya közül azt választja, amerre eddig is haladt
-    const along = Math.abs(angleDiff(guide.angle, this.travel)) <= Math.PI / 2 ? guide.angle : guide.angle + Math.PI;
-    this.travel = along;
-    // célpont: az úttengely előrébb lévő pontja, a jobb oldali sáv közepére tolva
+    let along = Math.abs(angleDiff(guide.angle, prefer)) <= Math.PI / 2 ? guide.angle : guide.angle + Math.PI;
     const ahead = 9;
     const lane = guide.width / 4;
-    const tx = guide.x + Math.cos(along) * ahead - Math.sin(along) * lane;
-    const ty = guide.y + Math.sin(along) * ahead + Math.cos(along) * lane;
-    this.steerToward(tank, Math.atan2(ty - tank.y, tx - tank.x), BOT.patrolThrottle);
+    let cos = Math.cos(along);
+    let sin = Math.sin(along);
+
+    // Az út vége: a bot már túlhaladt az út utolsó pontján (zsákutca), vagy az út
+    // kivezet a pályáról. Ilyenkor megfordul, és visszafelé megy ugyanazon az úton.
+    if (this.turnedBack === 0) {
+      const past = (tank.x - guide.x) * cos + (tank.y - guide.y) * sin;
+      const ex = guide.x + cos * (ahead + 6);
+      const ey = guide.y + sin * (ahead + 6);
+      const leaves = ex < 0 || ey < 0 || ex > terrain.width || ey > terrain.height;
+      if (past > 5 || leaves) {
+        along += Math.PI;
+        cos = -cos;
+        sin = -sin;
+        this.turnedBack = 6;
+      }
+    }
+    this.travel = along;
+    // célpont: az úttengely előrébb lévő pontja, a jobb oldali sáv közepére tolva
+    const tx = guide.x + cos * ahead - sin * lane;
+    const ty = guide.y + sin * ahead + cos * lane;
+    this.steerToward(tank, Math.atan2(ty - tank.y, tx - tank.x), throttle);
+  }
+
+  /**
+   * Haladás út nélkül, a `travel` irányba. Ha arra fal zárja el az utat, nem
+   * megy neki újra és újra: körbenéz, és a legszabadabb irányt választja.
+   */
+  private roam(tank: TankState, throttle: number): void {
+    if ((this.world.tick + this.phase) % 20 === 0 && this.ray(tank.x, tank.y, this.travel, 9) < 1) {
+      this.travel = this.clearestDirection(tank);
+    }
+    this.steerToward(tank, this.travel, throttle);
   }
 
   /** Kormányzás a megadott irányba; éles fordulónál lassít. */
@@ -184,42 +280,163 @@ export class BotBrain {
     this.input.throttle = sharp ? throttle * 0.35 : throttle;
   }
 
-  /** Tapogatók: ha elöl fal van, arra fordul, amerre több a hely. */
-  private avoidWalls(tank: TankState): void {
-    const input = this.input;
-    if (input.throttle <= 0 || this.reverse > 0) return;
-    const walls = this.world.terrain.walls;
-    const reach = 5 + Math.abs(tank.speed) * 0.35;
-    const probe = (offset: number): number => {
-      const a = tank.hullAngle + offset;
-      const hit = walls.raycast(tank.x, tank.y, tank.x + Math.cos(a) * reach, tank.y + Math.sin(a) * reach);
-      return hit ? hit.t : 1;
-    };
-    const front = probe(0);
-    if (front >= 1) return;
-    const left = probe(-0.6);
-    const right = probe(0.6);
-    input.turn = right >= left ? 1 : -1;
-    input.throttle *= Math.max(0.25, front);
+  /** A fal távolsága a megadott (abszolút) irányban, a tapogató hosszának arányában (1 = szabad). */
+  private ray(x: number, y: number, angle: number, reach: number): number {
+    const hit = this.world.terrain.walls.raycast(x, y, x + Math.cos(angle) * reach, y + Math.sin(angle) * reach);
+    return hit ? hit.t : 1;
   }
 
-  /** Ha gázt ad, de nem halad, rövid időre hátramenetbe kapcsol és elfordul. */
-  private unstick(tank: TankState, dt: number): void {
+  /** Tapogatók: a falakat és a roncsokat arra kerüli, amerre több a hely; szűk helyen lassít. */
+  private avoidObstacles(tank: TankState): void {
     const input = this.input;
-    if (this.reverse > 0) {
-      this.reverse -= dt;
-      input.throttle = -0.8;
-      input.turn = this.reverseTurn;
-      if (this.reverse <= 0) this.travel = tank.hullAngle;
+    if (input.throttle <= 0 || this.backUp > 0) return;
+    const reach = 5 + Math.abs(tank.speed) * 0.4;
+    const h = tank.hullAngle;
+    const front = this.ray(tank.x, tank.y, h, reach);
+    const left = Math.min(this.ray(tank.x, tank.y, h - 0.45, reach), this.ray(tank.x, tank.y, h - 0.95, reach * 0.7));
+    const right = Math.min(this.ray(tank.x, tank.y, h + 0.45, reach), this.ray(tank.x, tank.y, h + 0.95, reach * 0.7));
+    let nearest = Math.min(front, left, right);
+    let away = right >= left ? 1 : -1;
+
+    // roncs az úton: ha előttünk van, arra az oldalra térünk ki, amerre távolabb esik
+    const cos = Math.cos(h);
+    const sin = Math.sin(h);
+    for (const w of this.world.wrecks) {
+      const dx = w.x - tank.x;
+      const dy = w.y - tank.y;
+      const forward = dx * cos + dy * sin;
+      if (forward < 0 || forward > reach + WRECK.radius) continue;
+      const side = dy * cos - dx * sin;
+      if (Math.abs(side) > TANK.radius + WRECK.radius + 0.8) continue;
+      const t = Math.max(0, forward - WRECK.radius) / reach;
+      if (t < nearest) {
+        nearest = t;
+        away = side > 0 ? -1 : 1;
+      }
+    }
+
+    if (nearest >= 1) return;
+    // minél közelebb az akadály, annál határozottabban tér ki és annál jobban lassít
+    if (front < 1 || nearest < 0.6) input.turn = away * Math.max(0.5, 1 - nearest);
+    input.throttle *= Math.max(0.3, Math.min(1, nearest + 0.25));
+    // zsákutca: minden irányban fal van közvetlenül előtte – azonnal kitolat
+    if (front < 0.3 && left < 0.35 && right < 0.35) this.startEscape(tank);
+  }
+
+  /**
+   * Körbenéz, és a legszabadabb irányt adja vissza (olyat, ahol a tank teljes
+   * szélességében elfér). Ismételt elakadásnál egyre véletlenszerűbben választ.
+   */
+  private clearestDirection(tank: TankState): number {
+    const rnd = this.world.rnd;
+    const reach = BOT.escapeLook;
+    const half = TANK.radius + 0.3;
+    const start = rnd() * Math.PI * 2;
+    let best = tank.hullAngle + Math.PI;
+    let bestScore = -Infinity;
+    for (let k = 0; k < 12; k++) {
+      const a = start + (k * Math.PI) / 6;
+      const ox = -Math.sin(a) * half;
+      const oy = Math.cos(a) * half;
+      const free = Math.min(this.ray(tank.x, tank.y, a, reach), this.ray(tank.x + ox, tank.y + oy, a, reach), this.ray(tank.x - ox, tank.y - oy, a, reach));
+      // egy kicsit előnyben van az eddigi menetirány; a véletlen szerepe az elakadások számával nő
+      const score = free + 0.1 * Math.cos(angleDiff(a, this.travel)) + rnd() * 0.12 * this.stuckCount;
+      if (score > bestScore) {
+        bestScore = score;
+        best = a;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Kiszabadulás: röviden kitolat, majd a legszabadabb irányba indul; ismételt
+   * elakadásnál egyre tovább megy arra, hogy ne ugyanoda térjen vissza.
+   */
+  private startEscape(tank: TankState): void {
+    if (this.backUp > 0) return;
+    this.travel = this.clearestDirection(tank);
+    this.backUp = 0.7;
+    this.freeRun = this.backUp + 3 + Math.min(4, this.stuckCount);
+    this.guide = undefined;
+  }
+
+  private restartWatch(tank: TankState): void {
+    this.sampleTime = 0;
+    this.wantedTime = 0;
+    this.sampleX = tank.x;
+    this.sampleY = tank.y;
+    this.roamTime = 0;
+    this.roamWanted = 0;
+    this.roamX = tank.x;
+    this.roamY = tank.y;
+  }
+
+  /**
+   * Figyeli, halad-e a bot, amikor haladni szeretne. Rövid távon: ha áll,
+   * kiszabaduló manőverbe kezd. Hosszú távon: ha ugyanazon a helyen köröz,
+   * az is elakadásnak számít. Sok elakadás után áthelyezést kér.
+   */
+  private watchProgress(tank: TankState, dt: number): void {
+    const input = this.input;
+
+    if (this.backUp > 0) {
+      // tolatás, közben az orr a kiválasztott irány felé fordul
+      this.backUp -= dt;
+      input.throttle = -0.9;
+      input.turn = clamp(angleDiff(this.travel, tank.hullAngle) * 2);
+      if (this.backUp <= 0) {
+        this.sampleTime = 0;
+        this.wantedTime = 0;
+        this.sampleX = tank.x;
+        this.sampleY = tank.y;
+      }
+      this.roamTime += dt;
+      this.roamWanted += dt;
       return;
     }
-    if (Math.abs(input.throttle) > 0.2 && Math.abs(tank.speed) < 1 && tank.slip === 0) this.stuck += dt;
-    else this.stuck = Math.max(0, this.stuck - dt * 2);
-    if (this.stuck > 0.9) {
-      this.stuck = 0;
-      this.reverse = 0.9 + this.world.rnd() * 0.6;
-      this.reverseTurn = this.world.rnd() < 0.5 ? -1 : 1;
+
+    const wants = this.wants && tank.slip === 0;
+    let stuck = false;
+
+    // rövid távú figyelés
+    if (wants) this.wantedTime += dt;
+    this.sampleTime += dt;
+    if (this.sampleTime >= BOT.progressEvery) {
+      const moved = Math.hypot(tank.x - this.sampleX, tank.y - this.sampleY);
+      if (this.wantedTime >= BOT.progressEvery * 0.8 && moved < BOT.progressMin) stuck = true;
+      this.sampleTime = 0;
+      this.wantedTime = 0;
+      this.sampleX = tank.x;
+      this.sampleY = tank.y;
     }
+
+    // hosszú távú figyelés
+    if (wants) this.roamWanted += dt;
+    this.roamTime += dt;
+    if (this.roamTime >= BOT.roamEvery) {
+      const moved = Math.hypot(tank.x - this.roamX, tank.y - this.roamY);
+      if (this.roamWanted >= BOT.roamEvery * 0.7 && moved < BOT.roamMin) {
+        stuck = true;
+        this.stuckCount++; // ez súlyosabb: a rövid manőverek nem segítettek
+      } else if (moved > 25) this.stuckCount = 0;
+      this.roamTime = 0;
+      this.roamWanted = 0;
+      this.roamX = tank.x;
+      this.roamY = tank.y;
+    }
+
+    if (!stuck) return;
+    this.stuckCount++;
+    if (this.stuckCount >= BOT.rescueAfter && this.world.relocate(tank.id, BOT.rescueClear)) {
+      this.stuckCount = 0;
+      this.guide = undefined;
+      this.freeRun = 0;
+      this.travel = tank.hullAngle;
+      this.restartWatch(tank);
+      return;
+    }
+    this.startEscape(tank);
   }
 }
 
@@ -246,6 +463,13 @@ export class BotManager {
       const tank = this.world.addTank(spot.x, spot.y, this.world.rnd() * Math.PI * 2, { team, bot: true });
       this.brains.set(tank.id, new BotBrain(this.world, tank.id));
     }
+  }
+
+  /** Hány bot van éppen elakadva (diagnosztikához). */
+  get stuckCount(): number {
+    let n = 0;
+    for (const brain of this.brains.values()) if (brain.stuck > 0) n++;
+    return n;
   }
 
   /** A botok bemenetének beírása a közös bemenet-táblába. */

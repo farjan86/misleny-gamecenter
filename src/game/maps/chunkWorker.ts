@@ -8,7 +8,11 @@ import type { MapData } from './types';
 
 export type ChunkRequest =
   | { type: 'init'; data: MapData; ppm: number; size: number }
-  | { type: 'render'; key: number; cx: number; cy: number };
+  | { type: 'render'; key: number; cx: number; cy: number }
+  // a pálya változó állapota: a fő szál minden változást elküld, mielőtt újrarajzolást kér
+  | { type: 'felled'; index: number; angle: number }
+  | { type: 'scar'; x: number; y: number; r: number }
+  | { type: 'reset' };
 
 export interface ChunkReply {
   key: number;
@@ -40,6 +44,18 @@ scope.onmessage = (ev) => {
     return;
   }
   if (!map) return;
+  if (msg.type === 'felled') {
+    map.fellables.fell(msg.index, msg.angle);
+    return;
+  }
+  if (msg.type === 'scar') {
+    map.addScar(msg.x, msg.y, msg.r);
+    return;
+  }
+  if (msg.type === 'reset') {
+    map.resetDamage();
+    return;
+  }
   const started = performance.now();
   const target = { w: size, h: size, ox: msg.cx * size, oy: msg.cy * size, scale: ppm, detail: true };
 

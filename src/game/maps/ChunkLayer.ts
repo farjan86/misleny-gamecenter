@@ -49,6 +49,9 @@ export class ChunkLayer {
   /** üres pixeltömb: feltöltés után ezt hagyjuk a textúra forrásaként, hogy a pixelek ne maradjanak kétszer a memóriában */
   private readonly blank = new Uint8Array(CHUNK * CHUNK * 4);
   private generation = 0;
+  private serial = 0;
+  /** a megváltozott (újrarajzolandó) darabok */
+  private readonly dirty = new Set<number>();
   /** a legutóbb elkészült darab rajzolási ideje a háttérszálon, ms (diagnosztika) */
   lastRenderMs = 0;
 
@@ -127,6 +130,7 @@ export class ChunkLayer {
    */
   update(view: Phaser.Geom.Rectangle, integrateBudgetMs = 3): void {
     this.integrate(view, integrateBudgetMs);
+    this.redrawDirty();
 
     const c0 = Math.max(0, Math.floor(view.x / CHUNK) - RING);
     const c1 = Math.min(this.cols - 1, Math.floor(view.right / CHUNK) + RING);
@@ -178,6 +182,7 @@ export class ChunkLayer {
       if (far && evicted < EVICT_PER_FRAME) {
         this.destroyChunk(chunk);
         this.chunks.delete(key);
+        this.dirty.delete(key);
         evicted++;
       }
     }
@@ -230,10 +235,68 @@ export class ChunkLayer {
 
   private addChunk(cx: number, cy: number, ground: Uint8Array, canopy: Uint8Array | null): void {
     const chunk: Chunk = { cx, cy, keys: [], images: [] };
-    const tag = `${cx}-${cy}-${this.generation}`;
+    const tag = `${cx}-${cy}-${this.generation}-${this.serial++}`;
     this.addImage(chunk, `map-ground-${tag}`, ground, GROUND_DEPTH, 1);
     if (canopy) this.addImage(chunk, `map-canopy-${tag}`, canopy, CANOPY_DEPTH, CANOPY_ALPHA);
-    if (chunk.images.length) this.chunks.set(keyOf(cx, cy), chunk);
+    if (!chunk.images.length) return;
+    // újrarajzolásnál az új kép ugyanabban a képkockában váltja a régit (nincs villanás)
+    const key = keyOf(cx, cy);
+    const old = this.chunks.get(key);
+    this.chunks.set(key, chunk);
+    if (old) this.destroyChunk(old);
+  }
+
+  /** A pálya állapotának változását (kidőlt fa, lövésnyom, új kör) minden háttérszál megkapja. */
+  notify(message: ChunkRequest): void {
+    for (const worker of this.workers) worker.postMessage(message);
+  }
+
+  /** A megadott (méterben adott) területet érintő, már kirajzolt darabok újrarajzolását kéri. */
+  invalidate(minX: number, minY: number, maxX: number, maxY: number): void {
+    const c0 = Math.max(0, Math.floor((minX * this.ppm) / CHUNK));
+    const c1 = Math.min(this.cols - 1, Math.floor((maxX * this.ppm) / CHUNK));
+    const r0 = Math.max(0, Math.floor((minY * this.ppm) / CHUNK));
+    const r1 = Math.min(this.rows - 1, Math.floor((maxY * this.ppm) / CHUNK));
+    for (let cy = r0; cy <= r1; cy++) {
+      for (let cx = c0; cx <= c1; cx++) {
+        const key = keyOf(cx, cy);
+        // a még ki nem rajzolt darab úgyis az új állapottal készül el
+        if (this.chunks.has(key) || this.pending.has(key)) this.dirty.add(key);
+      }
+    }
+  }
+
+  /** A megváltozott darabok újrarajzolása; a régi kép addig kint marad, amíg az új el nem készül. */
+  private redrawDirty(): void {
+    if (this.dirty.size === 0) return;
+    for (const key of this.dirty) {
+      // éppen készül: lehet, hogy még a régi állapottal – megérkezése után újra sorra kerül
+      if (this.pending.has(key)) continue;
+      const chunk = this.chunks.get(key);
+      if (!chunk) {
+        this.dirty.delete(key);
+        continue;
+      }
+      if (this.workers.length === 0) {
+        this.dirty.delete(key);
+        this.renderOnMainThread(chunk.cx, chunk.cy);
+        return; // háttérszál nélkül képkockánként egy
+      }
+      const worker = this.idle.pop();
+      if (!worker) return;
+      this.dirty.delete(key);
+      this.pending.add(key);
+      this.jobs.set(worker, key);
+      const request: ChunkRequest = { type: 'render', key, cx: chunk.cx, cy: chunk.cy };
+      worker.postMessage(request);
+    }
+  }
+
+  /** Új kör: a pálya sérülései eltűnnek, minden darab újrarajzolódik. */
+  reset(): void {
+    this.notify({ type: 'reset' });
+    this.dirty.clear();
+    this.flush();
   }
 
   private addImage(chunk: Chunk, key: string, pixels: Uint8Array, depth: number, alpha: number): void {

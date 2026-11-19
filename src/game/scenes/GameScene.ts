@@ -15,20 +15,22 @@ import { BASE_PPM, cycleQuality } from '../quality';
 import { BOT_LIMITS, loadSettings, saveSettings, type Settings } from '../settings';
 import { BotManager } from '../sim/bots';
 import { OIL, PICKUP, TIMED_KINDS } from '../sim/pickups';
-import { SIM_DT, TANK, TEAM, World, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
+import { BOOSTER, SIM_DT, TANK, tankMaxHp, TEAM, World, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { Hud, type HudFrame } from '../ui/Hud';
 
 /** Ha a térkép ennyi idő alatt sem készül el, a töltőképernyő akkor is eltűnik. */
 const LOADING_TIMEOUT_MS = 8000;
 /** Ennyi felvehető tárgy van egyszerre a pályán; közülük néhány a kezdőpont közelében. */
-const PICKUPS = { total: 70, nearStart: 8, nearRadius: 260 };
+const PICKUPS = { total: 350, nearStart: 24, nearRadius: 300 };
 /** A robbanás mérete a találat fajtája szerint. */
 const BLAST: Record<ShotKind, number> = { shell: 1, heavy: 1.7, rocket: 2.4, laser: 0.45 };
+/** A maradandó lövésnyom sugara méterben, a találat fajtája szerint. */
+const SCAR: Record<ShotKind, number> = { shell: 1.1, heavy: 1.8, rocket: 2.6, laser: 0.45 };
 /** Ennél messzebbi események hangja nem hallatszik (m). */
 const HEARING = 140;
 
-type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'SPACE', Phaser.Input.Keyboard.Key>;
+type Keys = Record<'W' | 'A' | 'S' | 'D' | 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'SPACE' | 'SHIFT', Phaser.Input.Keyboard.Key>;
 
 export class GameScene extends Phaser.Scene {
   private map!: GameMap;
@@ -51,13 +53,15 @@ export class GameScene extends Phaser.Scene {
   private readonly bulletViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly pickupViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly oilViews = new Map<number, Phaser.GameObjects.Image>();
+  /** a roncsok képei: test és torony */
+  private readonly wreckViews = new Map<number, Phaser.GameObjects.Image[]>();
   /** újrahasznált effekt-sprite-ok */
   private readonly boomPool: Phaser.GameObjects.Sprite[] = [];
   private readonly flashPool: Phaser.GameObjects.Image[] = [];
   private readonly beamPool: Phaser.GameObjects.Image[] = [];
   private readonly smokePool: Phaser.GameObjects.Image[] = [];
   // képkockánként újrahasznált objektumok (ne keletkezzen fölösleges szemét)
-  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false };
+  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false };
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
@@ -67,6 +71,7 @@ export class GameScene extends Phaser.Scene {
   private canvasRectStale = true;
   private accumulator = 0;
   private pointerMoved = false;
+  private tankViewsDirty = false;
   /** az olajfolt lerakását kérő leütés, amíg a szimuláció fel nem dolgozza */
   private dropLatch = false;
   private ready = false;
@@ -98,21 +103,25 @@ export class GameScene extends Phaser.Scene {
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
 
     const kb = this.input.keyboard!;
-    this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE') as Keys;
+    this.keys = kb.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT') as Keys;
     // Az egyszeri parancsokat közvetlenül a böngésző billentyűeseményéből vesszük
     // (ismétlés nélkül), így minden leütés pontosan egyszer számít. A folyamatosan
     // nyomva tartott gombokat (mozgás, lövés) a fenti Key objektumok adják.
     window.addEventListener('keydown', (ev) => {
-      if (ev.repeat || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      // a botok száma a + és − billentyűvel állítható (bármelyik kiosztáson);
+      // nyomva tartva gyorsan változik
+      if (ev.key === '+' || ev.key === '-') {
+        this.changeBots(ev.key === '+' ? 1 : -1);
+        return;
+      }
+      if (ev.repeat) return;
       this.sfx.unlock();
       if (ev.code === 'KeyR') this.startRound();
       else if (ev.code === 'KeyM') this.hud.toggleMap();
       else if (ev.code === 'KeyH') this.hud.toggleHelp();
       else if (ev.code === 'KeyQ') cycleQuality(this.ppm);
       else if (ev.code === 'KeyE') this.dropLatch = true;
-      // a botok száma a + és − billentyűvel is állítható (bármelyik kiosztáson)
-      else if (ev.key === '+') this.changeBots(1);
-      else if (ev.key === '-') this.changeBots(-1);
     });
     this.input.on('pointerdown', () => this.sfx.unlock());
     this.input.on('pointermove', () => {
@@ -138,6 +147,11 @@ export class GameScene extends Phaser.Scene {
       for (const view of views.values()) view.destroy();
       views.clear();
     }
+    for (const parts of this.wreckViews.values()) for (const part of parts) part.destroy();
+    this.wreckViews.clear();
+    // a pálya sérülései (kidőlt fák, lövésnyomok) is eltűnnek
+    this.map.resetDamage();
+    this.ground.reset();
     this.inputs.clear();
     this.accumulator = 0;
 
@@ -147,7 +161,7 @@ export class GameScene extends Phaser.Scene {
     this.bots = new BotManager(this.world);
     this.bots.setCount(this.settings.bots, TEAM.bots, TEAM.player);
     this.world.scatterPickups(PICKUPS.total, { x: spawn.x, y: spawn.y, radius: PICKUPS.nearRadius, count: PICKUPS.nearStart });
-    this.hud.setBotCount(this.settings.bots);
+    this.hud.setBotCount(this.bots.count);
 
     this.camX = spawn.x * this.ppm;
     this.camY = spawn.y * this.ppm;
@@ -159,7 +173,8 @@ export class GameScene extends Phaser.Scene {
     if (wanted === this.settings.bots) return;
     this.settings = saveSettings({ ...this.settings, bots: wanted });
     this.bots.setCount(wanted, TEAM.bots, TEAM.player);
-    this.hud.setBotCount(wanted);
+    this.tankViewsDirty = true;
+    this.hud.setBotCount(this.bots.count);
     this.hud.toast(wanted === 0 ? 'Nincs ellenfél a pályán' : `Ellenfelek száma: ${wanted}`);
   }
 
@@ -175,6 +190,7 @@ export class GameScene extends Phaser.Scene {
       input.aim = Math.atan2(pointer.worldY - this.player.y * this.ppm, pointer.worldX - this.player.x * this.ppm);
     }
     input.fire = k.SPACE.isDown || pointer.leftButtonDown();
+    input.boost = k.SHIFT.isDown;
     // az E egyetlen rövid leütése is számít: a következő szimulációs lépésig megjegyezzük
     input.drop = this.dropLatch || pointer.rightButtonDown();
     return input;
@@ -197,10 +213,11 @@ export class GameScene extends Phaser.Scene {
     }
 
     const seconds = time / 1000;
-    this.syncTanks(this.accumulator / SIM_DT, seconds);
+    this.syncTanks(this.accumulator / SIM_DT, seconds, this.view);
     this.syncBullets();
     this.syncOils();
-    this.sfx.engine(this.player.alive ? Math.abs(this.player.speed) / TANK.maxSpeed : 0);
+    this.syncWrecks(this.view);
+    this.sfx.engine(this.player.alive ? (Math.abs(this.player.speed) / TANK.maxSpeed) * (this.player.boosting ? 1.15 : 1) : 0);
 
     // a kamera a saját tankot követi; ha kilőtték, ott marad, ahol történt
     const playerView = this.tankViews.get(this.player.id);
@@ -247,7 +264,8 @@ export class GameScene extends Phaser.Scene {
     this.hud.update(f);
 
     if (this.frame % 6 !== 0) return;
-    this.hud.setStatus(p.hp, TANK.maxHp, p.kills, p.deaths, p.alive ? 0 : Math.max(0, p.respawn));
+    this.hud.setStatus(p.hp, tankMaxHp(p), p.level, p.kills, p.deaths, p.alive ? 0 : Math.max(0, p.respawn));
+    this.hud.setBoost(p.heat / BOOSTER.duration, p.overheated, p.boosting);
     // az aktív bónuszok listája
     const lines = this.effectLines;
     lines.length = 0;
@@ -295,6 +313,7 @@ export class GameScene extends Phaser.Scene {
         const volume = this.loudness(ev.x, ev.y);
         if (volume > 0 && ev.kind !== 'laser') this.sfx.explosion(Math.max(0.15, volume) * (ev.kind === 'shell' ? 1 : 1.3));
         this.boom(ev.x, ev.y, BLAST[ev.kind]);
+        this.scar(ev.x, ev.y, SCAR[ev.kind]);
         break;
       }
       case 'laser':
@@ -336,6 +355,7 @@ export class GameScene extends Phaser.Scene {
         break;
       case 'destroyed':
         this.boom(ev.x, ev.y, 3.2);
+        this.scar(ev.x, ev.y, 3);
         this.sfx.explosion(Math.max(0.4, this.loudness(ev.x, ev.y)) * 1.6);
         if (mine) {
           this.cameras.main.shake(400, 0.009);
@@ -344,9 +364,69 @@ export class GameScene extends Phaser.Scene {
           this.hud.toast('Ellenfél kilőve!');
         }
         break;
+      case 'felled': {
+        // a változást a háttérszálak is megkapják, az érintett térképdarabok újrarajzolódnak
+        this.ground.notify({ type: 'felled', index: ev.index, angle: ev.angle });
+        const reach = (this.map.trees[ev.index]?.r ?? 2.5) * 2.6 + 3;
+        this.ground.invalidate(ev.x - reach, ev.y - reach, ev.x + reach, ev.y + reach);
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume > 0) this.sfx.crack(volume);
+        break;
+      }
+      case 'overheat':
+        if (mine) {
+          this.sfx.overheat();
+          this.hud.toast('Túlmelegedett a gyorsító – le kell hűlnie');
+        }
+        break;
+      case 'levelup':
+        if (mine) {
+          this.sfx.pickup();
+          this.hud.toast(`${ev.level}. szint: nagyobb, szívósabb tank, erősebb lövedék!`);
+        }
+        break;
       case 'respawn':
         this.tankViews.get(ev.tank)?.snap(this.world.tank(ev.tank)!);
         break;
+    }
+  }
+
+  /** Maradandó lövésnyom: bekerül a pálya állapotába, és a térkép érintett része újrarajzolódik. */
+  private scar(x: number, y: number, r: number): void {
+    this.ground.notify({ type: 'scar', x, y, r });
+    if (!this.map.addScar(x, y, r)) return;
+    const reach = r * 1.3 + 0.5;
+    this.ground.invalidate(x - reach, y - reach, x + reach, y + reach);
+  }
+
+  /** A kilőtt tankok roncsai: kiégett test és torony; a frissek füstölnek. */
+  private syncWrecks(view: Phaser.Geom.Rectangle): void {
+    const { wrecks } = this.world;
+    if (wrecks.length === 0 && this.wreckViews.size === 0) return;
+    const margin = 6 * this.ppm;
+    for (const w of wrecks) {
+      const x = w.x * this.ppm;
+      const y = w.y * this.ppm;
+      let parts = this.wreckViews.get(w.id);
+      if (!parts) {
+        parts = [
+          this.add.image(x, y, GTEX.wreckHull).setRotation(w.hullAngle).setScale(this.spriteScale).setDepth(5),
+          this.add.image(x, y, GTEX.wreckTurret).setOrigin(0.25, 0.5).setRotation(w.turretAngle + 0.5).setScale(this.spriteScale).setDepth(6),
+        ];
+        this.wreckViews.set(w.id, parts);
+      }
+      const visible = x > view.x - margin && x < view.right + margin && y > view.y - margin && y < view.bottom + margin;
+      if (parts[0].visible !== visible) for (const part of parts) part.setVisible(visible);
+      // a friss roncs még füstöl
+      if (visible && w.age < 25 && (this.frame + w.id) % 14 === 0) this.smoke(x + (w.id % 5) - 2, y - 4);
+    }
+    if (this.wreckViews.size !== wrecks.length) {
+      for (const [id, parts] of this.wreckViews) {
+        if (!wrecks.some((w) => w.id === id)) {
+          for (const part of parts) part.destroy();
+          this.wreckViews.delete(id);
+        }
+      }
     }
   }
 
@@ -407,19 +487,29 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private syncTanks(alpha: number, seconds: number): void {
+  /** `visible`: az előző képkocka látómezeje – a rajta kívüli tankok megjelenítője pihen. */
+  private syncTanks(alpha: number, seconds: number, visible: Phaser.Geom.Rectangle): void {
     const { tanks } = this.world;
+    const margin = 6 * this.ppm;
     for (const tank of tanks) {
+      const x = tank.x * this.ppm;
+      const y = tank.y * this.ppm;
+      const onScreen = tank === this.player || (x > visible.x - margin && x < visible.right + margin && y > visible.y - margin && y < visible.bottom + margin);
       let view = this.tankViews.get(tank.id);
       if (!view) {
+        // megjelenítő csak akkor készül, amikor a tank először a kép közelébe kerül
+        if (!onScreen) continue;
         view = new TankView(this, this.ppm, tank, tank.team !== this.player.team);
         this.tankViews.set(tank.id, view);
       }
-      view.render(tank, alpha, seconds);
+      if (onScreen) view.render(tank, alpha, seconds);
+      else view.hide();
     }
-    if (this.tankViews.size !== tanks.length) {
+    // az eltávolított tankok megjelenítőinek törlése (ritkán kell: csak ha csökkent a botok száma)
+    if (this.tankViewsDirty) {
+      this.tankViewsDirty = false;
       for (const [id, view] of this.tankViews) {
-        if (!tanks.some((t) => t.id === id)) {
+        if (!this.world.tank(id)) {
           view.destroy();
           this.tankViews.delete(id);
         }
@@ -523,6 +613,13 @@ export class GameScene extends Phaser.Scene {
       bots: this.bots.count,
       pickups: this.world.pickups.length,
       oils: this.world.oils.length,
+      level: p.level,
+      heat: p.heat,
+      overheated: p.overheated,
+      boosting: p.boosting,
+      wrecks: this.world.wrecks.length,
+      scars: this.map.scars.length / 3,
+      fallen: this.map.fellables.fallen.reduce((n, f) => n + f, 0),
       walls: this.map.walls.segmentCount,
       chunks: this.ground.chunkCount,
       chunksPending: this.ground.pendingCount,

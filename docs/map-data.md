@@ -139,24 +139,48 @@ rögzített, a játékhoz igazított szélességet kapnak. A közutak kétsávos
 
 | Típus | Szélesség | Legkisebb | Mellette |
 |---|---|---|---|
-| főút (`primary`, `secondary`) | 13 / 12 m | 9 m | 0,6 m zúzottköves padka, füves sáv fasorral – járda nincs |
-| lakóutca (`residential`) | 9,5 m | 7 m | 1,8 m füves sáv, majd 1,2 m járda |
-| lakó-pihenő övezet (`living_street`) | 8,5 m | 6,5 m | mint a lakóutcánál |
-| összekötő út (`unclassified`) | 9,5 m | 7 m | füves sáv, járda nélkül |
-| szervizút (`service`) | 5,5 m | 4 m | – |
+| főút (`primary`, `secondary`) | 16 m | 12 m | 0,6 m zúzottköves padka, füves sáv fasorral – járda nincs |
+| gyűjtőút (`tertiary`) | 13 m | 10 m | mint a főútnál |
+| lakóutca (`residential`) | 11 m | 8,5 m | 1,8 m füves sáv, majd 1,2 m járda |
+| lakó-pihenő övezet (`living_street`) | 9,5 m | 7,5 m | mint a lakóutcánál |
+| összekötő út (`unclassified`) | 11 m | 8,5 m | füves sáv, járda nélkül |
+| szervizút (`service`) | 6,5 m | 4,5 m | – |
 | földút (`track`) | 4,5 m | – | – |
 | kerékpárút | 3 m | – | szürke aszfalt |
 | gyalogút | 2,5 m | – | – |
 
 A főút keresztmetszete a Pécsi utcáról készült fotót követi (kétsávos út
 felezővonallal, járda helyett füves sáv és fasor, mellette külön aszfaltos
-kerékpárút, betonoszlopok). Ha egy útdarab mentén épület áll közelebb, mint
-amennyi helyet az út kér, az útdarab a „legkisebb" értékig szűkül – ez a 427
-útdarabból 85-öt érint.
+kerékpárút, betonoszlopok). Ha egy útdarab mentén az épületek jellemzően
+közelebb állnak, mint amennyi helyet az út kér, az útdarab a „legkisebb"
+értékig szűkül – ez a 427 útdarabból 49-et érint. (A szűkítés a beépítés
+jellemző távolságához igazodik, nem a legközelebbi házhoz: az út mentén mért
+távolságok alsó negyede számít.)
+
+### Az utakra belógó épületek
+
+A játékban az utak a valóságosnál szélesebbek, ezért néhány ház alaprajza
+belelógna az úttestbe. A feldolgozó ezeket **szándékosan módosítja**:
+
+- ahol egy épület a közút úttestjébe (vagy a mellette hagyott 0,6 m-es sávba)
+  érne, ott az alaprajzát az út szélével párhuzamosan levágja – ez **295
+  épületet** érint;
+- ha így az épület alapterületének 35%-ánál (vagy 12 m²-nél) kevesebb
+  maradna, vagy az út az épület közepén megy át, az épület kimarad – ez
+  **8 épület**;
+- a fotók alapján felvett három épület (hivatal, templom, rendőrség)
+  változatlan marad;
+- a kézzel felvett tereptárgyak (lámpák, fák, padok, zászlórudak) közül az
+  útra kerülőket a padka külső szélére tolja (7 darab).
+
+A megvágott épületek tehát a valóságosnál kisebbek, és az út felőli faluk
+nem ott van, ahol a valóságban. A darabszámokat a pályafájl `meta.stats`
+része (`trimmedBuildings`, `removedBuildings`) és a feldolgozó
+figyelmeztetései is közlik.
 
 ### Zebrák
 
-33 zebra van a pályán: az OSM `highway=crossing` pontjaiból, valamint ott,
+32 zebra van a pályán: az OSM `highway=crossing` pontjaiból, valamint ott,
 ahol az OSM szerint egy gyalogút vagy kerékpárút ténylegesen átmegy egy
 közúton (az út tengelyén van pontja, és mindkét oldalon folytatódik). Ez
 levezetett adat: ahol az OSM-ben nincs berajzolva az átvezető gyalogút, ott
@@ -169,11 +193,11 @@ Az OSM-ben alig vannak egyedi fák, bokrok vagy villanyoszlopok, ezért ezeket
 a feldolgozó helyezi el, rögzített magú véletlennel (minden futáskor ugyanoda
 kerülnek):
 
-- **35 934 fa** – kertekben szórtan, az erdőfoltokban és a központi parkban
+- **35 646 fa** – kertekben szórtan, az erdőfoltokban és a központi parkban
   sűrűn, a gyümölcsösökben szabályos sorokban, a főutak mentén mindkét
   oldalon sűrű fasorként, a lakóutcák füves sávjában ritkábban;
-- **12 441 bokor** – kertekben, parkokban, a fotókon látható sövényekben;
-- **1012 villanyoszlop** – a közutak egyik oldalán kb. 36 méterenként,
+- **12 337 bokor** – kertekben, parkokban, a fotókon látható sövényekben;
+- **952 villanyoszlop** – a közutak egyik oldalán kb. 36 méterenként,
   vezetékkel összekötve.
 
 A hivatal mögötti nagy zöldterület az OSM-ben park (`leisure=park`); a

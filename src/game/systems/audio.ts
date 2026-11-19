@@ -128,6 +128,18 @@ export class Sfx {
     this.tone('sine', 2400, 700, 0.18, 0.25 * volume);
   }
 
+  /** kidőlő fa vagy oszlop reccsenése */
+  crack(volume = 1): void {
+    this.burst(0.22, 2600, 240, 0.5 * volume);
+    this.tone('triangle', 240, 90, 0.2, 0.2 * volume);
+  }
+
+  /** a gyorsító túlmelegedett */
+  overheat(): void {
+    this.burst(0.6, 5000, 900, 0.3);
+    this.tone('sawtooth', 520, 140, 0.45, 0.16);
+  }
+
   /** megcsúszás az olajon */
   skid(): void {
     this.burst(0.7, 2200, 500, 0.45);

@@ -2,6 +2,7 @@
 // ütközési rács és út-keresés a szimulációhoz. Nincs Phaser-függés.
 
 import { SegmentGrid } from '../sim/collision';
+import { FELLABLE, Fellables, type FellableItem } from '../sim/props';
 import type { RoadGuide, Terrain } from '../sim/world';
 import type { LandmarkBuilding, MapData, RoadFeature } from './types';
 
@@ -75,9 +76,11 @@ export const STREETS = new Set(['unclassified', 'residential', 'living_street'])
 const DRIVABLE = new Set([...MAIN_ROADS, ...STREETS]);
 /** Vízfelületek, amelyeken a tank nem tud áthajtani. */
 const SOLID_AREAS = new Set(['water', 'pool']);
-/** A tank a lombkorona alatt elfér, csak a törzs akadály. */
+/** A fák törzsének és az oszlopoknak a sugara: ennek nekimenve (vagy eltalálva) dőlnek ki. */
 const TREE_TRUNK_RADIUS = 0.4;
 const POLE_RADIUS = 0.25;
+/** Ennyi lövésnyom marad meg a pályán; fölötte a legrégebbiek tűnnek el. */
+const MAX_SCARS = 3000;
 /** Sebességszorzó burkolt úton kívül. */
 const OFF_ROAD_FACTOR = 0.72;
 /** A parkoló autók mérete méterben. */
@@ -181,6 +184,17 @@ export class GameMap implements Terrain {
   /** a decor.poles tömb párjainak sorszámai */
   readonly poleIndex: SpatialIndex;
   private readonly roadIndex: SpatialIndex;
+  /**
+   * Kidönthető tárgyak: előbb a fák (a `trees` tömb sorrendjében), utánuk a
+   * villanyoszlopok (a decor.poles sorrendjében, `poleOffset`-tól).
+   */
+  readonly fellables: Fellables;
+  readonly poleOffset: number;
+  /** oszlop koordinátája → az oszlop sorszáma (a vezetékek rajzolásához) */
+  readonly poleAt = new Map<string, number>();
+  /** maradandó lövésnyomok, lapítva: x, y, sugár */
+  readonly scars: number[] = [];
+  scarIndex: SpatialIndex;
   /** fotók alapján felvett épületmegjelenések, OSM-azonosító szerint */
   readonly landmarkBuildings = new Map<number, LandmarkBuilding>();
   /** burkolt felületek az utakon kívül (tér, aszfaltozott udvar) */
@@ -229,11 +243,14 @@ export class GameMap implements Terrain {
     const dt = data.decor.trees;
     for (let i = 0; i + 3 < dt.length; i += 4) this.trees.push({ x: dt[i], y: dt[i + 1], r: dt[i + 2], kind: dt[i + 3] });
     this.treeIndex = new SpatialIndex(width, height);
+    const fellable: FellableItem[] = [];
     this.trees.forEach((t, i) => {
-      // az árnyék miatt délkelet felé nagyobb a helyigény
-      this.treeIndex.add(i, t.x - t.r, t.y - t.r, t.x + t.r * 2.4 + 1, t.y + t.r * 2.4 + 1);
-      walls?.addCircle(t.x, t.y, TREE_TRUNK_RADIUS, 6);
+      // az árnyék és a kidőlt fa (bármelyik irányba dőlhet) helyigényével együtt
+      const reach = t.r * 2.6 + 1.5;
+      this.treeIndex.add(i, t.x - reach, t.y - reach, t.x + reach, t.y + reach);
+      fellable.push({ x: t.x, y: t.y, r: TREE_TRUNK_RADIUS, kind: FELLABLE.tree });
     });
+    this.poleOffset = this.trees.length;
 
     const bushes = data.decor.bushes;
     this.bushIndex = new SpatialIndex(width, height);
@@ -244,9 +261,12 @@ export class GameMap implements Terrain {
     const poles = data.decor.poles;
     this.poleIndex = new SpatialIndex(width, height);
     for (let i = 0; i + 1 < poles.length; i += 2) {
-      this.poleIndex.add(i / 2, poles[i] - 0.5, poles[i + 1] - 0.5, poles[i] + 3.2, poles[i + 1] + 3.2);
-      walls?.addCircle(poles[i], poles[i + 1], POLE_RADIUS, 6);
+      this.poleIndex.add(i / 2, poles[i] - 8, poles[i + 1] - 8, poles[i] + 8, poles[i + 1] + 8);
+      fellable.push({ x: poles[i], y: poles[i + 1], r: POLE_RADIUS, kind: FELLABLE.pole });
+      this.poleAt.set(`${poles[i]},${poles[i + 1]}`, i / 2);
     }
+    this.fellables = new Fellables(width, height, fellable);
+    this.scarIndex = new SpatialIndex(width, height);
 
     // a fotók alapján felvett tárgyak közül a parkoló autók és a zászlórudak akadályok
     const lm = data.landmarks;
@@ -307,6 +327,7 @@ export class GameMap implements Terrain {
   /** Igaz, ha a pont valamelyik fa lombkoronája alatt van. */
   underCanopy(x: number, y: number): boolean {
     for (const i of this.treeIndex.query(x, y, x, y)) {
+      if (this.fellables.fallen[i]) continue;
       const t = this.trees[i];
       const dx = t.x - x;
       const dy = t.y - y;
@@ -366,6 +387,40 @@ export class GameMap implements Terrain {
     const near = this.nearestRoad(x, y, 45, true);
     if (!near) return null;
     return { x: near.hit.x, y: near.hit.y, angle: near.hit.angle, width: near.road.width };
+  }
+
+  /**
+   * Maradandó lövésnyom felvétele. Visszaadja, hogy bekerült-e (a nagyon közeli,
+   * nem kisebb nyom mellé nem kerül újabb). A fő szálon és a háttérszálakon
+   * ugyanabban a sorrendben hívva mindenhol ugyanaz az állapot áll elő.
+   */
+  addScar(x: number, y: number, r: number): boolean {
+    for (const i of this.scarIndex.query(x - 0.6, y - 0.6, x + 0.6, y + 0.6)) {
+      if (this.scars[i * 3 + 2] >= r && Math.hypot(this.scars[i * 3] - x, this.scars[i * 3 + 1] - y) < 0.6) return false;
+    }
+    if (this.scars.length / 3 >= MAX_SCARS) {
+      // a legrégebbi nyomok eltűnnek; az index újraépül
+      this.scars.splice(0, (MAX_SCARS / 5) * 3);
+      this.scarIndex = new SpatialIndex(this.width, this.height);
+      for (let i = 0; i < this.scars.length; i += 3) this.indexScar(i / 3);
+    }
+    this.scars.push(x, y, r);
+    this.indexScar(this.scars.length / 3 - 1);
+    return true;
+  }
+
+  private indexScar(n: number): void {
+    const x = this.scars[n * 3];
+    const y = this.scars[n * 3 + 1];
+    const r = this.scars[n * 3 + 2] * 1.3;
+    this.scarIndex.add(n, x - r, y - r, x + r, y + r);
+  }
+
+  /** Új kör: minden fa és oszlop újra áll, a lövésnyomok eltűnnek. */
+  resetDamage(): void {
+    this.fellables.reset();
+    this.scars.length = 0;
+    this.scarIndex = new SpatialIndex(this.width, this.height);
   }
 
   /** Kezdőpont: a hivatalhoz legközelebbi közút tengelyvonalán. */

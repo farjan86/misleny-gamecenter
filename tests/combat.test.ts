@@ -7,7 +7,24 @@ import type { MapData } from '../src/game/maps/types';
 import { BOT, BotBrain, BotManager } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET } from '../src/game/sim/pickups';
-import { BULLET, DAMAGE, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type Terrain } from '../src/game/sim/world';
+import { FELLABLE, Fellables } from '../src/game/sim/props';
+import {
+  BOOSTER,
+  BULLET,
+  DAMAGE,
+  LEVEL,
+  SIM_DT,
+  TANK,
+  tankMaxHp,
+  tankRadius,
+  tankSize,
+  TEAM,
+  World,
+  WRECK,
+  type SimEvent,
+  type TankInput,
+  type Terrain,
+} from '../src/game/sim/world';
 
 function arena(size = 400, extra: Partial<Terrain> = {}): Terrain {
   return { width: size, height: size, walls: new SegmentGrid(size, size), speedFactor: () => 1, ...extra };
@@ -86,6 +103,16 @@ describe('felvehető tárgyak', () => {
     run(world, {}, seconds(PICKUP.respawnDelay) + 2);
     expect(world.pickups).toHaveLength(1);
     expect(tank.effects.radar).toBeGreaterThan(0);
+  });
+
+  it('javítókészlet: azonnal életerőt ad vissza, de a felső határ fölé nem', () => {
+    const world = new World(arena());
+    const tank = world.addTank(100, 100, 0);
+    tank.hp = 30;
+    give(world, tank, 'repair');
+    expect(tank.hp).toBe(30 + PICKUP.repairAmount);
+    give(world, tank, 'repair');
+    expect(tank.hp).toBe(TANK.maxHp);
   });
 
   it('minden tárgytípushoz tartozik szabály', () => {
@@ -405,6 +432,35 @@ describe('a valódi pályán', () => {
     expect(new Set(world.pickups.map((p) => p.kind)).size).toBeGreaterThanOrEqual(8);
   });
 
+  it('száz bot és 350 tárgy is elfér a pályán, és a szimuláció bírja', () => {
+    const world = new World(map, 23);
+    const spawn = map.spawnPoint();
+    const player = world.addTank(spawn.x, spawn.y, spawn.angle, { team: TEAM.player });
+    const bots = new BotManager(world);
+    bots.setCount(100, TEAM.bots, TEAM.player);
+    expect(bots.count).toBe(100);
+    // egyik bot sem a játékos orra előtt jelenik meg
+    for (const bot of world.tanks.filter((t) => t.bot)) {
+      expect(Math.hypot(bot.x - player.x, bot.y - player.y)).toBeGreaterThanOrEqual(140);
+    }
+    world.scatterPickups(350, { x: spawn.x, y: spawn.y, radius: 300, count: 24 });
+    expect(world.pickups.length).toBeGreaterThanOrEqual(330);
+    expect(world.pickups.filter((p) => Math.hypot(p.x - spawn.x, p.y - spawn.y) <= 300).length).toBeGreaterThanOrEqual(24);
+
+    const inputs = new Map<number, TankInput>();
+    const steps = seconds(20);
+    const started = performance.now();
+    for (let i = 0; i < steps; i++) {
+      bots.update(inputs, SIM_DT);
+      world.step(inputs);
+    }
+    const msPerStep = (performance.now() - started) / steps;
+    console.log(`100 bot, 350 tárgy: ${msPerStep.toFixed(2)} ms / szimulációs lépés`);
+    // 60 lépés/mp mellett egy lépésre 16,7 ms jut; ennek a töredékét használhatja
+    expect(msPerStep).toBeLessThan(6);
+    expect(world.tanks.filter((t) => t.bot)).toHaveLength(100);
+  });
+
   it('a botok egy percig járőrözve a pályán és az épületeken kívül maradnak, és haladnak', () => {
     const world = new World(map, 11);
     const spawn = map.spawnPoint();
@@ -436,5 +492,256 @@ describe('a valódi pályán', () => {
     const moving = distances.filter((d) => d > 150).length;
     // a botok nagy többsége folyamatosan halad (nem ragad be)
     expect(moving, `megtett utak: ${distances.map((d) => d.toFixed(0)).join(', ')}`).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('kidönthető fák és oszlopok', () => {
+  const withTree = (): { world: World; props: Fellables } => {
+    const props = new Fellables(400, 400, [
+      { x: 150, y: 200, r: 0.4, kind: FELLABLE.tree },
+      { x: 153, y: 204, r: 0.4, kind: FELLABLE.tree },
+      { x: 300, y: 300, r: 0.25, kind: FELLABLE.pole },
+    ]);
+    return { world: new World(arena(400, { fellables: props })), props };
+  };
+
+  it('a tank nem akad meg a fában: kidönti a haladás irányába, és megy tovább', () => {
+    const { world, props } = withTree();
+    const tank = world.addTank(120, 200, 0);
+    const events = run(world, { [tank.id]: { throttle: 1 } }, seconds(4));
+    expect(props.fallen[0]).toBe(1);
+    expect(props.angle[0]).toBeCloseTo(0, 2);
+    expect(events.some((e) => e.type === 'felled' && e.index === 0)).toBe(true);
+    expect(tank.x).toBeGreaterThan(170); // átment rajta
+    // a kidőlt fa már nem dől ki újra
+    const again = run(world, { [tank.id]: { throttle: -1 } }, seconds(4));
+    expect(again.some((e) => e.type === 'felled' && e.index === 0)).toBe(false);
+  });
+
+  it('a lövedék kidönti az eltalált fát, és ott robban', () => {
+    const { world, props } = withTree();
+    const tank = world.addTank(120, 200, 0);
+    const events = [...run(world, { [tank.id]: { fire: true, aim: 0 } }, 2), ...run(world, {}, 40)];
+    expect(props.fallen[0]).toBe(1);
+    const impact = events.find((e) => e.type === 'impact');
+    expect(impact && impact.type === 'impact' && impact.x).toBeCloseTo(150 - 0.4, 1);
+  });
+
+  it('a rakéta robbanása a közeli fákat is kidönti, a lézer az elsőt', () => {
+    const rocket = withTree();
+    const a = rocket.world.addTank(120, 200, 0);
+    give(rocket.world, a, 'rocket');
+    run(rocket.world, { [a.id]: { fire: true, aim: 0 } }, 2);
+    run(rocket.world, {}, 60);
+    expect(rocket.props.fallen[0]).toBe(1);
+    expect(rocket.props.fallen[1]).toBe(1); // 5 m-re állt a robbanástól
+    expect(rocket.props.fallen[2]).toBe(0);
+
+    const laser = withTree();
+    const b = laser.world.addTank(120, 200, 0);
+    give(laser.world, b, 'laser');
+    const events = run(laser.world, { [b.id]: { fire: true, aim: 0 } }, 2);
+    expect(laser.props.fallen[0]).toBe(1);
+    const beam = events.find((e) => e.type === 'laser');
+    expect(beam && beam.type === 'laser' && beam.x2).toBeLessThan(151);
+  });
+
+  it('a sugárvetés a legközelebbi álló tárgyat találja meg', () => {
+    const { props } = withTree();
+    expect(props.raycast(100, 200, 200, 200)?.index).toBe(0);
+    props.fell(0, 0);
+    expect(props.raycast(100, 200, 200, 200)).toBeNull();
+    props.reset();
+    expect(props.raycast(100, 200, 200, 200)?.index).toBe(0);
+  });
+});
+
+describe('gyorsító (Shift) és túlmelegedés', () => {
+  it('gyorsítva 30%-kal gyorsabb, de csak 3 másodpercig; aztán túlmelegszik', () => {
+    const world = new World(arena(4000));
+    const tank = world.addTank(200, 2000, 0);
+    run(world, { [tank.id]: { throttle: 1 } }, seconds(2));
+    expect(tank.speed).toBeCloseTo(TANK.maxSpeed, 1);
+    run(world, { [tank.id]: { throttle: 1, boost: true } }, seconds(2));
+    expect(tank.boosting).toBe(true);
+    expect(tank.speed).toBeCloseTo(TANK.maxSpeed * BOOSTER.speed, 1);
+    const events = run(world, { [tank.id]: { throttle: 1, boost: true } }, seconds(1.2));
+    expect(events.some((e) => e.type === 'overheat' && e.tank === tank.id)).toBe(true);
+    expect(tank.overheated).toBe(true);
+    // túlmelegedve hiába nyomja: visszaesik az alapsebességre
+    run(world, { [tank.id]: { throttle: 1, boost: true } }, seconds(1.5));
+    expect(tank.boosting).toBe(false);
+    expect(tank.speed).toBeCloseTo(TANK.maxSpeed, 1);
+  });
+
+  it('lehűlés után újra használható; rövid használat nem melegíti túl', () => {
+    const world = new World(arena(8000));
+    const tank = world.addTank(200, 4000, 0);
+    run(world, { [tank.id]: { throttle: 1, boost: true } }, seconds(BOOSTER.duration + 0.2));
+    expect(tank.overheated).toBe(true);
+    run(world, { [tank.id]: { throttle: 1 } }, seconds(BOOSTER.cooldown + 0.2));
+    expect(tank.overheated).toBe(false);
+    expect(tank.heat).toBe(0);
+    run(world, { [tank.id]: { throttle: 1, boost: true } }, seconds(1));
+    expect(tank.boosting).toBe(true);
+    expect(tank.overheated).toBe(false);
+  });
+});
+
+describe('roncsok', () => {
+  it('a kilőtt tank roncsa ott marad, ahol kilőtték', () => {
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
+    const target = world.addTank(140, 200, Math.PI, { team: TEAM.bots });
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    expect(target.alive).toBe(false);
+    expect(world.wrecks).toHaveLength(1);
+    expect(world.wrecks[0].x).toBeCloseTo(140, 1);
+    // a tank újraéledése után is megmarad
+    run(world, {}, seconds(TANK.respawnDelay + 1));
+    expect(world.wrecks).toHaveLength(1);
+  });
+
+  it('a roncs akadály: a tank nem megy át rajta, a lövedék megáll benne', () => {
+    const world = new World(arena());
+    world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, age: 0 });
+    const tank = world.addTank(120, 200, 0);
+    const events = [...run(world, { [tank.id]: { fire: true, aim: 0 } }, 2), ...run(world, {}, 40)];
+    const impact = events.find((e) => e.type === 'impact');
+    expect(impact && impact.type === 'impact' && impact.x).toBeCloseTo(160 - WRECK.radius, 1);
+    run(world, { [tank.id]: { throttle: 1 } }, seconds(4));
+    expect(Math.hypot(tank.x - 160, tank.y - 200)).toBeGreaterThanOrEqual(TANK.radius + WRECK.radius - 0.01);
+  });
+});
+
+describe('szintek', () => {
+  it('minden kilövés után nő a szint: nagyobb a tank, több az életereje, erősebb a lövedéke', () => {
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
+    const target = world.addTank(140, 200, Math.PI, { team: TEAM.bots });
+    expect(shooter.level).toBe(1);
+    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    expect(shooter.level).toBe(2);
+    expect(events.some((e) => e.type === 'levelup' && e.tank === shooter.id && e.level === 2)).toBe(true);
+    expect(tankSize(shooter)).toBeGreaterThan(tankSize(target));
+    expect(tankRadius(shooter)).toBeCloseTo(TANK.radius * (1 + LEVEL.size), 5);
+    expect(tankMaxHp(shooter)).toBe(TANK.maxHp + LEVEL.hp);
+
+    // a 2. szintű tank lövedéke többet sebez
+    const fresh = world.addTank(100, 260, 0, { team: TEAM.bots });
+    fresh.x = 140;
+    fresh.y = 260;
+    shooter.y = 260;
+    shooter.x = 100;
+    shooter.cooldown = 0;
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, 2);
+    run(world, {}, 40);
+    expect(fresh.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * (1 + LEVEL.damage), 5);
+  });
+
+  it('a botok nem lépnek szintet', () => {
+    const world = new World(arena());
+    const bot = world.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const victim = world.addTank(140, 200, Math.PI, { team: TEAM.player });
+    run(world, { [bot.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    expect(victim.alive).toBe(false);
+    expect(bot.kills).toBe(1);
+    expect(bot.level).toBe(1);
+  });
+
+  it('a szint nem nő a felső határ fölé', () => {
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
+    shooter.level = LEVEL.max;
+    world.addTank(140, 200, Math.PI, { team: TEAM.bots });
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(3));
+    expect(shooter.kills).toBe(1);
+    expect(shooter.level).toBe(LEVEL.max);
+  });
+});
+
+describe('a botok nem ragadnak be', () => {
+  it('zsákutcából kitolat és másfelé indul', () => {
+    // U alakú fal: a bot a zsák aljába néz
+    const terrain = arena(400);
+    terrain.walls.addSegment(200, 180, 240, 180);
+    terrain.walls.addSegment(240, 180, 240, 220);
+    terrain.walls.addSegment(240, 220, 200, 220);
+    const world = new World(terrain);
+    const bot = world.addTank(225, 200, 0, { team: TEAM.bots, bot: true });
+    const brain = new BotBrain(world, bot.id);
+    const inputs = new Map<number, TankInput>();
+    let farthest = 0;
+    for (let i = 0; i < seconds(25); i++) {
+      inputs.set(bot.id, brain.update(SIM_DT));
+      world.step(inputs);
+      farthest = Math.max(farthest, Math.hypot(bot.x - 225, bot.y - 200));
+    }
+    expect(farthest).toBeGreaterThan(30);
+  });
+
+  it('a végképp beszorult bot új helyre kerül, ha nincs a közelben ellenfél', () => {
+    // minden oldalról fal: innen nincs kiút
+    const terrain = arena(2000, { pickupSpot: () => ({ x: 1500, y: 1500 }) });
+    terrain.walls.addPolygon([195, 195, 205, 195, 205, 205, 195, 205]);
+    const world = new World(terrain);
+    world.addTank(1900, 100, 0, { team: TEAM.player });
+    const bot = world.addTank(200, 200, 0, { team: TEAM.bots, bot: true });
+    const brain = new BotBrain(world, bot.id);
+    const inputs = new Map<number, TankInput>();
+    for (let i = 0; i < seconds(40); i++) {
+      inputs.set(bot.id, brain.update(SIM_DT));
+      world.step(inputs);
+    }
+    expect(Math.hypot(bot.x - 200, bot.y - 200)).toBeGreaterThan(100);
+  });
+
+  it('a valódi pályán egyik bot sem áll egy helyben tartósan', () => {
+    const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+    const map = new GameMap(data);
+    const world = new World(map, 31);
+    // a játékos a kezdőponton áll: a botok megtalálják, üldözik, lövik
+    const spawn = map.spawnPoint();
+    const player = world.addTank(spawn.x, spawn.y, spawn.angle, { team: TEAM.player });
+    const bots = new BotManager(world);
+    bots.setCount(100, TEAM.bots, TEAM.player);
+    const inputs = new Map<number, TankInput>();
+    // botonként: a legutóbbi „horgony” hely és az ott töltött idő; a leghosszabb egy helyben töltött idő
+    const anchor = new Map<number, { x: number; y: number; since: number; worst: number; wx: number; wy: number }>();
+    for (const t of world.tanks) if (t.bot) anchor.set(t.id, { x: t.x, y: t.y, since: 0, worst: 0, wx: t.x, wy: t.y });
+    let relocated = 0;
+    const total = seconds(240);
+    for (let i = 0; i < total; i++) {
+      bots.update(inputs, SIM_DT);
+      world.step(inputs);
+      relocated += world.events.filter((e) => e.type === 'respawn' && e.tank !== player.id).length;
+      if (i % 30 !== 0) continue;
+      for (const t of world.tanks) {
+        const a = anchor.get(t.id);
+        if (!a) continue;
+        // aki a játékos közelében van, az joggal áll és lő: az nem számít
+        const fighting = Math.hypot(t.x - player.x, t.y - player.y) < BOT.sight + 10;
+        if (!t.alive || fighting || Math.hypot(t.x - a.x, t.y - a.y) > 8) {
+          a.x = t.x;
+          a.y = t.y;
+          a.since = i;
+        }
+        if ((i - a.since) * SIM_DT > a.worst) {
+          a.worst = (i - a.since) * SIM_DT;
+          a.wx = a.x;
+          a.wy = a.y;
+        }
+      }
+    }
+    const ranked = [...anchor.values()].sort((a, b) => b.worst - a.worst);
+    const longest = ranked[0].worst;
+    console.log(
+      `100 bot, 4 perc: a leghosszabb egy helyben töltött idő ${longest.toFixed(1)} mp; áthelyezés: ${relocated}; ` +
+        ranked.slice(0, 6).map((a) => `${a.worst.toFixed(0)} mp @ (${a.wx.toFixed(0)}, ${a.wy.toFixed(0)})`).join(', '),
+    );
+    // áthelyezésre csak kivételesen van szükség
+    expect(relocated).toBeLessThanOrEqual(3);
+    // egyik bot sem tölt 30 másodpercnél többet 8 méteres körön belül
+    expect(longest).toBeLessThan(30);
   });
 });

@@ -9,7 +9,7 @@ export interface Settings {
   bots: number;
 }
 
-export const BOT_LIMITS = { min: 0, max: 12, initial: 3 } as const;
+export const BOT_LIMITS = { min: 0, max: 100, initial: 3 } as const;
 
 const DEFAULTS: Settings = { bots: BOT_LIMITS.initial };
 

@@ -10,6 +10,8 @@ import { HULL_SIZE, TEX, TURRET_SIZE } from './textures';
 export const GTEX = {
   enemyHull: ['enemy-hull-0', 'enemy-hull-1', 'enemy-hull-2'],
   enemyTurret: 'enemy-turret',
+  wreckHull: 'wreck-hull',
+  wreckTurret: 'wreck-turret',
   rocket: 'rocket',
   oil: 'oil-slick',
   ring: 'fx-ring',
@@ -49,7 +51,31 @@ function recolored(scene: Phaser.Scene, source: string, key: string, w: number, 
   });
 }
 
+/** Kiégett roncs: a tank textúrája megfeketedve, rozsdás foltokkal. */
+function charred(scene: Phaser.Scene, source: string, key: string, w: number, h: number): void {
+  canvasTexture(scene, key, w, h, (ctx) => {
+    const src = scene.textures.get(source).getSourceImage() as HTMLCanvasElement;
+    ctx.drawImage(src, 0, 0);
+    const image = ctx.getImageData(0, 0, w, h);
+    const d = image.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      const px = (i / 4) % w;
+      const py = Math.floor(i / 4 / w);
+      const lum = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) * 0.42;
+      // szabálytalan rozsdafoltok
+      const rust = (Math.sin(px * 0.9) + Math.sin(py * 1.3 + px * 0.4)) > 1.1 ? 22 : 0;
+      d[i] = Math.min(255, lum + 14 + rust);
+      d[i + 1] = lum + 6 + rust * 0.4;
+      d[i + 2] = lum;
+    }
+    ctx.putImageData(image, 0, 0);
+  });
+}
+
 export function createGameTextures(scene: Phaser.Scene): void {
+  charred(scene, TEX.hull[0], GTEX.wreckHull, HULL_SIZE.w, HULL_SIZE.h);
+  charred(scene, TEX.turret, GTEX.wreckTurret, TURRET_SIZE.w, TURRET_SIZE.h);
   TEX.hull.forEach((key, i) => recolored(scene, key, GTEX.enemyHull[i], HULL_SIZE.w, HULL_SIZE.h));
   recolored(scene, TEX.turret, GTEX.enemyTurret, TURRET_SIZE.w, TURRET_SIZE.h);
 

@@ -3,7 +3,7 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { GameMap, pointInPolygon, SpatialIndex } from '../src/game/maps/GameMap';
+import { GameMap, nearestOnPolyline, pointInPolygon, SpatialIndex } from '../src/game/maps/GameMap';
 import { renderCanopy, renderMap } from '../src/game/maps/raster';
 import { placeRoadLabels } from '../src/game/maps/roadLabels';
 import type { MapData } from '../src/game/maps/types';
@@ -239,6 +239,67 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
     expect(data.meta.streetscape.shoulder).toBeLessThan(1);
   });
 
+  it('a főút szélesebb a lakóutcáknál, és egyik közút úttestjére sem lóg be épület', () => {
+    const widths = (kind: string): number[] => data.roads.filter((r) => r.kind === kind).map((r) => r.width);
+    const median = (a: number[]): number => [...a].sort((x, y) => x - y)[a.length >> 1];
+    expect(median(widths('secondary'))).toBeGreaterThanOrEqual(15);
+    expect(median(widths('residential'))).toBeGreaterThanOrEqual(10);
+    expect(median(widths('secondary'))).toBeGreaterThan(median(widths('residential')));
+
+    let checked = 0;
+    for (const road of data.roads) {
+      if (!['secondary', 'primary', 'tertiary', 'residential', 'living_street', 'unclassified'].includes(road.kind)) continue;
+      const half = road.width / 2 - 0.2;
+      for (let i = 0; i + 3 < road.pts.length; i += 2) {
+        const dx = road.pts[i + 2] - road.pts[i];
+        const dy = road.pts[i + 3] - road.pts[i + 1];
+        const len = Math.hypot(dx, dy);
+        for (let d = 0; d <= len; d += 3) {
+          for (const side of [-1, 0, 1]) {
+            const x = road.pts[i] + (dx * d) / (len || 1) - (dy / (len || 1)) * half * side;
+            const y = road.pts[i + 1] + (dy * d) / (len || 1) + (dx / (len || 1)) * half * side;
+            checked++;
+            const near = map.buildingIndex.query(x, y, x, y).map((n) => data.buildings[n]);
+            expect(near.some((b) => pointInPolygon(x, y, b.pts)), `épület az úttesten: ${road.name ?? road.kind} (${x.toFixed(0)}, ${y.toFixed(0)})`).toBe(false);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(10000);
+  });
+
+  it('a fák és az oszlopok nem falak: kidönthetők, és a kidőlt fa eltűnik a lombrétegről', () => {
+    expect(map.fellables.count).toBe(map.trees.length + data.decor.poles.length / 2);
+    const index = map.trees.findIndex((t) => map.treeIndex.query(t.x - 9, t.y - 9, t.x + 9, t.y + 9).every((n) => map.trees[n] === t || Math.hypot(map.trees[n].x - t.x, map.trees[n].y - t.y) > 9));
+    expect(index).toBeGreaterThanOrEqual(0);
+    const tree = map.trees[index];
+    // a törzs helyén nincs ütközés
+    expect(map.walls.resolveCircle(tree.x, tree.y, 0.3).hit).toBe(false);
+    const size = 96;
+    const target = { buf: new Uint32Array(size * size), w: size, h: size, ox: Math.round(tree.x * 12 - 48), oy: Math.round(tree.y * 12 - 48), scale: 12, detail: true };
+    renderCanopy(map, target);
+    const before = target.buf.slice();
+    map.fellables.fell(index, 0.5);
+    renderCanopy(map, target);
+    expect(target.buf[48 * size + 48] >>> 24).toBe(0); // a kidőlt fa koronája nincs a lombrétegen
+    expect(target.buf.some((px, i) => px !== before[i])).toBe(true);
+    expect(map.underCanopy(tree.x, tree.y)).toBe(false);
+    map.resetDamage();
+    expect(map.fellables.fallen[index]).toBe(0);
+  });
+
+  it('a lövésnyom megmarad a pályán és megjelenik a talajon', () => {
+    const [x, y] = [th.x + 48, th.y - 4]; // a Pécsi utca úttestje
+    const before = renderAt(x, y, 64);
+    expect(map.addScar(x, y, 1.5)).toBe(true);
+    expect(map.addScar(x + 0.1, y, 1.0)).toBe(false); // ugyanoda kisebb nyom nem kerül
+    const after = renderAt(x, y, 64);
+    const changed = after.filter((px, i) => px !== before[i]).length;
+    expect(changed).toBeGreaterThan(64 * 64 * 0.1);
+    map.resetDamage();
+    expect(renderAt(x, y, 64).every((px, i) => px === before[i])).toBe(true);
+  });
+
   it('a közutak legalább kétsávosak a tankhoz mérten', () => {
     for (const road of data.roads) {
       if (road.kind === 'residential' || road.kind === 'secondary') {
@@ -253,8 +314,8 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
     expect(labels.filter((l) => l.text === 'Pécsi utca').length).toBeGreaterThan(5);
     for (const name of ['Kiskozári utca', 'Csikósvölgy']) expect(labels.some((l) => l.text === name), name).toBe(true);
     for (const label of labels) {
-      const near = map.nearestRoad(label.x, label.y, 4);
-      expect(near?.road.name, `${label.text} (${label.x.toFixed(0)}, ${label.y.toFixed(0)})`).toBe(label.text);
+      const onOwnRoad = data.roads.some((road) => road.name === label.text && nearestOnPolyline(label.x, label.y, road.pts).dist <= road.width / 2);
+      expect(onOwnRoad, `${label.text} (${label.x.toFixed(0)}, ${label.y.toFixed(0)})`).toBe(true);
       expect(Math.abs(label.angle)).toBeLessThanOrEqual(Math.PI / 2 + 1e-9);
     }
   });

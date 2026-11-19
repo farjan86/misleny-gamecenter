@@ -4,7 +4,7 @@
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
-import { angleDiff, TANK, type TankState } from '../sim/world';
+import { angleDiff, tankMaxHp, tankSize, type TankState } from '../sim/world';
 import { GTEX } from './gameTextures';
 import { TEX, TURRET_PIVOT, TURRET_SIZE } from './textures';
 
@@ -30,6 +30,7 @@ export class TankView {
   private readonly prev: Snapshot;
   private readonly scale: number;
   private frame = -1;
+  private level = 0;
   private shown = true;
   /** az utolsó kirajzolt (interpolált) hely világpixelben */
   px = 0;
@@ -96,7 +97,15 @@ export class TankView {
     const turret = p.turret + angleDiff(tank.turretAngle, p.turret) * alpha;
     this.px = x;
     this.py = y;
-    const off = 6 * this.scale;
+    // szintlépéskor a tank megnő
+    const size = this.scale * tankSize(tank);
+    if (tank.level !== this.level) {
+      this.level = tank.level;
+      this.shadow.setScale(size);
+      this.hull.setScale(size);
+      this.turret.setScale(size);
+    }
+    const off = 6 * size;
     this.shadow.setPosition(x + off, y + off).setRotation(hull);
     this.hull.setPosition(x, y).setRotation(hull);
     // lánctalp-animáció a megtett út szerint (tolatásnál visszafelé); textúrát csak váltáskor cserélünk
@@ -118,19 +127,24 @@ export class TankView {
         .setPosition(x, y)
         .setTint(invulnerable ? 0xffd84a : 0x5ab4ff)
         .setAlpha(invulnerable ? 0.55 + 0.4 * pulse : 0.4 + 0.18 * tank.shield)
-        .setScale(this.scale * (invulnerable ? 1.02 + 0.06 * pulse : 0.96));
+        .setScale(size * (invulnerable ? 1.02 + 0.06 * pulse : 0.96));
     } else if (this.ring.visible) {
       this.ring.setVisible(false);
     }
 
     // életerősáv
-    const ratio = Math.max(0, tank.hp / TANK.maxHp);
-    const top = y - BAR.above * this.scale;
+    const ratio = Math.max(0, tank.hp / tankMaxHp(tank));
+    const top = y - BAR.above * size;
     this.barBack.setPosition(x, top);
     this.barFill
       .setPosition(x - (BAR.width / 2) * this.scale, top)
       .setDisplaySize(Math.max(1, BAR.width * ratio * this.scale), BAR.height * this.scale)
       .setTint(this.enemy ? 0xe0483a : ratio > 0.5 ? 0x5ad24a : ratio > 0.25 ? 0xe8c23a : 0xe0483a);
+  }
+
+  /** A látómezőn kívüli tank elrejtése (a helyét ilyenkor nem kell frissíteni). */
+  hide(): void {
+    this.show(false);
   }
 
   /** A fa alatti jelölő finoman jelenik meg és tűnik el. */
