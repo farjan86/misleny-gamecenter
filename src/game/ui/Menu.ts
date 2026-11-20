@@ -8,12 +8,15 @@ import type { NetClient, NetStatus } from '../net/NetClient';
 import { CHAT, cleanCode, ROOM_CODE, type OnlinePlayer, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
 import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
 import { Sfx } from '../systems/audio';
-import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, WEATHERS, type GameMode, type MatchSettings } from '../sim/match';
+import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings } from '../sim/match';
+import { HULL_SIZE, LOOK_TIER_NAMES, TANK_LOOK_HINT, TANK_LOOK_NAMES, tankSprites, TURRET_PIVOT } from '../entities/tankTextures';
+import { LEVEL } from '../sim/world';
+import { buildGuide, buildHowTo } from './Guide';
 import { guardLeave } from './leaveGuard';
 import { MenuArt } from './MenuArt';
 
-type Screen = 'main' | 'settings' | 'lobby' | 'create' | 'room' | 'results';
-const SCREENS: Screen[] = ['main', 'settings', 'lobby', 'create', 'room', 'results'];
+type Screen = 'main' | 'settings' | 'guide' | 'garage' | 'lobby' | 'create' | 'room' | 'results';
+const SCREENS: Screen[] = ['main', 'settings', 'guide', 'garage', 'lobby', 'create', 'room', 'results'];
 
 const LEVEL_NAME = ['nincs', 'nagyon kevés', 'kevés', 'közepes', 'sok', 'nagyon sok'];
 const SKILL_NAME = ['', 'kezdő', 'gyenge', 'közepes', 'ügyes', 'mesterlövész'];
@@ -22,6 +25,8 @@ const WEATHER_NAME = { day: 'Nappal', rain: 'Eső', night: 'Este' } as const;
 const STATUS_NAME = { waiting: 'Játékra vár', starting: 'Betelt – indul', playing: 'Betelt – játékban' } as const;
 /** az oldal újratöltése után egyből ide térjen vissza a menü */
 const RETURN_KEY = 'tank-misleny.return';
+/** nyitva van-e a főképernyőn a játékmenet leírása */
+const HOWTO_KEY = 'tank-misleny.howto';
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -249,6 +254,33 @@ export class Menu {
       if (ev.key === 'Enter') submit('login');
     });
     el('main-settings').onclick = () => this.show('settings');
+    // a játékmenet leírása a főképernyőn; hogy nyitva van-e, azt a böngésző megjegyzi
+    buildHowTo(el('howto-body'));
+    const howto = el<HTMLDetailsElement>('howto');
+    try {
+      if (window.localStorage.getItem(HOWTO_KEY) === '0') howto.open = false;
+    } catch {
+      /* letiltott tárhely: nyitva marad */
+    }
+    howto.addEventListener('toggle', () => {
+      try {
+        window.localStorage.setItem(HOWTO_KEY, howto.open ? '1' : '0');
+      } catch {
+        /* nem menthető: csak erre az alkalomra érvényes */
+      }
+    });
+    // az útmutató megnyitáskor épül fel: a tárgyaknál a most beállított billentyűk állnak
+    el('main-guide').onclick = () => {
+      buildGuide(el('guide-body'), this.settings.keys);
+      this.show('guide');
+      el('guide-body').scrollTop = 0;
+    };
+    el('guide-back').onclick = () => this.show('main');
+    el('main-garage').onclick = () => {
+      this.buildGarage();
+      this.show('garage');
+    };
+    el('garage-back').onclick = () => this.show('main');
     el('main-multiplayer').onclick = () => this.show('lobby');
     const single = (): void => {
       this.single = true;
@@ -417,7 +449,7 @@ export class Menu {
     const submit = (): void => {
       if (!this.codeRoom) return;
       if (cleanCode(input.value).length < ROOM_CODE.min) return this.error('Add meg a belépőkódot.');
-      this.net.send({ t: 'join', room: this.codeRoom, code: input.value });
+      this.net.send({ t: 'join', room: this.codeRoom, code: input.value, look: this.settings.look });
     };
     el('code-ok').onclick = submit;
     el('code-cancel').onclick = () => this.closeCode();
@@ -470,7 +502,7 @@ export class Menu {
       join.onclick = () => {
         if (!open) return;
         if (room.locked) this.askCode(room);
-        else this.net.send({ t: 'join', room: room.id });
+        else this.net.send({ t: 'join', room: room.id, look: this.settings.look });
       };
       row.appendChild(join);
       list.appendChild(row);
@@ -491,7 +523,7 @@ export class Menu {
       if (this.single) return this.onSingle(settings, this.net.name || this.settings.name || 'Játékos');
       const code = el<HTMLInputElement>('create-code').value;
       if (code.trim() && cleanCode(code).length < ROOM_CODE.min) return this.error(`A belépőkód legalább ${ROOM_CODE.min} karakter legyen.`);
-      this.net.send({ t: 'create', settings, ...(code.trim() ? { code } : {}) });
+      this.net.send({ t: 'create', settings, look: this.settings.look, ...(code.trim() ? { code } : {}) });
     };
     for (const name of this.sliders) el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => this.updateCreate());
     // játékmód: a választható módok listája (ha új mód készül, magától megjelenik itt)
@@ -693,6 +725,58 @@ export class Menu {
       room.status === 'starting' ? `Mindenki megvan – indul: ${countdown}…` : `Várakozás a játékosokra: ${room.players.length} / ${room.settings.maxPlayers}`;
   }
 
+  // --- tankválasztó ---------------------------------------------------------------
+
+  /** Egy tank képe (test + torony) külön vásznon; scale: nagyítás. */
+  private tankPicture(look: number, tier: number, scale: number, marks = 0): HTMLCanvasElement {
+    const sprites = tankSprites(tier, 'own', marks, look);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(HULL_SIZE.w * scale);
+    canvas.height = Math.round(HULL_SIZE.h * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+    ctx.imageSmoothingEnabled = false;
+    ctx.scale(scale, scale);
+    ctx.drawImage(sprites.hull[0], 0, 0);
+    ctx.drawImage(sprites.turret, HULL_SIZE.w / 2 - TURRET_PIVOT.x, HULL_SIZE.h / 2 - TURRET_PIVOT.y);
+    return canvas;
+  }
+
+  /** A három alaptank kártyái, és a kiválasztott tank fejlődése az osztályokon át. */
+  private buildGarage(): void {
+    const cards = el('garage-cards');
+    cards.replaceChildren();
+    TANK_LOOK_NAMES.forEach((name, look) => {
+      const card = document.createElement('div');
+      card.className = look === this.settings.look ? 'garage-card selected' : 'garage-card';
+      card.setAttribute('role', 'button');
+      card.appendChild(this.tankPicture(look, 0, 2.4));
+      const text = document.createElement('div');
+      text.innerHTML = `<b>${esc(name)}</b><span>${esc(TANK_LOOK_HINT[look])}</span>`;
+      card.appendChild(text);
+      card.onclick = () => {
+        this.settings.look = look;
+        this.settings = saveSettings(this.settings);
+        this.buildGarage();
+      };
+      cards.appendChild(card);
+    });
+    const look = this.settings.look;
+    el('garage-title').textContent = `${TANK_LOOK_NAMES[look]} – így fejlődik a szintekkel`;
+    const row = el('garage-tiers');
+    row.replaceChildren();
+    LOOK_TIER_NAMES[look].forEach((tierName, tier) => {
+      const item = document.createElement('div');
+      item.className = 'garage-tier';
+      item.appendChild(this.tankPicture(look, tier, 1.45, Math.min(2, tier)));
+      const label = document.createElement('span');
+      const next = LEVEL.tiers[tier + 1];
+      label.innerHTML = `<b>${esc(tierName)}</b><br />${LEVEL.tiers[tier]}${next ? `–${next - 1}` : `–${LEVEL.max}`}. szint`;
+      item.appendChild(label);
+      row.appendChild(item);
+    });
+  }
+
   // --- eredmény ------------------------------------------------------------------
 
   showResults(winner: string | null, standings: Standing[], myId: string): void {
@@ -709,15 +793,45 @@ export class Menu {
           : 'Lejárt az idő – döntetlen';
     const table = el('results-table');
     table.replaceChildren();
-    for (const s of standings) {
-      const row = document.createElement('div');
-      row.className = s === me ? 'player-row me' : 'player-row';
-      const accuracy = s.accuracy >= 0 ? ` · ${s.accuracy}% pontosság` : '';
-      row.innerHTML =
-        `<span>${s.place}. ${esc(s.name)}</span>` +
-        `<span>${s.kills} kilövés · ${s.deaths} halál · ${s.level}. szint<br /><span class="stats">legjobb sorozat: ${s.streak} · ledöntött ház: ${s.wrecked}${accuracy}</span></span>`;
-      table.appendChild(row);
+    // a meccs legjobbja: a statisztikákból számolt pontszám szerint (nem feltétlenül a győztes)
+    const mvp = standings.find((s) => s.mvp);
+    if (mvp) {
+      const box = document.createElement('div');
+      box.className = 'mvp';
+      const why = [
+        `${mvp.kills} kilövés`,
+        `${mvp.damage} sebzés`,
+        mvp.accuracy >= 0 ? `${mvp.accuracy}% pontosság` : '',
+        mvp.streak > 1 ? `${mvp.streak}-es sorozat` : '',
+      ].filter(Boolean);
+      box.innerHTML = `<span class="mvp-star">★</span> A meccs legjobbja: <b>${esc(mvp.name)}</b> – ${mvp.score} pont<br /><span class="stats">${why.join(' · ')}</span>`;
+      table.appendChild(box);
     }
+    const ratio = (s: Standing): string => (s.deaths > 0 ? (s.kills / s.deaths).toFixed(1).replace('.', ',') : s.kills > 0 ? `${s.kills},0` : '–');
+    const grid = document.createElement('table');
+    grid.className = 'results-grid';
+    grid.innerHTML =
+      '<thead><tr><th>#</th><th class="name">Játékos</th><th title="Teljesítménypont a statisztikákból">Pont</th><th>Kilövés</th><th>Halál</th><th title="Kilövés / halál">Arány</th>' +
+      '<th title="Az ellenfeleknek okozott sebzés">Sebzés</th><th title="Elszenvedett sebzés">Kapott</th><th>Találat / lövés</th><th>Pontosság</th><th title="Leghosszabb kilövéssorozat halál nélkül">Sorozat</th><th title="Ledöntött házak">Ház</th><th>Szint</th></tr></thead>';
+    const body = document.createElement('tbody');
+    for (const s of standings) {
+      const row = document.createElement('tr');
+      row.className = [s === me ? 'me' : '', s.mvp ? 'best' : '', s.gone ? 'gone' : ''].filter(Boolean).join(' ');
+      row.innerHTML =
+        `<td>${s.place}.</td><td class="name">${s.mvp ? '<span class="mvp-star">★</span> ' : ''}${esc(s.name)}${s.gone ? ' <span class="stats">(kilépett)</span>' : ''}</td>` +
+        `<td class="score">${s.score}</td><td>${s.kills}</td><td>${s.deaths}</td><td>${ratio(s)}</td><td>${s.damage}</td><td>${s.taken}</td>` +
+        `<td>${s.hits} / ${s.shots}</td><td>${s.accuracy >= 0 ? `${s.accuracy}%` : '–'}</td><td>${s.streak}</td><td>${s.wrecked}</td><td>${s.level}.</td>`;
+      body.appendChild(row);
+    }
+    grid.appendChild(body);
+    const scroll = document.createElement('div');
+    scroll.className = 'results-scroll';
+    scroll.appendChild(grid);
+    table.appendChild(scroll);
+    const note = document.createElement('p');
+    note.className = 'note results-note';
+    note.textContent = `Pont: kilövés ${SCORE.kill}, halál ${SCORE.death}, sebzés pontonként ${String(SCORE.damage).replace('.', ',')}, sorozat ${SCORE.streak}, pontosság %-onként ${SCORE.accuracy} (legalább ${SCORE.accuracyShots} lövésnél), ledöntött ház ${SCORE.wrecked} (legfeljebb ${SCORE.wreckedMax}), szint ${SCORE.level}. A helyezés a kilövések száma szerint dől el.`;
+    table.appendChild(note);
     // különdíjak: több játékosnál az kapja, aki a legjobb az adott dologban
     if (!solo) {
       const best = (value: (s: Standing) => number, text: (s: Standing) => string): string => {

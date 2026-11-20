@@ -10,7 +10,7 @@
 import { BOT_LEVELS, BotManager, botTuning } from './bots';
 import { BARREL, SUPER, WORKSHOP } from './gadgets';
 import { Traffic } from './traffic';
-import { ANY_PLAYER, TEAM, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
+import { ANY_PLAYER, cleanLook, TEAM, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
 
 export interface Area {
   minX: number;
@@ -173,6 +173,8 @@ export interface MatchPlayer {
   id: string;
   name: string;
   tankId: number;
+  /** a választott alaptank (csak megjelenés) */
+  look: number;
   /** kilépett vagy megszakadt a kapcsolata */
   gone: boolean;
 }
@@ -192,9 +194,53 @@ export interface MatchStanding {
   wrecked: number;
   /** a lövések pontossága százalékban (−1: nem lőtt) */
   accuracy: number;
+  /** leadott lövések és találatok */
+  shots: number;
+  hits: number;
+  /** az ellenséges tankoknak okozott, illetve az elszenvedett sebzés */
+  damage: number;
+  taken: number;
+  /** teljesítménypont a statisztikákból (lásd matchScore) */
+  score: number;
+  /** a meccs legjobbja: a legtöbb teljesítménypontot gyűjtő, bent maradt játékos (több játékosnál) */
+  mvp: boolean;
 }
 
-type Final = Pick<MatchStanding, 'kills' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy'>;
+type Final = Pick<MatchStanding, 'kills' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy' | 'shots' | 'hits' | 'damage' | 'taken'>;
+
+/** A teljesítménypont összetevői. */
+export const SCORE = {
+  kill: 100,
+  death: -50,
+  /** az okozott sebzés minden pontja */
+  damage: 0.3,
+  /** a leghosszabb, halál nélküli kilövéssorozat minden tagja */
+  streak: 20,
+  /** a pontosság minden százaléka – csak ha legalább ennyi lövést leadott */
+  accuracy: 1,
+  accuracyShots: 10,
+  /** ledöntött házanként, de legfeljebb ennyi */
+  wrecked: 10,
+  wreckedMax: 100,
+  /** a meccs végi szint minden foka az első fölött */
+  level: 15,
+} as const;
+
+/**
+ * Teljesítménypont: nem csak a kilövések száma számít, hanem az is, mennyit sebzett,
+ * milyen pontosan lőtt, milyen sorozatot ért el, és hányszor lőtték ki. Nullánál kevesebb nem lehet.
+ */
+export function matchScore(s: Final): number {
+  const points =
+    s.kills * SCORE.kill +
+    s.deaths * SCORE.death +
+    s.damage * SCORE.damage +
+    s.streak * SCORE.streak +
+    (s.shots >= SCORE.accuracyShots && s.accuracy > 0 ? s.accuracy * SCORE.accuracy : 0) +
+    Math.min(SCORE.wreckedMax, s.wrecked * SCORE.wrecked) +
+    (s.level - 1) * SCORE.level;
+  return Math.max(0, Math.round(points));
+}
 
 const finalOf = (tank: TankState): Final => ({
   kills: tank.kills,
@@ -203,6 +249,10 @@ const finalOf = (tank: TankState): Final => ({
   streak: tank.bestStreak,
   wrecked: tank.wrecked,
   accuracy: tank.shots > 0 ? Math.min(100, Math.round((tank.hits / tank.shots) * 100)) : -1,
+  shots: tank.shots,
+  hits: tank.hits,
+  damage: Math.round(tank.dealt),
+  taken: Math.round(tank.taken),
 });
 
 /** A játékosok csapatszáma: mindenki külön csapat (mindenki mindenki ellen). */
@@ -232,7 +282,7 @@ export class Match {
   constructor(
     terrain: Terrain,
     readonly settings: MatchSettings,
-    entrants: readonly { id: string; name: string }[],
+    entrants: readonly { id: string; name: string; look?: number }[],
     seed: number,
   ) {
     this.plan = matchPlan(settings);
@@ -244,8 +294,8 @@ export class Match {
     entrants.forEach((entrant, i) => {
       // a játékosok egymástól távol, véletlen helyen születnek
       const spot = this.world.spawnSpot() ?? { x: (area.minX + area.maxX) / 2, y: (area.minY + area.maxY) / 2 };
-      const tank = this.world.addTank(spot.x, spot.y, this.world.rnd() * Math.PI * 2, { team: PLAYER_TEAM + i });
-      this.players.push({ id: entrant.id, name: entrant.name, tankId: tank.id, gone: false });
+      const tank = this.world.addTank(spot.x, spot.y, this.world.rnd() * Math.PI * 2, { team: PLAYER_TEAM + i, look: cleanLook(entrant.look) });
+      this.players.push({ id: entrant.id, name: entrant.name, tankId: tank.id, look: tank.look, gone: false });
     });
     this.bots = new BotManager(this.world, botTuning(settings.botSkill, settings.botAggression));
     this.bots.setCount(this.plan.bots, TEAM.bots, ANY_PLAYER);
@@ -333,8 +383,8 @@ export class Match {
       .map((p) => {
         // a kilépett játékos tankja már nincs a világban: az utolsó állása számít
         const live = this.world.tank(p.tankId);
-        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1 };
-        return { id: p.id, name: p.name, place: 0, gone: p.gone, ...final };
+        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 };
+        return { id: p.id, name: p.name, place: 0, gone: p.gone, ...final, score: matchScore(final), mvp: false };
       })
       // a kilépettek a bent lévők mögé kerülnek
       .sort((a, b) => Number(a.gone) - Number(b.gone) || b.kills - a.kills || a.deaths - b.deaths);
@@ -342,6 +392,11 @@ export class Match {
       const prev = list[i - 1];
       s.place = prev && prev.gone === s.gone && prev.kills === s.kills && prev.deaths === s.deaths ? prev.place : i + 1;
     });
+    // a meccs legjobbja: a legtöbb pontot gyűjtő, bent maradt játékos (egyenlőségnél az előrébb álló)
+    if (list.length > 1) {
+      const best = list.filter((s) => !s.gone).sort((a, b) => b.score - a.score)[0];
+      if (best && best.score > 0) best.mvp = true;
+    }
     return list;
   }
 }

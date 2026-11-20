@@ -7,6 +7,7 @@ import { Structures } from '../sim/structures';
 import type { NetRoad } from '../sim/roadnet';
 import type { RoadGuide, Terrain, Weather } from '../sim/world';
 import type { LandmarkBuilding, MapData, RoadFeature } from './types';
+import { WORKSHOP } from '../sim/gadgets';
 
 export type Box = [minX: number, minY: number, maxX: number, maxY: number];
 
@@ -210,6 +211,8 @@ export class GameMap implements Terrain {
   readonly landmarkBuildings = new Map<number, LandmarkBuilding>();
   /** burkolt felületek az utakon kívül (tér, aszfaltozott udvar) */
   private pavedRings: number[][] = [];
+  /** a tankkal járhatatlan területek (víz, medence) körvonalai és befoglaló dobozuk */
+  private solidRings: { ring: number[]; box: Box }[] = [];
   private pavedBox: Box = [0, 0, -1, -1];
   /** a közutak a hosszukkal, a véletlen helyek kisorsolásához (első használatkor épül fel) */
   private spotRoads: { road: RoadFeature; length: number }[] | null = null;
@@ -257,7 +260,11 @@ export class GameMap implements Terrain {
       }),
     );
     for (const a of data.areas) {
-      if (SOLID_AREAS.has(a.kind)) for (const ring of a.rings) walls?.addPolygon(ring);
+      if (!SOLID_AREAS.has(a.kind)) continue;
+      for (const ring of a.rings) {
+        walls?.addPolygon(ring);
+        this.solidRings.push({ ring, box: boxOf(ring) });
+      }
     }
     for (const b of data.barriers) walls?.addPolyline(b.pts);
 
@@ -476,38 +483,58 @@ export class GameMap implements Terrain {
     return null;
   }
 
+  /** Igaz, ha a pont tankkal járhatatlan területen (vízen, medencében) van. */
+  insideSolid(x: number, y: number): boolean {
+    for (const s of this.solidRings) {
+      if (x < s.box[0] || y < s.box[1] || x > s.box[2] || y > s.box[3]) continue;
+      if (pointInPolygon(x, y, s.ring)) return true;
+    }
+    return false;
+  }
+
   /**
-   * Véletlen hely egy javítóműhelynek: egy út közelében, de nem az úttesten,
-   * ahol `radius` sugarú körben nincs fal (épület, kerítés), a játéktéren belül.
-   * null, ha a kisorsolt hely nem jó.
+   * Véletlen hely egy javítóműhelynek: egy út mellett, de nem az úttesten. A
+   * csarnok (`radius` a befoglaló köre) és körülötte egy kis sáv szabad: nincs
+   * benne fal, épület, víz, úttest, fa lombja; és az útról egy tank egyenesen be
+   * tud hajtani (nincs útban fal, kerítés vagy víz). null, ha a hely nem jó.
    */
   workshopSpot(rnd: () => number, radius: number): { x: number; y: number } | null {
     const area = this.bounds ?? { minX: 0, minY: 0, maxX: this.width, maxY: this.height };
-    let x: number;
-    let y: number;
     const road = this.pickupSpot(rnd);
-    if (road && rnd() < 0.85) {
-      // egy út mellé, attól néhány méterre
-      const angle = rnd() * Math.PI * 2;
-      const dist = radius + 4 + rnd() * 14;
-      x = road.x + Math.cos(angle) * dist;
-      y = road.y + Math.sin(angle) * dist;
-    } else {
-      x = area.minX + rnd() * (area.maxX - area.minX);
-      y = area.minY + rnd() * (area.maxY - area.minY);
-    }
+    if (!road) return null;
+    // egy út mellé, attól néhány méterre
+    const angle = rnd() * Math.PI * 2;
+    const dist = radius + 4 + rnd() * 14;
+    const x = road.x + Math.cos(angle) * dist;
+    const y = road.y + Math.sin(angle) * dist;
     const margin = radius + 2;
     if (x < area.minX + margin || y < area.minY + margin || x > area.maxX - margin || y > area.maxY - margin) return null;
-    if (this.walls.resolveCircle(x, y, radius).hit) return null;
-    // sem a közepe, sem a sarkai nem eshetnek úttestre vagy épületbe
-    // (5 × 5 pontos rács a csarnok alapján) – és fa lombja alá sem, mert az eltakarná
-    const grid = [-0.72, -0.36, 0, 0.36, 0.72];
-    for (const [ox, oy] of grid.flatMap((gx) => grid.map((gy) => [gx, gy]))) {
-      const px = x + ox * radius;
-      const py = y + oy * radius;
-      if (this.speedFactor(px, py) >= 1 || this.underCanopy(px, py)) return null;
-      for (const n of this.buildingIndex.query(px, py, px, py)) if (pointInPolygon(px, py, this.data.buildings[n].pts)) return null;
+    // a csarnok körül egy kis sáv is szabad, hogy a szomszéd ház teteje se lógjon bele
+    if (this.walls.resolveCircle(x, y, radius + 1.5).hit) return null;
+    // a csarnok teljes alapja (7 × 7 pontos rács, a szélén túl is):
+    // nem lehet úttesten, épületben, vízen, és a belseje fa lombja alatt sem (eltakarná)
+    const reachX = WORKSHOP.width / 2 + 1;
+    const reachY = WORKSHOP.height / 2 + 1;
+    for (let i = 0; i <= 6; i++) {
+      for (let j = 0; j <= 6; j++) {
+        const px = x + (i / 3 - 1) * reachX;
+        const py = y + (j / 3 - 1) * reachY;
+        if (this.speedFactor(px, py) >= 1 || this.insideSolid(px, py)) return null;
+        // a lomb csak a csarnok belsejében zavar (a szélénél a tető úgyis fölötte van)
+        if (i > 0 && i < 6 && j > 0 && j < 6 && this.underCanopy(px, py)) return null;
+        for (const n of this.buildingIndex.query(px, py, px, py)) if (pointInPolygon(px, py, this.data.buildings[n].pts)) return null;
+      }
     }
+    // be lehet hajtani: az útról a csarnok közepéig egy tank szélességű sávban nincs fal és víz
+    const dx = x - road.x;
+    const dy = y - road.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    for (const side of [-2.2, 0, 2.2]) {
+      if (this.walls.raycast(road.x + nx * side, road.y + ny * side, x + nx * side, y + ny * side)) return null;
+    }
+    for (let t = 0; t <= len; t += 2) if (this.insideSolid(road.x + (dx * t) / len, road.y + (dy * t) / len)) return null;
     return { x, y };
   }
 

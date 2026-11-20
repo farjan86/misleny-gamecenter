@@ -233,7 +233,7 @@ describe('olajfolt', () => {
     world.addPickup('oil', 500, 500);
     run(world, { [owner.id]: { drop: true } }, 2);
     const oil = world.oils[0];
-    const victim = world.addTank(oil.x - 60, oil.y, 0, { team: TEAM.bots });
+    const victim = world.addTank(oil.x - 56.6 - OIL.radius, oil.y, 0, { team: TEAM.bots });
     const events = run(world, { [victim.id]: { throttle: 1 } }, seconds(4.2));
     expect(events.some((e) => e.type === 'slip' && e.tank === victim.id)).toBe(true);
     expect(victim.slip).toBeGreaterThan(0);
@@ -244,6 +244,44 @@ describe('olajfolt', () => {
     expect(Math.abs(victim.y - yBefore)).toBeLessThan(0.5); // de az eredeti irányban sodródik tovább
     run(world, {}, seconds(OIL.slipTime) + 5);
     expect(victim.slip).toBe(0);
+  });
+
+  it('aki belehajt, annak olajos lesz a lánctalpa: a folt után is kipörög még pár másodpercig', () => {
+    const world = new World(arena(1000));
+    const owner = world.addTank(500, 500, 0);
+    world.addPickup('oil', 500, 500);
+    run(world, { [owner.id]: { drop: true } }, 2);
+    const oil = world.oils[0];
+    // lassan (a megcsúszás határa alatt) gurul bele: nem csúszik meg, de olajos lesz
+    const victim = world.addTank(oil.x - OIL.radius - 3, oil.y, 0, { team: TEAM.bots });
+    const events = run(world, { [victim.id]: { throttle: (OIL.minSpeed - 1) / TANK.maxSpeed } }, seconds(2.5));
+    expect(Math.hypot(victim.x - oil.x, victim.y - oil.y)).toBeLessThan(OIL.radius);
+    expect(events.some((e) => e.type === 'slip' && e.tank === victim.id)).toBe(false);
+    expect(victim.oily).toBeGreaterThan(OIL.spinTime - 0.2);
+    // teljes gázzal is csak a végsebesség töredékét éri el, és lassan gyorsul
+    victim.x = oil.x + OIL.radius + 30;
+    victim.speed = 0;
+    victim.oily = OIL.spinTime;
+    run(world, { [victim.id]: { throttle: 1 } }, seconds(1));
+    expect(victim.speed).toBeLessThan(TANK.maxSpeed * OIL.spinSpeed + 0.01);
+    const clean = world.addTank(victim.x, victim.y + 100, 0, { team: TEAM.bots });
+    run(world, { [clean.id]: { throttle: 1 } }, seconds(1));
+    expect(clean.speed).toBeGreaterThan(victim.speed * 1.5);
+    // nehezen áll meg: a gázt elengedve tovább csúszik, mint a tiszta lánctalpú
+    victim.oily = OIL.spinTime;
+    victim.speed = 5;
+    clean.speed = 5;
+    run(world, {}, seconds(0.1));
+    expect(victim.speed).toBeGreaterThan(clean.speed);
+    // pár másodperc alatt lekopik: újra teljes sebességgel megy
+    run(world, { [victim.id]: { throttle: 1 } }, seconds(OIL.spinTime + 6));
+    expect(victim.oily).toBe(0);
+    expect(victim.speed).toBeGreaterThan(TANK.maxSpeed * 0.95);
+    // a terepjáró lánctalp megvéd
+    const grippy = world.addTank(oil.x, oil.y, 0, { team: TEAM.bots });
+    grippy.effects.allTerrain = 10;
+    run(world, {}, 3);
+    expect(grippy.oily).toBe(0);
   });
 
   it('a lerakóját csak azután csúsztatja meg, hogy egyszer lehajtott róla', () => {
@@ -626,7 +664,7 @@ describe('roncsok', () => {
 
   it('a roncs akadály: a tank nem megy át rajta, a lövedék megáll benne', () => {
     const world = new World(arena());
-    world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, level: 1, age: 0 });
+    world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, level: 1, look: 0, age: 0 });
     const tank = world.addTank(120, 200, 0);
     const events = [...run(world, { [tank.id]: { fire: true, aim: 0 } }, 2), ...run(world, {}, 40)];
     const impact = events.find((e) => e.type === 'impact');
@@ -662,7 +700,7 @@ describe('szintek', () => {
     expect(fresh.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * (1 + LEVEL.damage), 5);
   });
 
-  it('a kilőtt tank két szintet veszít, és a felszerelése is elvész; az új szintjéről fejlődik tovább', () => {
+  it('a kilőtt tank egy szintet veszít, és a felszerelése is elvész; az új szintjéről fejlődik tovább', () => {
     const world = new World(arena());
     const veteran = world.addTank(140, 200, Math.PI, { team: TEAM.player });
     const shooter = world.addTank(100, 200, 0, { team: TEAM.bots });
@@ -689,8 +727,8 @@ describe('szintek', () => {
     expect(veteran.kills).toBe(6);
     expect(veteran.deaths).toBe(1);
     // az új szintjéhez járó teljes életerővel éled újra
-    expect(veteran.hp).toBe(tankMaxHp({ level: 5 }));
-    expect(veteran.hp).toBe(TANK.maxHp + 4 * LEVEL.hp);
+    expect(veteran.hp).toBe(tankMaxHp({ level: 7 - LEVEL.deathLoss }));
+    expect(veteran.hp).toBe(TANK.maxHp + (6 - LEVEL.deathLoss) * LEVEL.hp);
     // a fegyverzet és a képességek elvesznek
     expect(veteran.weapon).toBeNull();
     expect(veteran.tripleShots).toBe(0);
@@ -704,11 +742,11 @@ describe('szintek', () => {
     const victim = world.addTank(veteran.x + 30, veteran.y, 0, { team: TEAM.bots });
     victim.hp = 1;
     run(world, { [veteran.id]: { fire: true, aim: 0 } }, seconds(1.5));
-    expect(veteran.level).toBe(6);
+    expect(veteran.level).toBe(7 - LEVEL.deathLoss + 1);
   });
 
   it('az 1. és a 2. szintű tank nem megy az 1. szint alá; a szintvesztésről esemény megy', () => {
-    for (const [level, after, lost] of [[1, 1, 0], [2, 1, 1], [3, 1, 2], [20, 18, 2]]) {
+    for (const [level, after, lost] of [[1, 1, 0], [2, 1, 1], [3, 2, 1], [20, 19, 1]]) {
       const world = new World(arena());
       const victim = world.addTank(140, 200, Math.PI, { team: 10 });
       const shooter = world.addTank(100, 200, 0, { team: 11 });
@@ -717,6 +755,8 @@ describe('szintek', () => {
       const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(1));
       expect(victim.alive).toBe(false);
       expect(victim.level).toBe(after);
+      // a kilövés eseménye viszi, ki és mivel lőtte ki (itt: a másik tank ágyúja)
+      expect(events.find((e) => e.type === 'destroyed')).toMatchObject({ tank: victim.id, by: shooter.id, cause: 'shell' });
       const down = events.filter((e) => e.type === 'leveldown');
       expect(down).toHaveLength(lost > 0 ? 1 : 0);
       if (lost > 0) expect(down[0]).toMatchObject({ tank: victim.id, level: after, lost });
@@ -749,8 +789,8 @@ describe('szintek', () => {
     expect(events.find((e) => e.type === 'levelup')).toMatchObject({ tank: shooter.id, level: 5, gain: 2 });
     // a többlet életerőt minden megszerzett szint után megkapja
     expect(shooter.hp).toBe(50 + 2 * LEVEL.hp);
-    expect(giant.level).toBe(10);
-    // két egyszintű tank: a győztes egyet lép, a vesztes kettőt bukik
+    expect(giant.level).toBe(12 - LEVEL.deathLoss);
+    // két egyszintű tank: a győztes egyet lép, a vesztes egyet bukik
     const even = new World(arena());
     const winner = even.addTank(100, 200, 0, { team: 10 });
     const loser = even.addTank(140, 200, Math.PI, { team: 11 });
@@ -759,7 +799,7 @@ describe('szintek', () => {
     loser.hp = 1;
     run(even, { [winner.id]: { fire: true, aim: 0 } }, seconds(1));
     expect(winner.level).toBe(7);
-    expect(loser.level).toBe(4);
+    expect(loser.level).toBe(6 - LEVEL.deathLoss);
     // a felső határ fölé így sem megy
     const top = world.addTank(100, 260, 0, { team: 12 });
     top.level = LEVEL.max - 1;

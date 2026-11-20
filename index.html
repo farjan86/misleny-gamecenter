@@ -53,6 +53,7 @@
       <!-- kilövési értesítő: ki kit lőtt ki -->
       <div id="hud-feed"></div>
       <div id="hud-toast" class="panel"></div>
+      <div id="hud-death" class="panel hidden"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
     </div>
@@ -100,6 +101,8 @@
               <div class="buttons column">
                 <span class="btn big primary" id="main-multiplayer" role="button">Multiplayer</span>
                 <span class="btn big" id="main-single" role="button">Egyjátékos</span>
+                <span class="btn big" id="main-garage" role="button">Tankom</span>
+                <span class="btn big" id="main-guide" role="button">Útmutató</span>
                 <span class="btn big" id="main-settings" role="button">Beállítások</span>
                 <span class="btn" id="main-logout" role="button">Kijelentkezés</span>
               </div>
@@ -117,9 +120,33 @@
             <div class="chat-slot"></div>
           </div>
         </div>
+        <!-- játékmenet: hogyan kell belépni, játékot létrehozni, mire való a jelszó és a belépőkód -->
+        <details class="howto" id="howto" open>
+          <summary>Játékmenet – hogyan működik?</summary>
+          <ol id="howto-body"></ol>
+        </details>
         <p class="credit">
           Térképadat: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a> (ODbL)<span id="extra-attribution"></span>
         </p>
+      </div>
+
+      <div class="screen hidden wide" id="screen-garage">
+        <h2>Válassz alaptankot</h2>
+        <p class="note">Csak a megjelenés más: a méret, az életerő, a sebesség és a sebzés mindhárom tanknál ugyanaz. A szintekkel a választott tank a saját formájában fejlődik.</p>
+        <div id="garage-cards"></div>
+        <p class="sub" id="garage-title"></p>
+        <div id="garage-tiers"></div>
+        <div class="buttons">
+          <span class="btn" id="garage-back" role="button">Vissza</span>
+        </div>
+      </div>
+
+      <div class="screen hidden wide" id="screen-guide">
+        <h2>Útmutató</h2>
+        <div id="guide-body"></div>
+        <div class="buttons">
+          <span class="btn" id="guide-back" role="button">Vissza</span>
+        </div>
       </div>
 
       <div class="screen hidden" id="screen-settings">

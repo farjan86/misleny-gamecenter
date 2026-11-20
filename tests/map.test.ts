@@ -347,9 +347,9 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
     const hand = data.buildings.filter((b) => b.src === 'hand');
     const gen = data.buildings.filter((b) => b.src === 'gen');
     expect(hand.length).toBe(data.meta.handBuildings?.buildings);
-    expect(hand.length).toBeGreaterThan(40);
+    expect(hand.length).toBeGreaterThan(80);
+    // a rajzok a Kiskozári utcát is lefedik, ezért ott már nincs kitalált ház
     expect(gen.length).toBe((data.meta.generatedHouses?.houses ?? 0) + (data.meta.generatedHouses?.outbuildings ?? 0));
-    expect(gen.length).toBeGreaterThan(0);
     const drivable = data.roads.filter((r) => ['residential', 'living_street', 'unclassified', 'tertiary', 'secondary', 'primary', 'service', 'track'].includes(r.kind));
     const others = data.buildings.filter((b) => b.src !== 'hand' && b.src !== 'gen');
     for (const b of [...hand, ...gen]) {
@@ -369,9 +369,6 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
         expect(pointInPolygon(cx, cy, o.pts), `${b.id} ↔ ${o.id}`).toBe(false);
       }
     }
-    // a generált házak a kézzel felvett területen kívül állnak
-    const minHandY = Math.min(...hand.map((b) => b.pts[1]));
-    for (const b of gen) expect(b.pts[1], String(b.id)).toBeLessThan(minHandY + 5);
   });
 
   it('az utcanevek az útra kerülnek, utcánként több helyre', () => {

@@ -139,7 +139,9 @@ async function start(): Promise<void> {
     (window as unknown as { __TANK_LOCAL__: LocalGame }).__TANK_LOCAL__ = single;
     menu.afterMatch = 'main';
     single.on((message) => onGameMessage(message, single, single.id));
-    single.start(settings);
+    single.start(settings, loadSettings().look);
+    // a szerver statisztikája innen tudja, hogy egyjátékos meccs megy (a meccs maga a böngészőben fut)
+    net.send({ t: 'solo' });
   };
 
   net.onStatus((status) => {

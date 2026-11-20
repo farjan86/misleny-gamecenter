@@ -20,6 +20,7 @@ export const PICKUP_KINDS = [
   'smoke',
   'super',
   'gun',
+  'flame',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
 /**
@@ -27,7 +28,7 @@ export type PickupKind = (typeof PICKUP_KINDS)[number];
  * amíg a tank másikat nem vesz fel, vagy ki nem lövik (utána újra az
  * alaplövedék van).
  */
-export const WEAPON_KINDS = ['heavy', 'rocket', 'laser'] as const;
+export const WEAPON_KINDS = ['heavy', 'rocket', 'laser', 'flame'] as const;
 export type WeaponKind = (typeof WEAPON_KINDS)[number];
 export const isWeapon = (kind: PickupKind): kind is WeaponKind => (WEAPON_KINDS as readonly string[]).includes(kind);
 /** Lövésszámra szóló tárgy: a hármas lövés PICKUP.tripleShots lövésig tart, bármelyik fegyverrel. */
@@ -87,11 +88,13 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
    */
   super: { duration: 20, weight: 0 },
   /** kiegészítő géppuska: amíg tart, magától lő a közeli ellenségre a fő fegyver mellett */
-  gun: { duration: 30, weight: 9 },
+  gun: { duration: 60, weight: 9 },
+  /** lángszóró: fegyver; amíg van üzemanyaga, folyamatos lángcsóvát lő, ami mindent felgyújt */
+  flame: { duration: 0, weight: 8 },
 };
 
 /** Az ellátó teherautó rakománya: fegyverek és képességek. */
-export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret', 'mine', 'gun'];
+export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret', 'mine', 'gun', 'flame'];
 
 export const PICKUP = {
   /** a tárgy sugara méterben (a tank érintésre veszi fel) */
@@ -142,7 +145,7 @@ export const LASER = {
 
 export const OIL = {
   /** a folt sugara méterben */
-  radius: 3.4,
+  radius: 7,
   /** ennyi ideig marad az úton (mp) */
   life: 45,
   /** két lerakás között eltelő legkisebb idő (mp) */
@@ -153,6 +156,12 @@ export const OIL = {
   minSpeed: 4,
   /** csúszás közben ennyivel lassul a tank (m/s²) */
   friction: 5,
+  /** aki belehajtott, annak ennyi ideig olajos a lánctalpa a folt elhagyása után (mp) */
+  spinTime: 4,
+  /** olajos lánctalppal: a végsebesség, a gyorsulás és a fékezés ennyi része marad (kipörög, mint a jégen) */
+  spinSpeed: 0.45,
+  spinAccel: 0.3,
+  spinBrake: 0.3,
 } as const;
 
 /** Rögzített magú véletlenszám-generátor: ugyanabból a magból mindig ugyanaz a sorozat. */

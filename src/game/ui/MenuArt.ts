@@ -56,7 +56,7 @@ export class MenuArt {
   private buildRollers(): void {
     let offset = 0;
     for (let tier = 0; tier < LEVEL.tiers.length; tier++) {
-      const sprites = tankSprites(tier, PAINTS[tier % PAINTS.length], Math.min(2, tier));
+      const sprites = tankSprites(tier, PAINTS[tier % PAINTS.length], Math.min(2, tier), (tier * 2) % 3);
       // a típus középső szintjének mérete, kicsit felnagyítva
       const size = tankSize({ level: LEVEL.tiers[tier] + 1 }) * 0.86;
       this.rollers.push({ ...sprites, size, offset, phase: tier * 1.7 });

@@ -7,7 +7,7 @@
 | **OpenStreetMap** (Overpass API) | utak, épületek, területhasználat, vizek, tájékozódási pontok – ez az elsődleges forrás | ODbL 1.0 |
 | **Microsoft Global ML Building Footprints** | épületalaprajzok ott, ahol az OSM-ben nincs épület | ODbL 1.0 |
 | Fotók a `pictures/` mappában | néhány középület és környezetük megjelenése (kézzel felvéve) | lásd lent |
-| Vázlatrajz a pálya készítőjétől | 49 ház egy új beépítésű részen, ahol az adatokban nincs épület, vagy csak töredék van (kézzel felvéve) | nem OSM-adat, lásd lent |
+| Vázlatrajzok a pálya készítőjétől (3 db) | 92 ház és kb. 950 fa a Csikósvölgy, a Pusztarét, a Kiskozári és a Fűzfa utca környékén, ahol az adatokban nincs épület, vagy csak töredék van (kézzel felvéve) | nem OSM-adat, lásd lent |
 
 - Forrásmegjelölés: **© OpenStreetMap közreműködők** – <https://www.openstreetmap.org/copyright>;
   a kiegészítő alaprajzoknál: Microsoft Building Footprints –
@@ -33,14 +33,14 @@ forrásból származó felvétel, ezért a mappa **nincs verziókezelés alatt**
 | Elem | Forrás |
 |---|---|
 | Utak nyomvonala, típusa, neve | OSM |
-| Épületek alaprajza és helye | OSM (1569 db); ahol ott nincs: Microsoft (1162 db); egy új beépítésű részen kézzel felvett (49 db) és generált (11 db) ház – lásd „Kézzel felvett és generált házak” |
+| Épületek alaprajza és helye | OSM (1569 db); ahol ott nincs: Microsoft (1147 db); néhány új beépítésű utcában vázlatrajzról kézzel felvett ház (92 db) – lásd „Kézzel felvett és generált házak” |
 | Területhasználat (lakóterület, park, szántó, erdő, kiskert…), vizek, patakok | OSM |
 | Tájékozódási pontok (hivatal, templomok, posta, rendőrség…) | OSM |
 | Zebrák helye | OSM-ből levezetve (lásd lent) |
 | Fasorok (61 fa) | OSM (`natural=tree_row`), kb. 8 méterenként egy fa |
 | **Útszélesség, padka, füves sáv, járda** | **stilizált**, típusonként rögzített érték |
 | **Tetők formája, színe, kémények** | **stilizált**, az alaprajzból számolva |
-| **Fák, bokrok, villanyoszlopok, vezetékek** | **generált**, nem OSM-adat |
+| **Fák, bokrok, villanyoszlopok, vezetékek** | **generált**, nem OSM-adat; a vázlatrajzok területén a fák a rajz szerint |
 | **A hivatal, a református templom és a rendőrség megjelenése, környezete** | **fotók alapján kézzel felvéve**, becsült helyekkel |
 
 A generált elemek a pályafájlban külön, `decor` nevű rétegben vannak
@@ -134,29 +134,37 @@ alaprajzaiból pótolja a hiányt.
 
 ### Kézzel felvett és generált házak
 
-A Csikósvölgy, a Pusztarét utca és a Kiskozári utca közötti új beépítésű
-részen az OSM-ben egyetlen ház szerepel, a Microsoft-adatban pedig csak
-épülettöredékek (20–90 m²-es foltok a valódi házak helyén). Itt a házak két
-külön jelölt forrásból jönnek:
+A Csikósvölgy, a Pusztarét, a Kiskozári és a Fűzfa utca környékén az
+OSM-ben alig van ház, a Microsoft-adatban pedig sok helyen csak
+épülettöredékek vannak (20–90 m²-es foltok a valódi házak helyén), vagy
+semmi. Itt a házak egy külön jelölt forrásból jönnek:
 
-- **Kézzel felvett házak** (`src: "hand"`, 49 db) –
+- **Kézzel felvett házak** (`src: "hand"`, 92 db) –
   [`assets/maps/landmarks/misleny-kozpont.houses.json`](../assets/maps/landmarks/misleny-kozpont.houses.json).
-  A pálya készítőjétől kapott vázlatrajz alaprajzai, a pálya utcáihoz igazítva:
-  minden ház az utcájától a rajz szerinti távolságra áll, a rajz és az
-  OSM-utcahálózat közötti eltérés a tömbök közepén (a kertekben) oszlik el.
-  A helyük és a méretük ezért csak néhány méter pontosságú. A fájl koordinátái
-  a hivatal pontjához viszonyított méterek.
-  - Az OSM-épület elsőbbséget élvez: ahol van, a rajzolt ház kimarad (1 db).
-  - A rajzolt ház 8 m-es körzetében lévő Microsoft-töredékek kimaradnak
-    (24 db) – ugyanannak a háznak a részletei voltak.
+  A pálya készítőjétől kapott három vázlatrajz alaprajzai, a pálya utcáihoz
+  igazítva: minden ház az utcájától a rajz szerinti távolságra áll, a rajz és
+  az OSM-utcahálózat közötti eltérés a tömbök közepén (a kertekben) oszlik el.
+  A második és harmadik rajznál a helyet a rajzon is szereplő, már meglévő
+  házakhoz is hozzáigazítottuk (93 párosított házon az eltérés mediánja kb.
+  1 m; ahol nincs meglévő ház a közelben, ott néhány méter). A fájl
+  koordinátái a hivatal pontjához viszonyított méterek.
+  - Csak az kerül fel, ami még nincs a pályán: ahol OSM-épület vagy a
+    rajzolt házzal nagyjából egyező Microsoft-alaprajz van, az marad, a
+    rajzolt kimarad (ezek középpontja a fájl `keep` listájában).
+  - A rajzolt ház 8 m-es körzetében lévő többi Microsoft-töredék kimarad
+    (39 db) – ugyanannak a háznak a részletei voltak.
+  - A 16 m²-nél kisebb rajzolt foltok (kerti tároló, medence) nem kerülnek fel.
+- **A rajzokról felvett fák** (kb. 950 db) – ugyanebben a fájlban (`trees`:
+  x, y, sugár). A rajzok területén (`treeCovers`) nincs generált fa, csak
+  bokor; a rajzolt fa nem kerül épületre, úttestre és patakba.
   - Mivel a töredékek már nem lógnak az úttest szélére, a Pusztarét utca és a
     Csikósvölgy itt szélesebb lett (8,5 → 11, illetve 9,3 m).
-- **Generált házak** (`src: "gen"`, 9 ház és 2 melléképület) – a Kiskozári
-  utca burkolt szakaszának az a része, amelyet a rajz nem fed le. Ezek
-  **kitalált** házak: a feldolgozó telkenként egyet tesz az út két oldalára,
-  kerttel, csak szabad helyre (épülethez, úthoz, vízhez nem érnek). A földút
-  mentére és a kézzel felvett területre nem kerül generált ház. Az utcák
-  listája a scriptben a `GENERATED_STREETS`.
+- **Generált házak** (`src: "gen"`) – a `GENERATED_STREETS` listában
+  megadott utcák burkolt szakaszának az a része, amelyet egyik rajz sem fed
+  le. Ezek **kitalált** házak: a feldolgozó telkenként egyet tesz az út két
+  oldalára, kerttel, csak szabad helyre (épülethez, úthoz, vízhez nem érnek).
+  Most egy sincs: a Kiskozári utca burkolt szakaszát a második rajz már
+  teljesen lefedi.
 
 A darabszámok a kimenet `meta.handBuildings` és `meta.generatedHouses`
 mezőjében és a statisztikában is szerepelnek. Ha a házak egyszer bekerülnek
@@ -253,7 +261,7 @@ területhasználattól függ. A helyük tehát hihető, de nem a valóságot mut
 
 | Réteg | Darab |
 |---|---|
-| Épület | 2791 (1569 OSM – ebből 431 típus nélküli –, 1162 Microsoft, 49 kézzel felvett, 11 generált) |
+| Épület | 2808 (1569 OSM – ebből 431 típus nélküli –, 1147 Microsoft, 92 kézzel felvett) |
 | Útdarab | 427 (25 főút-darab `primary`, 18 `secondary`, 119 lakóutca, 15 lakó-pihenő övezet, 9 összekötő út, 64 szervizút, 82 földút, 74 gyalogút, 9 kerékpárút, 10 ösvény) |
 | Utcanév | 62 |
 | Terület | 90 |
@@ -327,8 +335,8 @@ fotó alapján felvett épületet.
 - **Az épületadat két forrásból áll össze**, eltérő pontossággal; a
   Microsoft-alaprajzok között lehet téves vagy hiányzó épület. Ami egyik
   forrásban sem szerepel, az a pályán sincs. Két, külön jelölt kivétel van:
-  a vázlatrajz alapján kézzel felvett házak (`hand`) és a Kiskozári utca
-  néhány generált, kitalált háza (`gen`).
+  a vázlatrajzok alapján kézzel felvett házak (`hand`), és a kitalált
+  házak (`gen`) – ezekből most egy sincs.
 - **84 közút-darabnak nincs neve** az OSM-ben (részben csomóponti ágak,
   rövid összekötők), ezekre nem kerül utcanév.
 - **Kerítés alig van az adatban** (11 db), ezért a kertek a játékban

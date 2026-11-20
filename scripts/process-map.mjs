@@ -569,11 +569,22 @@ try {
 
 let handBuildings = 0;
 let handReplaced = 0;
-/** A kézzel felvett terület befoglaló téglalapja [minX, minY, maxX, maxY] – itt nincs generálás. */
-let handCovers = null;
+/** A rajzok által lefedett területek [minX, minY, maxX, maxY] – itt nincs generált ház. */
+let handCovers = [];
+/** A rajzokról felvett fák (x, y, sugár), és a területek, ahol a rajz adja a fákat. */
+let handTrees = [];
+let handTreeCovers = [];
+const inCovers = (covers, x, y) => covers.some((c) => x > c[0] && x < c[2] && y > c[1] && y < c[3]);
 try {
   const hand = JSON.parse(await readFile(housesPath, 'utf8'));
-  handCovers = hand.covers.map((v, i) => v + (i % 2 === 0 ? thX : thY));
+  const shift = (v, i) => v + (i % 2 === 0 ? thX : thY);
+  const boxes = (list) => (typeof list?.[0] === 'number' ? [list] : list ?? []).map((c) => c.map(shift));
+  handCovers = boxes(hand.covers);
+  handTreeCovers = boxes(hand.treeCovers);
+  for (let k = 0; k + 2 < (hand.trees ?? []).length; k += 3) handTrees.push({ x: hand.trees[k] + thX, y: hand.trees[k + 1] + thY, r: hand.trees[k + 2] });
+  // a kiegészítő adat azon épületei, amelyek a rajzon is szerepelnek: ezek maradnak (a középpontjuk)
+  const keep = [];
+  for (let k = 0; k + 1 < (hand.keep ?? []).length; k += 2) keep.push([hand.keep[k] + thX, hand.keep[k + 1] + thY]);
   const ringDistFlat = (x, y, f) => {
     if (pipFlat(x, y, f)) return 0;
     let best = Infinity;
@@ -597,6 +608,7 @@ try {
       if (b.src !== 'ms' || drop.has(i)) return;
       const [bx, by] = centre(toPairsOf(b.pts));
       if (Math.abs(bx - cx) > 60 || Math.abs(by - cy) > 60) return;
+      if (keep.some(([kx, ky]) => Math.abs(kx - bx) < 0.6 && Math.abs(ky - by) < 0.6)) return;
       if (ringDistFlat(bx, by, pts) < hand.replaceWithin) drop.add(i);
     });
     added.push({ id: 9_700_000_000 + h.id, kind: h.kind, area: r1(Math.abs(ringArea(ring))), pts, src: 'hand' });
@@ -756,7 +768,7 @@ let generatedSheds = 0;
           if (mid < 0 || mid > len) continue;
           const px = f[i] + tx * mid;
           const py = f[i + 1] + ty * mid;
-          if (handCovers && px > handCovers[0] && px < handCovers[2] && py > handCovers[1] && py < handCovers[3]) continue;
+          if (inCovers(handCovers, px, py)) continue;
           // a ház: széles oldalával az utcára néz, az úttesttől néhány méterre
           const w = Math.min(lot - 7, between(9.5, 14.5));
           const d = between(8, 11.5);
@@ -1144,6 +1156,14 @@ function addTree(x, y, r, kind) {
 for (const t of trees) markTree(t.x, t.y);
 // a fotókon látható, kézzel felvett fák
 for (const t of landmarks?.trees ?? []) addTree(t.x, t.y, t.r, t.kind);
+// a vázlatrajzokról felvett fák; a rajzok területén nincs generált fa (a rajz mutatja, hol van)
+let sketchTrees = 0;
+for (const t of handTrees) {
+  if (!inMap(t.x, t.y) || buildingDist(t.x, t.y, 6) < 1 || onRoadBand(t.x, t.y, 0.3) || nearStream(t.x, t.y) || !treeFree(t.x, t.y, 1.8)) continue;
+  addTree(t.x, t.y, t.r, t.r < 1.9 ? TREE.fruit : TREE.deciduous);
+  sketchTrees++;
+}
+const sketchArea = (x, y) => inCovers(handTreeCovers, x, y);
 
 // fasorok és villanyoszlopok a közutak mentén
 for (const road of roads) {
@@ -1159,7 +1179,7 @@ for (const road of roads) {
         const off = half + SHOULDER + between(2.1, 2.8);
         const tx = x - Math.sin(angle) * off * side;
         const ty = y + Math.cos(angle) * off * side;
-        if (!inMap(tx, ty) || buildingDist(tx, ty, 6) < 2 || onAsphalt(tx, ty, 1) || nearStream(tx, ty)) continue;
+        if (!inMap(tx, ty) || sketchArea(tx, ty) || buildingDist(tx, ty, 6) < 2 || onAsphalt(tx, ty, 1) || nearStream(tx, ty)) continue;
         if (NO_PLANTS.has(areaAt(tx, ty)?.area.kind) || landmarkKindAt(tx, ty) || !treeFree(tx, ty, 5)) continue;
         addTree(tx, ty, between(2.6, 3.4), TREE.street);
       }
@@ -1173,7 +1193,7 @@ for (const road of roads) {
       const off = half + VERGE / 2;
       const tx = x - Math.sin(angle) * off * side;
       const ty = y + Math.cos(angle) * off * side;
-      if (!inMap(tx, ty) || buildingDist(tx, ty, 6) < 1.8 || onAsphalt(tx, ty, 0.4) || nearStream(tx, ty)) continue;
+      if (!inMap(tx, ty) || sketchArea(tx, ty) || buildingDist(tx, ty, 6) < 1.8 || onAsphalt(tx, ty, 0.4) || nearStream(tx, ty)) continue;
       if (NO_PLANTS.has(areaAt(tx, ty)?.area.kind) || landmarkKindAt(tx, ty) || !treeFree(tx, ty, 4)) continue;
       addTree(tx, ty, between(2.0, 2.8), TREE.street);
     }
@@ -1229,6 +1249,7 @@ for (let gy = 0; gy < HEIGHT / GRID; gy++) {
     else if (kind === 'allotments') [treeP, bushP] = [0.06, 0.1];
     if (roll >= treeP + bushP) continue;
     const isTree = roll < treeP;
+    if (isTree && sketchArea(x, y)) continue;
     if (buildingDist(x, y, 6) < (isTree ? 1.6 : 0.8) || onRoadBand(x, y, isTree ? 0.6 : 0.3) || nearStream(x, y)) continue;
     if (!isTree) {
       decorBushes.push(r1(x), r1(y), r1(0.6 + size * 0.8));
@@ -1377,7 +1398,7 @@ console.log(`  terület: ${stats.areas}`, stats.areaKinds);
 console.log(`  patak: ${stats.streams}, kerítés: ${stats.barriers}, fa (OSM): ${stats.trees}, POI: ${stats.pois}`);
 console.log(`  hivatal épülete: ${out.townhall.building ?? 'NINCS'} (${thMatch}, ${thNear.dist.toFixed(1)} m)`);
 console.log(`  zebra: ${crossings.length}, szűkített útdarab: ${narrowedRoads}, útszélhez igazított épület: ${trimmedBuildings}, kihagyott: ${removedBuildings}, útról letolt tereptárgy: ${movedProps}`);
-console.log(`  kézzel felvett ház: ${handBuildings} (kiváltott töredék: ${handReplaced}), generált ház: ${generatedHouses} + ${generatedSheds} melléképület`);
+console.log(`  kézzel felvett ház: ${handBuildings} (kiváltott töredék: ${handReplaced}), generált ház: ${generatedHouses} + ${generatedSheds} melléképület, rajzról felvett fa: ${sketchTrees}`);
 console.log(`  generált: ${decorTrees.length / 4} fa, ${decorBushes.length / 3} bokor, ${decorPoles.length / 2} villanyoszlop`);
 console.log(`  utcanevek: ${stats.streetNames.length}`);
 console.log(`  figyelmeztetések: ${warnings.length}`);

@@ -7,7 +7,7 @@
 import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import { PICKUP_STYLE } from '../entities/pickupStyle';
-import { SMOKE, STRIKE, type SmokeState } from '../sim/gadgets';
+import { STRIKE, insideSmoke, type SmokeState } from '../sim/gadgets';
 import type { PickupState, TankState } from '../sim/world';
 
 /** A térképkép felbontása: pixel / méter. */
@@ -153,6 +153,10 @@ export class Hud {
   private readonly menuConfirm = el<HTMLDivElement>('hud-menu-confirm');
   private leave: () => void = () => undefined;
   private readonly feedBox = el<HTMLDivElement>('hud-feed');
+  private readonly deathBox = el<HTMLDivElement>('hud-death');
+  private deathShown = false;
+  private deathNote = '';
+  private deathLeft = '';
   private mapClick: ((x: number, y: number) => void) | null = null;
   private aiming = false;
   private readonly clock = el<HTMLDivElement>('hud-clock');
@@ -299,6 +303,35 @@ export class Hud {
     this.clockTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     this.clockScore.textContent = score;
     this.clock.classList.toggle('ending', s <= 30);
+  }
+
+  /**
+   * Kilőttek: ki és mivel. A jelzés az újraéledésig kint marad; `who` HTML (a név kiemelve),
+   * `note`: a szintvesztés. Az alsó sorba a visszaszámlálás kerül (lásd deathCountdown).
+   */
+  showDeath(who: string, note: string): void {
+    this.deathNote = note;
+    this.deathLeft = '';
+    this.deathBox.innerHTML = `<div class="death-title">KILŐTTEK</div><div class="death-who">${who}</div><div class="death-note"></div>`;
+    this.deathBox.classList.remove('hidden');
+    this.deathShown = true;
+    this.deathCountdown(-1);
+  }
+
+  /** A hátralévő idő az újraéledésig (mp); negatív: nincs visszaszámlálás (pl. kiesett). */
+  deathCountdown(seconds: number): void {
+    if (!this.deathShown) return;
+    const left = seconds >= 0 ? `Újraéledés: ${Math.max(1, Math.ceil(seconds))} mp` : '';
+    if (left === this.deathLeft && seconds >= 0) return;
+    this.deathLeft = left;
+    const line = this.deathBox.querySelector('.death-note');
+    if (line) line.textContent = [this.deathNote, left].filter(Boolean).join(' · ');
+  }
+
+  hideDeath(): void {
+    if (!this.deathShown) return;
+    this.deathShown = false;
+    this.deathBox.classList.add('hidden');
   }
 
   toast(text: string): void {
@@ -536,7 +569,7 @@ export class Hud {
     }
 
     // ellenséges tankok: piros pont (ami füstben van, az a térképen sem látszik)
-    const hidden = (t: TankState): boolean => f.smokes.some((k) => Math.hypot(t.x - k.x, t.y - k.y) < SMOKE.radius);
+    const hidden = (t: TankState): boolean => f.smokes.some((k) => insideSmoke(k, t.x, t.y));
     for (const t of f.tanks) {
       // az álcázott tank a térképen sem látszik
       if (!t.alive || t.id === f.focusId || t.cloak > 0 || (f.smokes.length > 0 && hidden(t))) continue;

@@ -33,11 +33,34 @@ export interface MineState {
 
 /** Füst: néhány másodpercre eltakar egy területet; a botok és az ágyúk nem látnak be. */
 export const SMOKE = {
-  radius: 13,
-  life: 10,
+  /** a szétterjedt felhő sugara (m) */
+  radius: 30,
+  /** a felhő ekkora résszel indul, és `spread` másodperc alatt terjed szét a teljes méretére */
+  startRatio: 0.3,
+  spread: 4.5,
+  life: 16,
+  /** a szél sodrása (m/s): a felhő lassan elvonul onnan, ahol kieresztették */
+  windX: 0.6,
+  windY: -0.25,
   perPickup: 2,
   max: 4,
 } as const;
+
+/** A füstfelhő kora másodpercben. */
+export const smokeAge = (s: SmokeState): number => SMOKE.life - s.life;
+/** A felhő sugara a kora szerint: gyorsan gomolyog ki, aztán egyre lassabban terjed. */
+export function smokeRadius(age: number): number {
+  const g = Math.min(1, Math.max(0, age / SMOKE.spread));
+  return SMOKE.radius * (SMOKE.startRatio + (1 - SMOKE.startRatio) * (1 - (1 - g) * (1 - g)));
+}
+/** Benne van-e a pont a (széllel elsodródott, éppen ekkora) felhőben. */
+export function insideSmoke(s: SmokeState, x: number, y: number): boolean {
+  const age = SMOKE.life - s.life;
+  const dx = x - (s.x + SMOKE.windX * age);
+  const dy = y - (s.y + SMOKE.windY * age);
+  const r = smokeRadius(age);
+  return dx * dx + dy * dy < r * r;
+}
 
 export interface SmokeState {
   id: number;
@@ -158,6 +181,27 @@ export const MG = {
   /** a géppuska ennyivel ül a tank közepétől jobbra (a tank méretének arányában, m), és ilyen hosszú a csöve */
   side: 1.65,
   barrel: 2.1,
+} as const;
+
+/**
+ * Lángszóró: fegyver, de nem lövedéket lő – amíg a tűzgomb le van nyomva és van üzemanyag,
+ * a cső előtt kúp alakú lángcsóva ég. Messzire visz, és amit elér, azt nagyon sebzi – de az
+ * üzemanyaga használat közben fogy, és ha kifogyott, a tank visszakapja az alapágyút. Éget:
+ * az ellenséges tankot, löveget, járművet; a fákat felgyújtja és kidönti, a házakat leégeti,
+ * a gázpalackot berobbantja. Falon nem megy át.
+ */
+export const FLAME = {
+  /** a láng hossza a cső végétől (m) – messzire visz – és a kúp fél nyílásszöge (rad) */
+  range: 42,
+  halfAngle: 0.16,
+  /** sebzés másodpercenként a tankokon, lövegeken, járműveken; és az épületeken */
+  dps: 110,
+  structureDps: 150,
+  /** a sebzés ilyen időközönként hat (mp) – egy pajzstöltet egy ilyen lökést fog fel */
+  pulse: 0.2,
+  /** egy tárgy ennyi másodpercnyi üzemanyagot ad; ennyi lehet a tanknál */
+  fuel: 10,
+  maxFuel: 20,
 } as const;
 
 /** A robbanás fajtája (a hangjához és a látványához). */

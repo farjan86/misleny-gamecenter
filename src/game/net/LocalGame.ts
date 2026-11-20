@@ -47,8 +47,8 @@ export class LocalGame implements GameLink {
   }
 
   /** A játék indítása a megadott beállításokkal (egy játékos, azonnal indul). */
-  start(settings: MatchSettings): void {
-    this.send({ t: 'create', settings: { ...settings, maxPlayers: 1 } });
+  start(settings: MatchSettings, look = 0): void {
+    this.send({ t: 'create', settings: { ...settings, maxPlayers: 1 }, look });
     // a szimuláció a ténylegesen eltelt idő szerint halad; háttérbe tett lapon a böngésző lassítja
     this.timer = window.setInterval(() => this.lobby.tick(performance.now()), 4);
     this.lobby.tick(performance.now());

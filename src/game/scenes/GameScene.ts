@@ -5,9 +5,9 @@
 
 import Phaser from 'phaser';
 import { FireLayer } from '../entities/FireLayer';
-import { createGameTextures, GTEX, PICKUP_ICON_SIZE } from '../entities/gameTextures';
+import { createGameTextures, GTEX, PICKUP_ICON_SIZE, PUFF_SIZE, PUFF_VARIANTS } from '../entities/gameTextures';
 import { PICKUP_STYLE, pickupTexture } from '../entities/pickupStyle';
-import { tankTex, TIER_NAMES, TURRET_PIVOT, TURRET_SIZE } from '../entities/tankTextures';
+import { LOOK_TIER_NAMES, tankTex, TIER_NAMES, TURRET_PIVOT, TURRET_SIZE } from '../entities/tankTextures';
 import { TankView } from '../entities/TankView';
 import { TrackLayer } from '../entities/TrackLayer';
 import { VehicleLayer } from '../entities/VehicleLayer';
@@ -19,13 +19,14 @@ import { RoadLabelLayer } from '../maps/RoadLabelLayer';
 import type { ClientWorld } from '../net/ClientWorld';
 import { BASE_PPM } from '../quality';
 import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
-import { BARREL, CLOAK, SMOKE, STRIKE, WORKSHOP } from '../sim/gadgets';
+import { BARREL, CLOAK, FLAME, SMOKE, STRIKE, WORKSHOP, insideSmoke, smokeRadius } from '../sim/gadgets';
 import { GAME_MODE_NAME } from '../sim/match';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
-import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankSize, tankTier, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
+import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankRadius, tankSize, tankTier, type KillCause, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { toggleFullscreen } from '../ui/fullscreen';
 import { RELEASE_KEYS } from '../ui/GameChat';
+import { CAUSE_LABEL, causeWith, deathText } from '../ui/killText';
 import { VERSION } from '../version';
 import { Hud, type HudFrame, type LoadoutItem, type MapMark } from '../ui/Hud';
 
@@ -67,6 +68,40 @@ export interface GameSceneData {
   onLeave: () => void;
 }
 
+/** A lángszóró lángjának egy darabja: a csőtől kifelé repül, közben nő, és fehérből sárgán, narancson át vörösbe hűl. */
+interface FlamePart {
+  image: Phaser.GameObjects.Image;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  life: number;
+  size: number;
+  spin: number;
+}
+/** a láng színe az életkora szerint: [eddig az arányig, szín] */
+const FLAME_COLORS: [number, number][] = [
+  [0.12, 0xfff6d2],
+  [0.3, 0xffd24a],
+  [0.55, 0xff8a1e],
+  [0.8, 0xe8440f],
+  [1, 0x6a1c0a],
+];
+/** a lángdarabok sebessége (m/s) */
+const FLAME_SPEED = 46;
+
+/** egy füstfelhő gomolyagjainak száma */
+const SMOKE_PUFFS = 16;
+/** Egy füstfelhő képei: a sűrű mag két rétege, a gomolyagok, a földre vetett árnyék; és a szervertől utoljára kapott hátralévő idő. */
+interface SmokeView {
+  core: Phaser.GameObjects.Image[];
+  puffs: Phaser.GameObjects.Image[];
+  shadow: Phaser.GameObjects.Image;
+  life: number;
+  at: number;
+}
+
 export class GameScene extends Phaser.Scene {
   private map!: GameMap;
   /** világpixel / méter */
@@ -96,11 +131,25 @@ export class GameScene extends Phaser.Scene {
   private readonly mineViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly barrelViews = new Map<number, Phaser.GameObjects.Image>();
   /** a füstfelhők: két, ellentétesen forgó réteg */
-  private readonly smokeViews = new Map<number, Phaser.GameObjects.Image[]>();
+  private readonly smokeViews = new Map<number, SmokeView>();
   /** felröppenő sebzésszámok és a találat irányát jelző ívek (újrahasznált objektumok) */
   private readonly numberPool: Phaser.GameObjects.Text[] = [];
   private readonly arcPool: Phaser.GameObjects.Image[] = [];
   private readonly tracerPool: Phaser.GameObjects.Image[] = [];
+  private readonly casingPool: Phaser.GameObjects.Image[] = [];
+  private readonly flameParts: FlamePart[] = [];
+  private readonly flamePool: Phaser.GameObjects.Image[] = [];
+  /** mely tankok lángszórója égett az előző képkockában (a begyulladás hangjához) */
+  private readonly flamingBefore = new Set<number>();
+  /** a géppuska lövéseinek számlálója: minden harmadik lövedék fényes nyomjelző */
+  private mgRound = 0;
+
+  /** A saját alaptank osztályainak neve (fajtánként más). */
+  private get tierNames(): readonly string[] {
+    return LOOK_TIER_NAMES[this.world.lookOf(this.world.myId)] ?? TIER_NAMES;
+  }
+  /** olajos volt-e a saját tank lánctalpa az előző képkockában (a jelzéshez) */
+  private wasOily = false;
   /** a géppuskatalálatok jelzésének ritkítása (ne szóljon és ne villogjon másodpercenként nyolcszor) */
   private lastPing = 0;
   private lastLightArc = 0;
@@ -162,6 +211,8 @@ export class GameScene extends Phaser.Scene {
   private shownClock = -1;
   private shownScore = '';
   private shownStats = '';
+  /** tankonként az utolsó falrombolás ideje (ms): ebből tudni, hogy új ütközés-e */
+  private lastRam = new Map<number, number>();
   private readonly listeners: [EventTarget, string, EventListener][] = [];
   /** a tárgyak ikonjai képként (adat-URL), a felső sáv számára */
   private readonly iconUrls = new Map<PickupKind, string>();
@@ -375,6 +426,12 @@ export class GameScene extends Phaser.Scene {
     this.syncTanks(this.accumulator / SIM_DT, netAlpha, seconds, this.view);
     this.syncBullets((now - world.snapAt) / 1000);
     if (world.listsChanged) this.syncOils();
+    this.oilyTracks();
+    this.flames(Math.min(0.1, deltaMs / 1000));
+    // a „kilőttek” jelzés az újraéledésig marad kint, a hátralévő idővel
+    const fallen = world.own;
+    if (fallen && !fallen.alive) this.hud.deathCountdown(fallen.out ? -1 : fallen.respawn);
+    else this.hud.hideDeath();
     this.syncGadgets(seconds);
     this.syncWrecks(this.view);
 
@@ -541,7 +598,7 @@ export class GameScene extends Phaser.Scene {
     // az álcázás állapota mindig látszik: éppen tart, készen áll, vagy mennyi idő múlva használható
     const cloak = own.cloak > 0 ? `${Math.ceil(own.cloak)} mp` : own.cloakReady > 0 ? `${Math.ceil(own.cloakReady)} mp múlva` : 'kész';
     // a sáv elején mindig a tank szintje áll (ikon nélkül)
-    items.push({ icon: '', label: `★ ${own.level}. szint · ${TIER_NAMES[tankTier(own.level)]}`, count: own.level >= LEVEL.max ? 'max' : own.botKills > 0 ? `bot ${own.botKills}/${LEVEL.botKills}` : '' });
+    items.push({ icon: '', label: `★ ${own.level}. szint · ${this.tierNames[tankTier(own.level)]}`, count: own.level >= LEVEL.max ? 'max' : own.botKills > 0 ? `bot ${own.botKills}/${LEVEL.botKills}` : '' });
     if (!own.alive) return items;
     items.push({ icon: '', label: `◈ Álcázás (${keysText(this.bindings, 'cloak')})`, count: cloak });
     const add = (kind: PickupKind, count = ''): void => {
@@ -550,7 +607,8 @@ export class GameScene extends Phaser.Scene {
       const key = action ? ` (${keysText(this.bindings, action)})` : '';
       items.push({ icon: this.iconUrl(kind), label: PICKUP_STYLE[kind].label + key, count });
     };
-    if (own.weapon) add(own.weapon);
+    if (own.weapon === 'flame') add('flame', `${Math.ceil(own.fuel)} mp`);
+    else if (own.weapon) add(own.weapon);
     if (own.ricochet) add('ricochet');
     if (own.tripleShots > 0) add('triple', `${own.tripleShots} lövés`);
     if (own.shield > 0) add('shield', `×${own.shield}`);
@@ -567,7 +625,7 @@ export class GameScene extends Phaser.Scene {
   private levelText(level: number): string {
     const tier = tankTier(level);
     const next = LEVEL.tiers[tier + 1];
-    return `${level}. – ${TIER_NAMES[tier]}` + (next ? ` (a ${next}. szinttől: ${TIER_NAMES[tier + 1]})` : '');
+    return `${level}. – ${this.tierNames[tier]}` + (next ? ` (a ${next}. szinttől: ${this.tierNames[tier + 1]})` : '');
   }
 
   /** Az információs panel tartalma: irányítás, a tank állapota, a játékosok, forrásmegjelölés. */
@@ -635,7 +693,7 @@ export class GameScene extends Phaser.Scene {
           const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setDepth(12);
           // a nagyobb tank torkolattüze is nagyobb
           const shooter = world.tank(ev.tank);
-          flash.setScale(this.spriteScale * (shooter ? tankSize(shooter) : 1)).setPosition(ev.x * ppm, ev.y * ppm).setRotation(ev.angle).setVisible(true);
+          flash.setOrigin(0.15, 0.5).setScale(this.spriteScale * (shooter ? tankSize(shooter) : 1)).setPosition(ev.x * ppm, ev.y * ppm).setRotation(ev.angle).setVisible(true);
           this.time.delayedCall(70, () => {
             flash.setVisible(false);
             this.flashPool.push(flash);
@@ -660,6 +718,12 @@ export class GameScene extends Phaser.Scene {
         this.beam(ev.x1, ev.y1, ev.x2, ev.y2);
         this.weather.flash((ev.x1 + ev.x2) / 2, (ev.y1 + ev.y2) / 2, Math.hypot(ev.x2 - ev.x1, ev.y2 - ev.y1) / 2 + 4, 0.2);
         break;
+      case 'burn': {
+        // a lángszóró lángja falat ért: a ház ott lángra kap (a közeli tüzek összeolvadnak és megnőnek)
+        const roof = this.map.roofNear(ev.x, ev.y);
+        this.fires.ignite(roof ? roof.x : ev.x, roof ? roof.y : ev.y, 1.5, 14);
+        break;
+      }
       case 'ricochet':
         if (this.loudness(ev.x, ev.y) > 0) this.sfx.ricochet(this.loudness(ev.x, ev.y));
         this.boom(ev.x, ev.y, 0.3);
@@ -719,7 +783,7 @@ export class GameScene extends Phaser.Scene {
         this.weather.flash(ev.x, ev.y, 26, 0.5);
         this.sfx.tankDestroyed(Math.max(0.4, this.loudness(ev.x, ev.y)));
         if (ev.by === myId && !mine) this.sfx.kill();
-        this.killFeed(ev.tank, ev.by);
+        this.killFeed(ev.tank, ev.by, ev.cause);
         // bosszú: aki kilőtt, az újraéledésem után egy ideig jelölve lesz; ha őt lövik ki, a jel megszűnik
         const avenged = this.revenge !== null && this.revenge.live && this.revenge.id === ev.tank && ev.by === myId;
         if (this.revenge && this.revenge.id === ev.tank) this.revenge = null;
@@ -727,11 +791,17 @@ export class GameScene extends Phaser.Scene {
         if (mine) {
           this.sfx.death();
           this.cameras.main.shake(400, 0.009);
-          this.hud.toast(`Kilőttek! ${this.lossNote || 'Mindjárt újraéledsz…'}`);
+          // ki és mivel: a jelzés az újraéledésig kint marad
+          const killer = ev.by > 0 && ev.by !== myId ? world.nameOf(ev.by) : null;
+          const text = escapeHtml(deathText(ev.cause, killer, ev.self === true));
+          const shown = killer && killer !== 'Bot' ? text.replace(escapeHtml(killer), `<b>${escapeHtml(killer)}</b>`) : text;
+          this.hud.showDeath(shown, this.lossNote);
           this.lossNote = '';
         } else if (ev.by === myId) {
           const name = world.nameOf(ev.tank);
-          this.hud.toast((avenged ? 'Bosszú! ' : '') + (name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
+          // a nem közvetlen kilövésnél (akna, löveg, tüzérség, robbanás) az is kiderül, mivel sikerült
+          const how = ev.cause === 'shell' ? '' : ` – ${causeWith(ev.cause)}`;
+          this.hud.toast((avenged ? 'Bosszú! ' : '') + (name === 'Bot' ? `Bot kilőve${how}!` : `Kilőtted: ${name}${how}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
           this.levelNote = '';
         }
         break;
@@ -742,7 +812,12 @@ export class GameScene extends Phaser.Scene {
         const reach = (this.map.trees[ev.index]?.r ?? 2.5) * 2.6 + 3;
         this.ground.invalidate(ev.x - reach, ev.y - reach, ev.x + reach, ev.y + reach);
         const volume = this.loudness(ev.x, ev.y);
-        if (volume > 0) this.sfx.crack(volume);
+        if (volume > 0) {
+          // a fa recsegve-suhogva dől ki és puffan; az oszlop csak reccsen
+          const felled = this.map.trees[ev.index];
+          if (felled) this.sfx.treeFall(volume, felled.r / 3.2);
+          else this.sfx.crack(volume);
+        }
         // a lövéstől kidőlt fa (oszlop) kigyullad; amit a tank döntött ki, az nem
         if (ev.shot) {
           const tree = this.map.trees[ev.index];
@@ -765,8 +840,16 @@ export class GameScene extends Phaser.Scene {
         const rammer = world.tank(ev.tank);
         const size = rammer ? tankSize(rammer) : 1;
         for (let i = 0; i < 3; i++) this.puff((ev.x + (i - 1) * 1.1 * size) * ppm, (ev.y + ((i * 7 + this.frame) % 5) * 0.4 - 1) * ppm, 0xb9ab98, 0.9 * size, 520);
-        this.sfx.crunch(volume * 0.45);
-        if (mine) this.cameras.main.shake(90, 0.0016 * size);
+        // az első ütés a falon nagyot döndül; amíg a tank a falnak feszül, a fal csikorog és pereg
+        const since = this.time.now - (this.lastRam.get(ev.tank) ?? -Infinity);
+        this.lastRam.set(ev.tank, this.time.now);
+        if (since > 700) {
+          this.sfx.wallHit(volume * (mine ? 1 : 0.8), size);
+          if (mine) this.cameras.main.shake(140, 0.003 * size);
+        } else {
+          this.sfx.wallGrind(volume * 0.6, size);
+          if (mine) this.cameras.main.shake(90, 0.0016 * size);
+        }
         break;
       }
       case 'overheat':
@@ -787,7 +870,7 @@ export class GameScene extends Phaser.Scene {
           if (promoted) this.sfx.fanfare();
           else this.sfx.levelUp();
           // a szintlépést kiváltó kilövés eseménye közvetlenül ezután jön: az üzenete ezzel a szöveggel egészül ki
-          this.levelNote = (promoted ? `${ev.level}. szint – új tank: ${TIER_NAMES[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`) + plus;
+          this.levelNote = (promoted ? `${ev.level}. szint – új tank: ${this.tierNames[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`) + plus;
           this.hud.toast(this.levelNote);
         }
         break;
@@ -848,6 +931,12 @@ export class GameScene extends Phaser.Scene {
       case 'smoke': {
         const volume = mine ? 1 : this.loudness(ev.x, ev.y);
         if (volume > 0) this.sfx.smokeHiss(volume);
+        // a kieresztés pillanata: sűrű füstsugarak csapnak ki a tank körül
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2 + ev.tank;
+          const d = 1.5 + (i % 3) * 1.4;
+          this.puff((ev.x + Math.cos(a) * d) * ppm, (ev.y + Math.sin(a) * d) * ppm, 0xd4d8dc, 1.6 + (i % 4) * 0.4, 700 + i * 60);
+        }
         break;
       }
       case 'strike': {
@@ -1034,7 +1123,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Új sor a kilövési értesítőbe: ki kit lőtt ki (a saját nevem kiemelve). */
-  private killFeed(victimId: number, killerId: number): void {
+  private killFeed(victimId: number, killerId: number, cause: KillCause): void {
     const world = this.world;
     const tag = (id: number): string => {
       const name = world.nameOf(id);
@@ -1043,10 +1132,10 @@ export class GameScene extends Phaser.Scene {
     };
     const victimBot = world.nameOf(victimId) === 'Bot';
     if (killerId > 0 && killerId !== victimId) {
-      this.hud.feed(`${tag(killerId)}<span class="x">✖</span>${tag(victimId)}`);
+      this.hud.feed(`${tag(killerId)}<span class="x">✖</span>${tag(victimId)}<span class="how">${CAUSE_LABEL[cause]}</span>`);
     } else if (!victimBot) {
-      // senkinek nem jár érte pont: a saját robbanásában (gázpalack, jármű) halt meg
-      this.hud.feed(`<span class="x">✖</span>${tag(victimId)} felrobbant`);
+      // senkinek nem jár érte pont: robbanásban (gázpalack, jármű) halt meg
+      this.hud.feed(`<span class="x">✖</span>${tag(victimId)} felrobbant<span class="how">${CAUSE_LABEL[cause]}</span>`);
     }
   }
 
@@ -1084,37 +1173,99 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** A géppuska nyomjelzője: rövid, sárga csík a csőtől a célig, apró szikrával a becsapódásnál. */
+  /**
+   * A géppuska egy lövése. Nem összefüggő vonal: a lövedék rövid csíkként repül a csőtől a
+   * célig (minden harmadik fényes nyomjelző, a többi halvány), a csőnél villódzó torkolattűz,
+   * oldalra kirepülő hüvely, a becsapódásnál szikra és felverődő por.
+   */
   private tracer(x1: number, y1: number, x2: number, y2: number): void {
     const ppm = this.ppm;
     const v = this.view;
     if (Math.max(x1, x2) * ppm < v.x || Math.min(x1, x2) * ppm > v.right || Math.max(y1, y2) * ppm < v.y || Math.min(y1, y2) * ppm > v.bottom) return;
-    const length = Math.hypot(x2 - x1, y2 - y1) * ppm;
+    const s = this.spriteScale;
+    const dist = Math.hypot(x2 - x1, y2 - y1);
     const angle = Math.atan2(y2 - y1, x2 - x1);
-    const line = this.tracerPool.pop() ?? this.add.image(0, 0, GTEX.px).setOrigin(0, 0.5).setDepth(12.5).setTint(0xffe890);
-    line
-      .setPosition(x1 * ppm, y1 * ppm)
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const round = this.mgRound++;
+    const bright = round % 3 === 0;
+
+    // a repülő lövedék: a csík eleje a lövedék, mögötte rövid fénycsóva
+    const length = Math.min(dist * 0.6, bright ? 4.4 : 2.2);
+    const bullet = this.tracerPool.pop() ?? this.add.image(0, 0, GTEX.px).setDepth(12.5);
+    bullet
+      .setOrigin(1, 0.5)
+      .setTint(bright ? 0xfff3b8 : 0xffcf78)
+      .setPosition((x1 + cos * length) * ppm, (y1 + sin * length) * ppm)
       .setRotation(angle)
-      .setDisplaySize(length, 2.6 * this.spriteScale)
-      .setAlpha(0.9)
+      .setDisplaySize(length * ppm, (bright ? 2.4 : 1.4) * s)
+      .setAlpha(bright ? 1 : 0.5)
       .setVisible(true);
     this.tweens.add({
-      targets: line,
-      alpha: 0,
-      duration: 110,
+      targets: bullet,
+      x: x2 * ppm,
+      y: y2 * ppm,
+      duration: Math.max(35, ((dist - length) / 170) * 1000),
       onComplete: () => {
-        line.setVisible(false);
-        this.tracerPool.push(line);
+        bullet.setVisible(false);
+        this.tracerPool.push(bullet);
+        // becsapódás: apró szikra, minden második lövésnél felverődő por
+        const spark = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setDepth(12);
+        spark.setOrigin(0.5, 0.5).setScale(s * (0.14 + Math.random() * 0.1)).setPosition(x2 * ppm, y2 * ppm).setRotation(Math.random() * 6.28).setVisible(true);
+        this.time.delayedCall(40, () => {
+          spark.setVisible(false);
+          this.flashPool.push(spark);
+        });
+        if ((round & 1) === 0) this.puff(x2 * ppm, y2 * ppm, 0xcbbfa8, 0.4, 240);
       },
     });
-    // torkolattűz a csőnél
-    const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setDepth(12);
-    flash.setScale(this.spriteScale * 0.42).setPosition(x1 * ppm, y1 * ppm).setRotation(angle).setVisible(true);
-    this.time.delayedCall(45, () => {
+
+    // torkolattűz: lövésenként más méretű és kicsit más irányú, ettől villódzik
+    const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setDepth(12);
+    flash
+      .setOrigin(0.15, 0.5)
+      .setScale(s * (0.32 + Math.random() * 0.22))
+      .setPosition(x1 * ppm, y1 * ppm)
+      .setRotation(angle + (Math.random() - 0.5) * 0.3)
+      .setVisible(true);
+    this.time.delayedCall(38, () => {
       flash.setVisible(false);
       this.flashPool.push(flash);
     });
-    if ((this.frame & 1) === 0) this.puff(x2 * ppm, y2 * ppm, 0xffd890, 0.35, 160);
+    if (bright) this.puff((x1 + cos * 0.4) * ppm, (y1 + sin * 0.4) * ppm, 0xd6d6d6, 0.28, 280);
+
+    // a kirepülő hüvely: a fegyver tokjától oldalra pattan, pörög, és a földön elhalványul
+    const casing = this.casingPool.pop() ?? this.add.image(0, 0, GTEX.px).setDepth(11.6).setTint(0xdcb450);
+    const side = angle + Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+    const throwDist = 1.5 + Math.random() * 1.4;
+    const bx = x1 - cos * 1.3;
+    const by = y1 - sin * 1.3;
+    casing
+      .setPosition(bx * ppm, by * ppm)
+      .setDisplaySize(3.4 * s, 1.5 * s)
+      .setRotation(angle)
+      .setAlpha(1)
+      .setVisible(true);
+    this.tweens.add({
+      targets: casing,
+      x: (bx + Math.cos(side) * throwDist) * ppm,
+      y: (by + Math.sin(side) * throwDist) * ppm,
+      rotation: angle + 5 + Math.random() * 4,
+      duration: 300 + Math.random() * 120,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        this.tweens.add({
+          targets: casing,
+          alpha: 0,
+          duration: 500,
+          delay: 250,
+          onComplete: () => {
+            casing.setVisible(false);
+            this.casingPool.push(casing);
+          },
+        });
+      },
+    });
   }
 
   /** Piros ív a saját tank körül abban az irányban, ahonnan a találat jött. */
@@ -1193,7 +1344,7 @@ export class GameScene extends Phaser.Scene {
     const revenge = this.revenge;
     const target = revenge && revenge.live ? world.tank(revenge.id) : undefined;
     if (revenge && revenge.live && now > revenge.until) this.revenge = null;
-    if (this.revenge && target && target.alive && !(target.cloak > 0) && !world.smokes.some((k) => Math.hypot(target.x - k.x, target.y - k.y) < SMOKE.radius)) {
+    if (this.revenge && target && target.alive && !(target.cloak > 0) && !world.smokes.some((k) => insideSmoke(k, target.x, target.y))) {
       marks.push({ kind: 'revenge', x: target.x, y: target.y });
       this.revengeArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff3a2a).setScale(this.spriteScale);
       this.pointAt(this.revengeArrow, target.x, target.y, view);
@@ -1234,29 +1385,75 @@ export class GameScene extends Phaser.Scene {
       );
       for (const smoke of world.smokes) {
         if (this.smokeViews.has(smoke.id)) continue;
-        // a tankok és az életerősávok fölött: ami a füstben van, az nem látszik
-        const layer = (): Phaser.GameObjects.Image => this.add.image(smoke.x * ppm, smoke.y * ppm, GTEX.cloud).setDepth(18.6).setAlpha(0);
-        this.smokeViews.set(smoke.id, [layer(), layer()]);
+        const x = smoke.x * ppm;
+        const y = smoke.y * ppm;
+        // a felhő a tankok és az életerősávok fölött van (ami benne áll, az nem látszik), az árnyéka a földön
+        const core = [0, 1].map(() => this.add.image(x, y, GTEX.cloud).setDepth(18.6).setAlpha(0));
+        const puffs: Phaser.GameObjects.Image[] = [];
+        for (let i = 0; i < SMOKE_PUFFS; i++) {
+          // belül sötétebb, sűrűbb; a szélén világosabb, ritkább füst
+          const ring = Math.sqrt((i + 0.5) / SMOKE_PUFFS);
+          const shade = Math.round(196 + 44 * ring + ((smoke.id * 7 + i * 13) % 14));
+          puffs.push(
+            this.add
+              .image(x, y, `${GTEX.puff}${(smoke.id + i) % PUFF_VARIANTS}`)
+              .setDepth(18.61 + i * 0.0005)
+              .setAlpha(0)
+              .setTint((shade << 16) | (shade << 8) | Math.min(255, shade + 4)),
+          );
+        }
+        const shadow = this.add.image(x, y, GTEX.cloud).setDepth(3.6).setTint(0x000000).setAlpha(0);
+        this.smokeViews.set(smoke.id, { core, puffs, shadow, life: smoke.life, at: this.time.now });
       }
-      for (const [id, layers] of this.smokeViews) {
+      for (const [id, view] of this.smokeViews) {
         if (!world.smokes.some((s) => s.id === id)) {
-          for (const layer of layers) layer.destroy();
+          for (const image of [...view.core, ...view.puffs, view.shadow]) image.destroy();
           this.smokeViews.delete(id);
         }
       }
     }
     if (this.smokeViews.size === 0) return;
     const own = world.own;
-    const base = (SMOKE.radius * ppm) / 104;
+    const now = this.time.now;
     for (const smoke of world.smokes) {
-      const layers = this.smokeViews.get(smoke.id);
-      if (!layers) continue;
-      // gyorsan felgomolyog, a végén lassan oszlik el; aki benne áll, az a saját közelét halványan látja
-      const fade = Math.max(0, Math.min(1, (SMOKE.life - smoke.life) / 0.7, smoke.life / 1.6));
-      const inside = !!own && own.alive && Math.hypot(own.x - smoke.x, own.y - smoke.y) < SMOKE.radius * 0.9;
-      const alpha = fade * (inside ? 0.5 : 0.98);
-      layers[0].setAlpha(alpha).setRotation(seconds * 0.07 + smoke.id).setScale(base * (0.9 + 0.1 * fade));
-      layers[1].setAlpha(alpha * 0.85).setRotation(-seconds * 0.05 + smoke.id * 2).setScale(base * (0.8 + 0.06 * Math.sin(seconds * 0.9 + smoke.id)));
+      const view = this.smokeViews.get(smoke.id);
+      if (!view) continue;
+      // a szerver másodpercenként hússzor küldi a hátralévő időt: közte a saját óránkkal számolunk, hogy a felhő simán mozogjon
+      if (smoke.life !== view.life) {
+        view.life = smoke.life;
+        view.at = now;
+      }
+      const life = Math.max(0, view.life - Math.min(0.25, (now - view.at) / 1000));
+      const age = SMOKE.life - life;
+      const r = smokeRadius(age);
+      const cx = smoke.x + SMOKE.windX * age;
+      const cy = smoke.y + SMOKE.windY * age;
+      // aki benne áll, az a saját közelét halványan látja
+      const inside = !!own && own.alive && Math.hypot(own.x - cx, own.y - cy) < r * 0.9;
+      const dim = inside ? 0.5 : 1;
+      // a sűrű mag: gyorsan felgomolyog, a végén lassan oszlik el
+      const fade = Math.max(0, Math.min(1, age / 0.7, life / 1.8));
+      const base = (r * ppm) / 104;
+      view.core[0].setPosition(cx * ppm, cy * ppm).setAlpha(fade * 0.96 * dim).setRotation(seconds * 0.05 + smoke.id).setScale(base * 0.86);
+      view.core[1].setPosition(cx * ppm, cy * ppm).setAlpha(fade * 0.8 * dim).setRotation(-seconds * 0.04 + smoke.id * 2).setScale(base * (0.74 + 0.04 * Math.sin(seconds * 0.7 + smoke.id)));
+      view.shadow.setPosition((cx + 2.2) * ppm, (cy + 3) * ppm).setAlpha(fade * 0.2).setScale(base * 0.95);
+      // a gomolyagok: a közepéből kifelé terjednek, lassan forognak és lüktetnek; a széle foszlik el először
+      for (let i = 0; i < view.puffs.length; i++) {
+        const ring = Math.sqrt((i + 0.5) / view.puffs.length);
+        const h = ((smoke.id * 31 + i * 17) % 23) / 22;
+        const a = i * 2.399963 + smoke.id * 1.7 + Math.sin(seconds * 0.11 + i) * 0.25;
+        const d = ring * 0.8 * r;
+        const px = cx + Math.cos(a) * d + Math.cos(seconds * (0.23 + h * 0.2) + i * 1.3) * 0.045 * r;
+        const py = cy + Math.sin(a) * d + Math.sin(seconds * (0.19 + h * 0.2) + i * 2.1) * 0.045 * r;
+        const born = Math.max(0, Math.min(1, (age - ring * 0.6) / 0.9));
+        const gone = Math.min(1, life / (1.2 + 3 * ring));
+        const size = r * (0.36 + 0.16 * h) * (0.75 + 0.25 * born) * (1 + 0.05 * Math.sin(seconds * (0.5 + h * 0.4) + i));
+        view.puffs[i]
+          .setPosition(px * ppm, py * ppm)
+          .setScale((size * ppm) / (PUFF_SIZE * 0.36))
+          .setRotation(seconds * (h - 0.5) * 0.22 + i * 1.9)
+          .setAlpha(born * gone * (0.92 - 0.3 * ring) * dim);
+      }
     }
   }
 
@@ -1309,9 +1506,9 @@ export class GameScene extends Phaser.Scene {
       let parts = this.wreckViews.get(w.id);
       if (!parts) {
         parts = [
-          this.add.image(x, y, tankTex.wreckHull(tankTier(w.level))).setRotation(w.hullAngle).setScale(this.spriteScale * tankSize(w)).setDepth(5),
+          this.add.image(x, y, tankTex.wreckHull(tankTier(w.level), w.look)).setRotation(w.hullAngle).setScale(this.spriteScale * tankSize(w)).setDepth(5),
           this.add
-            .image(x, y, tankTex.wreckTurret(tankTier(w.level)))
+            .image(x, y, tankTex.wreckTurret(tankTier(w.level), w.look))
             .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
             .setRotation(w.turretAngle + 0.5)
             .setScale(this.spriteScale * tankSize(w))
@@ -1533,7 +1730,7 @@ export class GameScene extends Phaser.Scene {
         if (!onScreen) continue;
         // a többi játékos tankja fölött ott a neve; a sajátunkon és a botokon nincs felirat
         const kind = tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival';
-        view = new TankView(this, this.ppm, tank, kind, kind === 'rival' ? this.world.nameOf(tank.id) : '');
+        view = new TankView(this, this.ppm, tank, kind, kind === 'rival' ? this.world.nameOf(tank.id) : '', this.world.lookOf(tank.id));
         this.tankViews.set(tank.id, view);
       }
       if (onScreen) view.render(tank, tank.id === myId ? ownAlpha : netAlpha, seconds);
@@ -1603,9 +1800,131 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * A lángszórók lángja: minden égő lángszóró csövéből képkockánként néhány lángdarab indul a
+   * torony irányában, kicsit szórva. A darabok repülnek, nőnek, kihűlnek (fehér → sárga → narancs →
+   * vörös), a falnál megállnak; a csóva végén füst száll fel, a földön égésnyom marad.
+   */
+  private flames(dt: number): void {
+    const world = this.world;
+    const ppm = this.ppm;
+    const v = this.view;
+    let loudest = 0;
+    const flaming = new Set<number>();
+    for (const t of world.tanks) {
+      if (!t.alive || !t.flaming) continue;
+      flaming.add(t.id);
+      const mine = t.id === world.myId;
+      const volume = mine ? 1 : this.loudness(t.x, t.y) * 0.8;
+      loudest = Math.max(loudest, volume);
+      if (!this.flamingBefore.has(t.id) && volume > 0) this.sfx.flameStart(volume);
+      const view = this.tankViews.get(t.id);
+      const tx = view ? view.px / ppm : t.x;
+      const ty = view ? view.py / ppm : t.y;
+      if (tx * ppm < v.x - 700 || tx * ppm > v.right + 700 || ty * ppm < v.y - 700 || ty * ppm > v.bottom + 700) continue;
+      const size = tankSize(t);
+      const barrel = TANK.barrelLength * size;
+      const cos = Math.cos(t.turretAngle);
+      const sin = Math.sin(t.turretAngle);
+      const mx = tx + cos * barrel;
+      const my = ty + sin * barrel;
+      // a falnál megáll a láng
+      const wall = this.map.walls.raycast(tx, ty, tx + cos * (barrel + FLAME.range), ty + sin * (barrel + FLAME.range));
+      const reach = wall ? Math.max(1.5, Math.hypot(wall.x - mx, wall.y - my)) : FLAME.range;
+      for (let i = 0; i < 6; i++) {
+        const spread = (Math.random() - 0.5) * 2 * FLAME.halfAngle * 0.8;
+        const a = t.turretAngle + spread;
+        const speed = FLAME_SPEED * (0.8 + Math.random() * 0.4);
+        const image = this.flamePool.pop() ?? this.add.image(0, 0, `${GTEX.puff}0`).setDepth(12.7).setBlendMode(Phaser.BlendModes.ADD);
+        image.setTexture(`${GTEX.puff}${(this.frame + i) % PUFF_VARIANTS}`).setVisible(true);
+        this.flameParts.push({
+          image,
+          x: mx + (Math.random() - 0.5) * 0.4,
+          y: my + (Math.random() - 0.5) * 0.4,
+          // a tank mozgása is viszi a lángot
+          vx: Math.cos(a) * speed + Math.cos(t.hullAngle) * t.speed * 0.5,
+          vy: Math.sin(a) * speed + Math.sin(t.hullAngle) * t.speed * 0.5,
+          age: 0,
+          life: (reach / FLAME_SPEED) * (0.85 + Math.random() * 0.3),
+          size: 0.8 + Math.random() * 0.5,
+          spin: (Math.random() - 0.5) * 5,
+        });
+      }
+      // a csóva vége: felszálló fekete füst, néha égésnyom a földön; este a láng bevilágítja a környéket
+      const ex = mx + cos * reach * 0.95;
+      const ey = my + sin * reach * 0.95;
+      if (this.frame % 5 === 0) this.puff((ex + (Math.random() - 0.5) * 4) * ppm, (ey + (Math.random() - 0.5) * 4) * ppm, 0x2c2a28, 2.4, 900);
+      if (this.frame % 14 === 0 && !wall) this.scar(mx + cos * reach * (0.5 + Math.random() * 0.45), my + sin * reach * (0.5 + Math.random() * 0.45), 1.2 + Math.random() * 0.8);
+      if (this.frame % 4 === 0) this.weather.flash(mx + cos * reach * 0.5, my + sin * reach * 0.5, reach * 0.9, 0.25);
+    }
+    this.flamingBefore.clear();
+    for (const id of flaming) this.flamingBefore.add(id);
+    this.sfx.flameRoar(loudest);
+
+    // a lángdarabok mozgatása
+    for (let i = this.flameParts.length - 1; i >= 0; i--) {
+      const p = this.flameParts[i];
+      p.age += dt;
+      if (p.age >= p.life) {
+        p.image.setVisible(false);
+        this.flamePool.push(p.image);
+        this.flameParts[i] = this.flameParts[this.flameParts.length - 1];
+        this.flameParts.pop();
+        continue;
+      }
+      const k = p.age / p.life;
+      // a láng a levegőben lassul és szétterül
+      const drag = 1 - 0.9 * dt;
+      p.vx *= drag;
+      p.vy *= drag;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      let color = FLAME_COLORS[FLAME_COLORS.length - 1][1];
+      for (const [until, c] of FLAME_COLORS) {
+        if (k <= until) {
+          color = c;
+          break;
+        }
+      }
+      const radius = p.size * (0.55 + 4.4 * k);
+      p.image
+        .setPosition(p.x * ppm, p.y * ppm)
+        .setScale((radius * ppm) / (PUFF_SIZE * 0.36))
+        .setRotation(p.spin * p.age)
+        .setTint(color)
+        .setAlpha(k < 0.08 ? k / 0.08 : k > 0.7 ? Math.max(0, (1 - k) / 0.3) * 0.75 : 0.75);
+    }
+  }
+
+  /** Olajos lánctalp: a kipörgő lánctalp olajat fröcsköl maga mögé; a saját tanknál jelzés és surrogó hang. */
+  private oilyTracks(): void {
+    const world = this.world;
+    const ppm = this.ppm;
+    const v = this.view;
+    if (this.frame % 3 === 0) {
+      for (const t of world.tanks) {
+        if (!t.alive || !(t.oily > 0) || Math.abs(t.speed) < 0.4) continue;
+        const x = t.x * ppm;
+        const y = t.y * ppm;
+        if (x < v.x - 60 || x > v.right + 60 || y < v.y - 60 || y > v.bottom + 60) continue;
+        const back = t.speed >= 0 ? Math.PI : 0;
+        const r = tankRadius(t);
+        for (const side of [-1, 1]) {
+          const a = t.hullAngle + back + side * 0.55;
+          this.puff(x + Math.cos(a) * r * 1.15 * ppm, y + Math.sin(a) * r * 1.15 * ppm, 0x17171d, 0.42, 320);
+        }
+      }
+    }
+    const own = world.own;
+    const oily = !!own && own.alive && own.oily > 0;
+    if (oily && !this.wasOily) this.hud.toast('Olajos a lánctalp – kipörög, amíg le nem kopik');
+    this.wasOily = oily;
+    if (oily && this.input_.throttle !== 0 && this.frame % 26 === 0) this.sfx.trackSpin();
+  }
+
   private syncOils(): void {
     const { oils } = this.world;
-    const scale = (OIL.radius * 2 * this.ppm) / 80; // a textúrán a folt kb. 80 pixel átmérőjű
+    const scale = (OIL.radius * 2 * this.ppm) / 160; // a textúrán a folt kb. 160 pixel átmérőjű
     for (const oil of oils) {
       if (this.oilViews.has(oil.id)) continue;
       const view = this.add.image(oil.x * this.ppm, oil.y * this.ppm, GTEX.oil).setDepth(2).setScale(scale).setRotation((oil.id * 1.7) % 6.28).setAlpha(0.88);

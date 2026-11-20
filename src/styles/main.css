@@ -522,9 +522,289 @@ body {
   color: #ffd84a;
 }
 
-.player-row .stats {
+.player-row .stats,
+.mvp .stats,
+.results-grid .stats {
   font-size: 12px;
   opacity: 0.8;
+}
+
+/* a végeredmény: széles képernyő, a meccs legjobbja kiemelve, alatta a statisztikatábla */
+#screen-results {
+  width: min(980px, 96vw);
+}
+
+#screen-results #results-table {
+  width: 100%;
+}
+
+.mvp {
+  margin: 4px auto 14px;
+  padding: 10px 18px;
+  width: fit-content;
+  text-align: center;
+  font-size: 16px;
+  background: linear-gradient(180deg, rgba(255, 216, 74, 0.2), rgba(255, 216, 74, 0.07));
+  border: 1px solid rgba(255, 216, 74, 0.75);
+  box-shadow: 0 0 18px rgba(255, 216, 74, 0.18);
+}
+
+.mvp b,
+.mvp-star {
+  color: #ffd84a;
+}
+
+.results-scroll {
+  overflow-x: auto;
+}
+
+.results-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.results-grid th {
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  text-align: right;
+  border-bottom: 1px solid rgba(244, 240, 224, 0.35);
+}
+
+.results-grid td {
+  padding: 6px 9px;
+  text-align: right;
+  border-bottom: 1px solid rgba(244, 240, 224, 0.12);
+}
+
+.results-grid .name {
+  text-align: left;
+}
+
+.results-grid .score {
+  font-weight: bold;
+  color: #ffd84a;
+}
+
+.results-grid tr.me td {
+  background: rgba(120, 200, 255, 0.12);
+}
+
+.results-grid tr.best td {
+  border-bottom-color: rgba(255, 216, 74, 0.55);
+}
+
+.results-grid tr.gone td {
+  opacity: 0.55;
+}
+
+/* tankválasztó: három kártya, alatta a kiválasztott tank fejlődése */
+#garage-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 12px 0 6px;
+}
+
+.garage-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 12px 14px;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(88, 130, 72, 0.5), rgba(60, 94, 52, 0.5));
+  border: 2px solid rgba(244, 240, 224, 0.25);
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.garage-card:hover {
+  border-color: rgba(255, 216, 74, 0.7);
+  transform: translateY(-2px);
+}
+
+.garage-card.selected {
+  border-color: #ffd84a;
+  box-shadow: 0 0 18px rgba(255, 216, 74, 0.3);
+}
+
+.garage-card canvas {
+  image-rendering: pixelated;
+  max-width: 100%;
+}
+
+.garage-card b {
+  display: block;
+  font-size: 17px;
+  color: #ffd84a;
+}
+
+.garage-card.selected b::after {
+  content: ' ✓';
+}
+
+.garage-card span {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+#garage-tiers {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  padding: 8px 4px;
+  background: rgba(88, 130, 72, 0.35);
+  border: 1px solid rgba(244, 240, 224, 0.18);
+}
+
+.garage-tier {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.garage-tier canvas {
+  image-rendering: pixelated;
+  max-width: 100%;
+}
+
+.garage-tier b {
+  font-size: 12px;
+  color: #fff3d8;
+}
+
+/* útmutató: görgethető, szakaszokra tagolt leírás */
+#guide-body {
+  max-height: min(68vh, 760px);
+  overflow-y: auto;
+  padding-right: 10px;
+  text-align: left;
+}
+
+.guide-section h3 {
+  margin: 16px 0 8px;
+  padding-bottom: 4px;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffd84a;
+  border-bottom: 1px solid rgba(255, 216, 74, 0.4);
+}
+
+.guide-section:first-child h3 {
+  margin-top: 2px;
+}
+
+.guide-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 8px 18px;
+}
+
+.guide-item {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  padding: 7px 9px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: rgba(244, 240, 224, 0.05);
+  border: 1px solid rgba(244, 240, 224, 0.14);
+}
+
+.guide-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+}
+
+.guide-item b {
+  font-size: 14px;
+  color: #fff3d8;
+}
+
+.guide-key {
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  border: 1px solid rgba(244, 240, 224, 0.5);
+  border-radius: 3px;
+}
+
+.guide-lasts {
+  font-size: 12px;
+  color: #9fd6ff;
+}
+
+.guide-scroll {
+  overflow-x: auto;
+}
+
+.guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.guide-table.narrow {
+  width: auto;
+  min-width: 60%;
+}
+
+.guide-table th {
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  text-align: left;
+  border-bottom: 1px solid rgba(244, 240, 224, 0.35);
+}
+
+.guide-table td {
+  padding: 5px 9px;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(244, 240, 224, 0.12);
+}
+
+.guide-table td.name {
+  white-space: nowrap;
+  font-weight: bold;
+  color: #fff3d8;
+}
+
+.guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.guide-list li {
+  margin-bottom: 5px;
+}
+
+.guide-section .note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  text-align: left;
+}
+
+.results-note {
+  margin-top: 10px;
+  font-size: 11px;
+  text-align: left;
 }
 
 #hud-toast {
@@ -545,6 +825,49 @@ body {
 #hud-toast.show {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+/* kilőttek: ki és mivel – az újraéledésig a képernyő közepe alatt áll */
+#hud-death {
+  position: absolute;
+  top: 62%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 26px 13px;
+  text-align: center;
+  white-space: nowrap;
+  border-color: #ff5a4a;
+  box-shadow:
+    4px 4px 0 rgba(0, 0, 0, 0.6),
+    0 0 26px rgba(255, 70, 50, 0.35);
+}
+
+#hud-death .death-title {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: #ff6a5a;
+}
+
+#hud-death .death-who {
+  margin: 4px 0 3px;
+  font-size: 21px;
+  font-weight: bold;
+  color: #fff3d8;
+}
+
+#hud-death .death-who b {
+  color: #ffd84a;
+}
+
+#hud-death .death-note {
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.feed-item .how {
+  margin-left: 7px;
+  font-size: 11px;
+  opacity: 0.7;
 }
 
 #labels {
@@ -1100,6 +1423,82 @@ body {
 
 .features.hidden {
   display: none;
+}
+
+/* játékmenet a főképernyőn: összecsukható, számozott lépések két oszlopban */
+.howto {
+  margin-top: 18px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(244, 240, 224, 0.2);
+}
+
+.howto summary {
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffd84a;
+  user-select: none;
+}
+
+.howto summary:hover {
+  background: rgba(255, 216, 74, 0.08);
+}
+
+.howto ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 22px;
+  margin: 0;
+  padding: 4px 16px 14px;
+  list-style: none;
+  counter-reset: step;
+}
+
+.howto li {
+  position: relative;
+  padding-left: 34px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  counter-increment: step;
+}
+
+.howto li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 23px;
+  height: 23px;
+  line-height: 23px;
+  text-align: center;
+  font-weight: bold;
+  color: #10141c;
+  background: #ffd84a;
+  border-radius: 50%;
+}
+
+.howto li > b {
+  display: block;
+  font-size: 13.5px;
+  color: #fff3d8;
+}
+
+.howto li span b {
+  color: #ffd84a;
+}
+
+.howto li i {
+  font-style: normal;
+  color: #9fd6ff;
+}
+
+@media (max-width: 760px) {
+  .howto ol {
+    grid-template-columns: 1fr;
+  }
 }
 
 .credit {

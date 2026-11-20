@@ -5,15 +5,18 @@ import { describe, expect, it } from 'vitest';
 import { LIMITS, Lobby } from '../server/lobby';
 import { GameMap, pointInPolygon } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
-import { encode, packBarrel, packInput, packMine, packSmoke, packTank, blankTank, PROTOCOL_VERSION, unpackBarrel, unpackInput, unpackMine, unpackSmoke, unpackTank, messageReader, mergeSnapshot, packMe, type FullSnapshot, type ServerMessage, type Snapshot } from '../src/game/net/protocol';
+import { encode, packBarrel, packInput, packMine, packSmoke, packTank, packWreck, unpackWreck, blankTank, PROTOCOL_VERSION, unpackBarrel, unpackInput, unpackMine, unpackSmoke, unpackTank, messageReader, mergeSnapshot, packMe, type FullSnapshot, type ServerMessage, type Snapshot } from '../src/game/net/protocol';
 import { SegmentGrid } from '../src/game/sim/collision';
-import { BARREL, CLOAK, MG, MINE, SMOKE, STRIKE, SUPER, WORKSHOP } from '../src/game/sim/gadgets';
-import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, Match, matchPlan, sanitizeSettings } from '../src/game/sim/match';
+import { BARREL, CLOAK, FLAME, MG, MINE, SMOKE, STRIKE, SUPER, WORKSHOP, smokeAge, smokeRadius } from '../src/game/sim/gadgets';
+import { deathText } from '../src/game/ui/killText';
+import { durationRows, GUIDE_PICKUPS, howToSteps, weaponRows } from '../src/game/ui/Guide';
+import { ROOM_CODE } from '../src/game/net/protocol';
+import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, MATCH, Match, matchPlan, matchScore, sanitizeSettings, SCORE } from '../src/game/sim/match';
 import { DEFAULT_KEYS } from '../src/game/settings';
 import { PICKUP, PICKUP_KINDS, PICKUPS, pickKind, mulberry32 } from '../src/game/sim/pickups';
 import { Structures } from '../src/game/sim/structures';
 import { TURRET } from '../src/game/sim/vehicles';
-import { DAMAGE, LEVEL, REGEN, SIM_DT, TANK, tankMaxHp, tankSize, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
+import { cleanLook, DAMAGE, LEVEL, REGEN, SIM_DT, TANK, TANK_LOOKS, tankMaxHp, tankSize, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
 
 const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
 
@@ -97,9 +100,15 @@ describe('akna', () => {
     enemy.hp = 10;
     enemy.x = second.x;
     enemy.y = second.y;
-    run(world, {}, 2);
+    const fatal = run(world, {}, 2);
     expect(enemy.alive).toBe(false);
     expect(owner.kills).toBe(1);
+    // a kilövés eseménye megmondja, ki és mivel: a lerakó, aknával
+    expect(fatal.find((e) => e.type === 'destroyed')).toMatchObject({ tank: enemy.id, by: owner.id, cause: 'mine' });
+    expect(deathText('mine', 'Béla')).toBe('Béla lőtt ki – aknával.');
+    expect(deathText('rocket', 'Bot')).toBe('Egy bot lőtt ki – rakétával.');
+    expect(deathText('barrel', null, true)).toContain('általad felrobbantott gázpalack');
+    expect(deathText('barrel', null)).toBe('Felrobbant melletted egy gázpalack.');
   });
 
   it('élesedés előtt nem robban; egyszerre legfeljebb hat lehet kint; idővel eltűnik', () => {
@@ -141,8 +150,23 @@ describe('füst', () => {
     expect(world.smokes).toHaveLength(1);
     expect(world.inSmoke(enemy.x, enemy.y)).toBe(true);
     expect(world.inSmoke(enemy.x + SMOKE.radius + 2, enemy.y)).toBe(false);
+    // a felhő kicsiben indul, és pár másodperc alatt terjed szét; közben a szél lassan arrébb viszi
+    const origin = { x: world.smokes[0].x, y: world.smokes[0].y };
+    expect(smokeRadius(0)).toBeCloseTo(SMOKE.radius * SMOKE.startRatio, 5);
+    expect(smokeRadius(SMOKE.spread)).toBeCloseTo(SMOKE.radius, 5);
+    expect(smokeRadius(SMOKE.spread / 2)).toBeGreaterThan(SMOKE.radius * 0.7);
+    expect(world.inSmoke(origin.x, origin.y + 20)).toBe(false);
+    run(world, {}, seconds(SMOKE.spread));
+    expect(world.inSmoke(origin.x, origin.y + 20)).toBe(true);
+    const age = smokeAge(world.smokes[0]);
+    expect(age).toBeGreaterThan(SMOKE.spread - 0.5);
+    // a szél irányában messzebb ér, szemben kevésbé
+    const reach = SMOKE.radius - 1;
+    const wind = Math.hypot(SMOKE.windX, SMOKE.windY);
+    expect(world.inSmoke(origin.x + (SMOKE.windX / wind) * (reach + wind * age), origin.y + (SMOKE.windY / wind) * (reach + wind * age))).toBe(true);
+    expect(world.inSmoke(origin.x - (SMOKE.windX / wind) * reach, origin.y - (SMOKE.windY / wind) * reach)).toBe(false);
     enemy.hp = tankMaxHp(enemy);
-    const hidden = run(world, {}, seconds(SMOKE.life - 1));
+    const hidden = run(world, {}, seconds(SMOKE.life - 1 - SMOKE.spread));
     expect(hidden.filter((e) => e.type === 'shot')).toHaveLength(0);
     expect(enemy.hp).toBe(tankMaxHp(enemy));
     // a füst eloszlik: az ágyú újra lát és lő
@@ -262,6 +286,8 @@ describe('gázpalack', () => {
     expect(tank.alive).toBe(false);
     expect(tank.kills).toBe(0);
     expect(tank.deaths).toBe(1);
+    // a saját maga okozta robbanás: senkinek nem jár a kilövés, és ez az eseményből is kiderül
+    expect(events.find((e) => e.type === 'destroyed')).toMatchObject({ tank: tank.id, by: 0, cause: 'barrel', self: true });
     // az álló tank mellett nem robban
     const other = new World(arena());
     const still = other.addTank(100, 200, 0);
@@ -578,11 +604,36 @@ describe('javítóműhely', () => {
       expect(shop.x).toBeLessThan(settings.area.maxX - reach);
       expect(shop.y).toBeGreaterThan(settings.area.minY + reach);
       expect(shop.y).toBeLessThan(settings.area.maxY - reach);
-      // a csarnok teljes területe szabad: nincs benne fal, és nem úttesten áll
+      // a csarnok teljes területe szabad: nincs benne fal, épület, víz, és nem úttesten áll
       expect(map.walls.resolveCircle(shop.x, shop.y, reach).hit).toBe(false);
       expect(map.speedFactor(shop.x, shop.y)).toBeLessThan(1);
+      for (let i = 0; i <= 8; i++) {
+        for (let j = 0; j <= 8; j++) {
+          const px = shop.x + (i / 4 - 1) * (WORKSHOP.width / 2);
+          const py = shop.y + (j / 4 - 1) * (WORKSHOP.height / 2);
+          expect(map.insideSolid(px, py)).toBe(false);
+          expect(data.buildings.some((b) => pointInPolygon(px, py, b.pts)), `${px},${py}`).toBe(false);
+        }
+      }
       for (const other of shops) if (other !== shop) expect(Math.hypot(other.x - shop.x, other.y - shop.y)).toBeGreaterThan(reach * 2);
     }
+    // nagy tó mellett: a műhely nem kerül a vízre, és az útról be lehet hajtani
+    const lake = new GameMap(data);
+    lake.setArea({ minX: 440, minY: 2690, maxX: 840, maxY: 3030 });
+    expect(lake.insideSolid(640, 2860)).toBe(true);
+    const rnd = mulberry32(7);
+    let found = 0;
+    for (let i = 0; i < 3000; i++) {
+      const spot = lake.workshopSpot(rnd, reach);
+      if (!spot) continue;
+      found++;
+      for (let k = 0; k <= 8; k++) {
+        for (let j = 0; j <= 8; j++) expect(lake.insideSolid(spot.x + (k / 4 - 1) * (WORKSHOP.width / 2), spot.y + (j / 4 - 1) * (WORKSHOP.height / 2))).toBe(false);
+      }
+      const road = lake.nearestRoad(spot.x, spot.y, 40, true);
+      expect(road, `${spot.x},${spot.y}`).not.toBeNull();
+    }
+    expect(found).toBeGreaterThan(0);
     // a szám a területtel nő; a legkisebb pályán is van egy
     expect(matchPlan(sanitizeSettings({ area: areaOfCells(map.width, map.height, 10, 20, 11, 21) }, map.width, map.height)).workshops).toBe(WORKSHOP.min);
     expect(matchPlan(sanitizeSettings({}, map.width, map.height)).workshops).toBe(WORKSHOP.max);
@@ -695,9 +746,39 @@ describe('statisztika és hálózat', () => {
       // ha a véletlen kezdőhelyen fal állt a két tank közé, a találat elmarad: a pontosság ehhez igazodik
       expect(a.hits).toBe(hits.length);
     }
+    // az okozott és az elszenvedett sebzés is a statisztikába kerül (csak a ténylegesen elvett életerő)
+    const landed = hits.reduce((sum, v) => sum + v, 0);
+    expect(match.standings().find((s) => s.id === 'a')).toMatchObject({ shots: 4, hits: hits.length, damage: landed });
+    expect(match.standings().find((s) => s.id === 'b')!.taken).toBe(landed);
     a.wrecked = 3;
     a.bestStreak = 4;
     expect(match.standings().find((s) => s.id === 'a')).toMatchObject({ wrecked: 3, streak: 4 });
+    // teljesítménypont: a statisztikákból; a meccs legjobbja a legtöbb pontot gyűjtő játékos
+    const sa = match.standings().find((s) => s.id === 'a')!;
+    expect(sa.score).toBe(matchScore(sa));
+    expect(sa.score).toBe(Math.round(landed * SCORE.damage + 4 * SCORE.streak + 3 * SCORE.wrecked));
+    expect(sa.mvp).toBe(true);
+    expect(match.standings().find((s) => s.id === 'b')).toMatchObject({ mvp: false, score: 0 });
+    // nem csak a kilövés számít: kevesebb kilövéssel, de sokkal több sebzéssel és jobb sorozattal más lehet a legjobb
+    b.kills = 1;
+    b.dealt = 2000;
+    b.bestStreak = 1;
+    a.kills = 2;
+    a.deaths = 4;
+    const swapped = match.standings();
+    expect(swapped[0].id).toBe('a'); // a helyezés a kilövések szerint
+    expect(swapped.find((s) => s.mvp)!.id).toBe('b');
+    expect(matchScore({ kills: 0, deaths: 9, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 })).toBe(0);
+    // a pontosság csak elég lövés után számít; a ledöntött házakért járó pont korlátos
+    const base = { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: 80, shots: 5, hits: 4, damage: 0, taken: 0 };
+    expect(matchScore(base)).toBe(0);
+    expect(matchScore({ ...base, shots: 10, hits: 8 })).toBe(80);
+    expect(matchScore({ ...base, accuracy: -1, shots: 0, hits: 0, wrecked: 50 })).toBe(SCORE.wreckedMax);
+    b.kills = 0;
+    b.dealt = 0;
+    b.bestStreak = 0;
+    a.kills = 0;
+    a.deaths = 0;
     // a kilépő játékos statisztikája megmarad
     match.leave('a');
     expect(match.standings().find((s) => s.id === 'a')).toMatchObject({ wrecked: 3, streak: 4, gone: true });
@@ -886,5 +967,172 @@ describe('különbségi pillanatkép', () => {
     expect(counts.filter((c) => c === most).length).toBeLessThanOrEqual(Math.ceil(counts.length / LIMITS.farEvery) + 1);
     // a saját tank a listában nincs benne
     for (const s of raw.slice(4)) expect(s.T.some((t) => t[0] === s.v)).toBe(false);
+  });
+});
+
+describe('lángszóró', () => {
+  it('fegyver üzemanyaggal: nyomva tartva ég, közben fogy, és ha kifogy, visszajön az ágyú', () => {
+    const world = new World(arena());
+    const tank = world.addTank(100, 200, 0, { team: 10 });
+    world.addPickup('flame', tank.x, tank.y);
+    world.step(new Map());
+    expect(tank.weapon).toBe('flame');
+    expect(tank.fuel).toBe(FLAME.fuel);
+    // tűz nélkül nem fogy, és nem ég
+    run(world, {}, seconds(1));
+    expect(tank.fuel).toBe(FLAME.fuel);
+    expect(tank.flaming).toBe(false);
+    // nyomva tartva ég, lövedék nem indul, az üzemanyag fogy
+    const events = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(2));
+    expect(tank.flaming).toBe(true);
+    expect(events.some((e) => e.type === 'shot')).toBe(false);
+    expect(world.bullets).toHaveLength(0);
+    expect(tank.fuel).toBeCloseTo(FLAME.fuel - 2, 1);
+    // a második tárgy hozzáad, de csak a határig
+    world.addPickup('flame', tank.x, tank.y);
+    world.addPickup('flame', tank.x, tank.y);
+    run(world, {}, 2);
+    expect(tank.fuel).toBeLessThanOrEqual(FLAME.maxFuel);
+    expect(tank.fuel).toBeGreaterThan(FLAME.fuel);
+    // kiégeti: az ágyú visszajön, és újra lövedéket lő
+    run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(FLAME.maxFuel + 0.5));
+    expect(tank.weapon).toBe(null);
+    expect(tank.flaming).toBe(false);
+    const after = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(after.some((e) => e.type === 'shot')).toBe(true);
+  });
+
+  it('messzire visz és nagyot sebez: a kúpjában álló ellenséget kilövi, a mögötte és a hatótávon túl állót nem bántja', () => {
+    const world = new World(arena());
+    const tank = world.addTank(100, 300, 0, { team: 10 });
+    tank.weapon = 'flame';
+    tank.fuel = FLAME.fuel;
+    const near = world.addTank(100 + FLAME.range * 0.8, 300, 0, { team: 11 });
+    const behind = world.addTank(60, 300, 0, { team: 12 });
+    const far = world.addTank(100 + FLAME.range + 20, 300, 0, { team: 13 });
+    const side = world.addTank(100 + 20, 300 + 20, 0, { team: 14 });
+    const events = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(1));
+    // egy másodperc alatt nagyjából a másodpercenkénti sebzést kapja
+    expect(tankMaxHp(near) - near.hp).toBeGreaterThan(FLAME.dps * 0.8);
+    expect(tankMaxHp(near) - near.hp).toBeLessThan(FLAME.dps * 1.3);
+    for (const other of [behind, far, side]) expect(other.hp).toBe(tankMaxHp(other));
+    expect(events.filter((e) => e.type === 'hit' && e.tank === near.id).length).toBeGreaterThanOrEqual(4);
+    const kill = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(2));
+    expect(near.alive).toBe(false);
+    expect(kill.find((e) => e.type === 'destroyed')).toMatchObject({ tank: near.id, by: tank.id, cause: 'flame' });
+    expect(deathText('flame', 'Anna')).toBe('Anna lőtt ki – lángszóróval.');
+  });
+
+  it('falon nem megy át, de a házat leégeti; a fát kidönti, a gázpalackot berobbantja', () => {
+    const walls = new SegmentGrid(400, 400);
+    // ház a tank előtt 15 méterre
+    walls.addPolygon([115, 190, 125, 190, 125, 210, 115, 210], 0);
+    const structures = new Structures([{ area: 100, x: 120, y: 200 }]);
+    const full = structures.hp[0];
+    const world = new World(arena({ walls, structures }));
+    const tank = world.addTank(100, 200, 0, { team: 10 });
+    tank.weapon = 'flame';
+    tank.fuel = FLAME.maxFuel;
+    const hidden = world.addTank(135, 200, 0, { team: 11 });
+    world.barrels.push({ id: 9001, x: 108, y: 201, fuse: -1, by: 0 });
+    const events = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(0.6));
+    // a ház mögött álló ellenséget a láng nem éri el
+    expect(hidden.hp).toBe(tankMaxHp(hidden));
+    expect(events.some((e) => e.type === 'burn')).toBe(true);
+    expect(structures.hp[0]).toBeLessThan(full);
+    expect(events.some((e) => e.type === 'boom' && e.kind === 'barrel')).toBe(true);
+    // leég: összedől, és a rombolás a lángszórósé
+    const more = run(world, { [tank.id]: { fire: true, aim: 0 } }, seconds(full / FLAME.structureDps + 1));
+    expect(structures.collapsed[0]).toBe(1);
+    expect(more.some((e) => e.type === 'collapse')).toBe(true);
+    expect(tank.wrecked).toBe(1);
+  });
+
+  it('a tárgyak között szerepel, a hálózaton átmegy a láng és az üzemanyag', () => {
+    expect(PICKUP_KINDS).toContain('flame');
+    expect(PICKUP_KINDS.indexOf('flame')).toBe(PICKUP_KINDS.length - 1); // a végére került: a régi sorszámok nem változtak
+    const tank = new World(arena()).addTank(100, 100, 0);
+    tank.flaming = true;
+    tank.fuel = 7.26;
+    expect(unpackTank(packTank(tank), blankTank(tank.id)).flaming).toBe(true);
+    expect(packMe(tank)).toMatchObject({ fuel: 7.3, flaming: true });
+    tank.flaming = false;
+    expect(unpackTank(packTank(tank), blankTank(tank.id)).flaming).toBe(false);
+  });
+});
+
+describe('választható alaptank (csak megjelenés)', () => {
+  it('a választás a szerveren át eljut a többiekhez; a hibás érték az alaptankot adja; a roncs is ugyanaz a fajta', () => {
+    expect(TANK_LOOKS).toBe(3);
+    expect([cleanLook(2), cleanLook(3), cleanLook(-1), cleanLook(1.5), cleanLook('1'), cleanLook(undefined)]).toEqual([2, 0, 0, 0, 0, 0]);
+    const lobby = new Lobby(data, 0);
+    const connect = (name: string): { inbox: ServerMessage[]; send: (m: Parameters<typeof encode>[0]) => void } => {
+      const inbox: ServerMessage[] = [];
+      const session = lobby.connect({ send: (text) => inbox.push(JSON.parse(text) as ServerMessage), close: () => undefined });
+      session.message(encode({ t: 'hello', v: PROTOCOL_VERSION, name }));
+      return { inbox, send: (m) => session.message(encode(m)) };
+    };
+    const anna = connect('Anna');
+    const bela = connect('Béla');
+    lobby.tick(0);
+    anna.send({ t: 'create', settings: { area: { minX: 500, minY: 500, maxX: 1000, maxY: 1000 }, bots: 2, pickups: 0, traffic: 0, minutes: 5, maxPlayers: 2 }, look: 2 });
+    lobby.tick(1);
+    const room = anna.inbox.filter((m): m is Extract<ServerMessage, { t: 'room' }> => m.t === 'room').pop()!.room.id;
+    // Béla hibás értéket küld: az alaptankot kapja
+    bela.send({ t: 'join', room, look: 7 });
+    for (let t = 2; t < 12000 && !anna.inbox.some((m) => m.t === 'start'); t += 100) lobby.tick(t);
+    const start = bela.inbox.find((m): m is Extract<ServerMessage, { t: 'start' }> => m.t === 'start')!;
+    expect(start.players.find((p) => p.name === 'Anna')!.look).toBe(2);
+    expect(start.players.find((p) => p.name === 'Béla')!.look).toBe(0);
+  });
+
+  it('a játékszabályokat nem érinti; a botok az azonosítójuk szerint kapnak fajtát, ahogy a kliens is számolja', () => {
+    const world = new World(arena());
+    const a = world.addTank(100, 100, 0, { team: 10, look: 1 });
+    const b = world.addTank(200, 100, 0, { team: 11, look: 2 });
+    const bot = world.addTank(300, 100, 0, { team: TEAM.bots, bot: true });
+    expect([a.look, b.look]).toEqual([1, 2]);
+    expect(bot.look).toBe(bot.id % TANK_LOOKS);
+    expect(blankTank(bot.id).look).toBe(bot.look);
+    // ugyanaz a méret, életerő, mozgás
+    expect(tankSize(a)).toBe(tankSize(b));
+    expect(tankMaxHp(a)).toBe(tankMaxHp(b));
+    run(world, { [a.id]: { throttle: 1 }, [b.id]: { throttle: 1 } }, seconds(1));
+    expect(a.x - 100).toBeCloseTo(b.x - 200, 6);
+    // a roncs viszi a fajtát, és a hálózaton is átmegy
+    b.hp = 1;
+    a.x = b.x - 30;
+    a.y = b.y;
+    run(world, { [a.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(b.alive).toBe(false);
+    expect(world.wrecks[0].look).toBe(2);
+    expect(unpackWreck(JSON.parse(JSON.stringify(packWreck(world.wrecks[0])))).look).toBe(2);
+  });
+});
+
+describe('útmutató és játékmenet-leírás', () => {
+  it('minden tárgynak van leírása; a táblázatok a szabályok számait mutatják', () => {
+    for (const kind of PICKUP_KINDS) {
+      expect(GUIDE_PICKUPS[kind].what.length, kind).toBeGreaterThan(20);
+      expect(GUIDE_PICKUPS[kind].lasts.length, kind).toBeGreaterThan(3);
+    }
+    expect(GUIDE_PICKUPS.gun.lasts).toBe(`${PICKUPS.gun.duration} mp`);
+    expect(GUIDE_PICKUPS.flame.what).toContain(`${FLAME.range} m`);
+    const weapons = weaponRows();
+    expect(weapons.find((r) => r[0] === 'Ágyú (alap)')![1]).toBe(String(DAMAGE.shell));
+    expect(weapons.find((r) => r[0] === 'Akna')![1]).toContain(String(MINE.damage));
+    expect(weapons.some((r) => r[0] === 'Lángszóró')).toBe(true);
+    expect(durationRows().find((r) => r[0] === 'Füstfelhő')![1]).toBe(`${SMOKE.life} mp`);
+  });
+
+  it('a játékmenet hat lépése elmondja a jelszót, a belépőkódot és az indulás szabályait', () => {
+    const steps = howToSteps();
+    expect(steps.map((s) => s[0])).toEqual(['Belépés', 'Csatlakozás egy játékhoz', 'Saját játék létrehozása', 'Belépőkód: privát játék', 'Váró és indulás', 'A meccs']);
+    const text = steps.map((s) => s[1]).join(' ');
+    expect(text).toContain('jelszó a nevedet védi');
+    expect(text).toContain(`${ROOM_CODE.min}–${ROOM_CODE.max} karakter`);
+    expect(text).toContain(`${LIMITS.codeTries} hibás próbálkozás`);
+    expect(text).toContain(`${MATCH.players.min}–${MATCH.players.max}`);
+    expect(text).toContain(`${MATCH.countdown} másodperces visszaszámlálás`);
   });
 });

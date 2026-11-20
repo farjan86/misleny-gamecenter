@@ -152,7 +152,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   repair: {
     label: 'Javítókészlet',
-    hint: '+50 életerő',
+    hint: '+100 életerő',
     color: '#2e9a4a',
     icon: (ctx) => {
       ctx.fillStyle = '#ffffff';
@@ -300,7 +300,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   gun: {
     label: 'Géppuska',
-    hint: '30 másodpercig a tank oldalán ülő géppuska magától lő a közeli ellenségre',
+    hint: '60 másodpercig a tank oldalán ülő géppuska magától lő a közeli ellenségre',
     color: '#3f5a66',
     icon: (ctx) => {
       // géppuska oldalról: tok, hosszú cső, lőszeres doboz, három lövedék
@@ -310,6 +310,29 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
       ctx.fillRect(13, 28, 6, 7);
       ctx.fillStyle = '#ffd84a';
       for (let i = 0; i < 3; i++) ctx.fillRect(27 + i * 5, 13, 3, 6);
+    },
+  },
+  flame: {
+    label: 'Lángszóró',
+    hint: 'tartsd nyomva a tüzet: lángcsóva, ami mindent felgyújt – tankot, házat, fát',
+    color: '#c2410c',
+    icon: (ctx) => {
+      // lángnyelv: sárga mag narancs köpenyben
+      ctx.fillStyle = '#ff8a1e';
+      ctx.beginPath();
+      ctx.moveTo(24, 7);
+      ctx.bezierCurveTo(36, 18, 38, 27, 33, 35);
+      ctx.bezierCurveTo(30, 41, 18, 41, 15, 35);
+      ctx.bezierCurveTo(10, 27, 17, 22, 18, 15);
+      ctx.bezierCurveTo(21, 18, 22, 13, 24, 7);
+      ctx.fill();
+      ctx.fillStyle = '#ffe36a';
+      ctx.beginPath();
+      ctx.moveTo(24, 19);
+      ctx.bezierCurveTo(30, 26, 31, 31, 28, 35);
+      ctx.bezierCurveTo(26, 38, 22, 38, 20, 35);
+      ctx.bezierCurveTo(17, 30, 22, 26, 24, 19);
+      ctx.fill();
     },
   },
   super: {

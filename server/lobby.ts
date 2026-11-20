@@ -33,7 +33,7 @@ import {
   type ServerMessage,
 } from '../src/game/net/protocol';
 import { MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings } from '../src/game/sim/match';
-import { NO_INPUT, SIM_DT, type SimEvent, type TankInput, type TankState } from '../src/game/sim/world';
+import { cleanLook, NO_INPUT, SIM_DT, type SimEvent, type TankInput, type TankState } from '../src/game/sim/world';
 
 export interface Link {
   send(text: string): void;
@@ -63,6 +63,8 @@ const STEP_MS = SIM_DT * 1000;
 
 class Client {
   name = '';
+  /** a választott alaptank (csak megjelenés) */
+  look = 0;
   ready = false;
   room: Room | null = null;
   readonly queue: { s: number; input: TankInput }[] = [];
@@ -150,6 +152,15 @@ export class Lobby {
     return { clients: this.clients.size, rooms: this.rooms.size, playing };
   }
 
+  /** Azoknak a játékosoknak a neve, akik éppen meccsen vannak (a statisztikához). */
+  playingNames(): Set<string> {
+    const names = new Set<string>();
+    for (const room of this.rooms.values()) {
+      if (room.status === 'playing') for (const client of room.clients) names.add(client.name);
+    }
+    return names;
+  }
+
   /** Új kapcsolat; a visszaadott függvényekkel kell jelezni a beérkező üzenetet és a bontást. */
   connect(link: Link): { message(text: string): void; close(): void } {
     if (this.clients.size >= LIMITS.clients) {
@@ -192,9 +203,11 @@ export class Lobby {
         client.send({ t: 'pong', c: Number(msg.c) || 0 });
         break;
       case 'create':
+        client.look = cleanLook(msg.look);
         this.create(client, msg.settings, msg.code);
         break;
       case 'join':
+        client.look = cleanLook(msg.look);
         this.join(client, String(msg.room), msg.code);
         break;
       case 'leave':
@@ -403,7 +416,7 @@ export class Lobby {
     room.match = new Match(
       map,
       room.settings,
-      room.clients.map((c) => ({ id: c.id, name: c.name })),
+      room.clients.map((c) => ({ id: c.id, name: c.name, look: c.look })),
       seed,
     );
     room.status = 'playing';
@@ -411,7 +424,7 @@ export class Lobby {
     room.last = now;
     room.events = [];
     const info = room.info();
-    const players = room.match.players.map((p) => ({ id: p.id, name: p.name, tank: p.tankId }));
+    const players = room.match.players.map((p) => ({ id: p.id, name: p.name, tank: p.tankId, look: p.look }));
     const workshops = room.match.world.workshops.map((w) => [Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10]);
     for (const client of room.clients) {
       client.queue.length = 0;

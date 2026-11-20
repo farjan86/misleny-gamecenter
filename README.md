@@ -120,7 +120,7 @@ a Polgármesteri Hivatal, a református templom és a rendőrség megjelenése �
 közvetlen környezete, valamint a főút utcaképe – a `pictures/` mappa
 képeiből. A képek csak mintául szolgálnak, a játékba nem kerülnek be, és a
 mappa nincs verziókezelés alatt. A pálya nem méretarányos térkép és
-nem geodéziai pontosságú. Egy új beépítésű részen 49 ház a pálya
-készítőjének vázlatrajza alapján, kézzel került fel, mellettük 11 generált
-(kitalált) ház áll – részletek: `docs/map-data.md`. A letöltő és feldolgozó
+nem geodéziai pontosságú. A Csikósvölgy, a Pusztarét, a Kiskozári és a
+Fűzfa utca környékén 92 ház és kb. 950 fa a pálya készítőjének
+vázlatrajzai alapján, kézzel került fel – részletek: `docs/map-data.md`. A letöltő és feldolgozó
 scriptek nem használnak Google Maps-adatot.

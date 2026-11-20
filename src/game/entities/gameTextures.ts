@@ -26,6 +26,8 @@ export const GTEX = {
   oil: 'oil-slick',
   ring: 'fx-ring',
   smoke: 'fx-smoke',
+  /** a füstfelhő gomolyagjai: a kulcs után a változat sorszáma áll (fx-puff0 … ) */
+  puff: 'fx-puff',
   /** lerakott akna, gázpalack (felülről), füstfelhő */
   mine: 'fx-mine',
   barrel: 'fx-barrel',
@@ -43,6 +45,9 @@ export const GTEX = {
 } as const;
 
 export const PICKUP_ICON_SIZE = 48;
+/** a füstgomolyag-textúrák száma és mérete (pixel) */
+export const PUFF_VARIANTS = 4;
+export const PUFF_SIZE = 160;
 /** a láng-animáció képkockáinak száma és mérete (pixel) */
 export const FIRE_FRAMES = 8;
 const FIRE_SIZE = 48;
@@ -243,7 +248,9 @@ export function createGameTextures(scene: Phaser.Scene): void {
   });
 
   // olajfolt: szabálytalan, sötét, fénylő folt
-  canvasTexture(scene, GTEX.oil, 96, 96, (ctx) => {
+  // (kétszeres felbontásban rajzolva: a folt nagy, közelről se legyen elmosódott)
+  canvasTexture(scene, GTEX.oil, 192, 192, (ctx) => {
+    ctx.scale(2, 2);
     ctx.fillStyle = '#16161c';
     ctx.beginPath();
     for (let i = 0; i <= 40; i++) {
@@ -530,6 +537,52 @@ export function createGameTextures(scene: Phaser.Scene): void {
       ctx.fillRect(x - r, y - r, r * 2, r * 2);
     }
   });
+
+  // füstgomolyagok: zajból számolt, foszlós szélű, belül sűrű pamacsok, a tetejükön
+  // világosabbak (mintha felülről érné őket a fény) – ettől térbelinek hat a felhő
+  for (let v = 0; v < PUFF_VARIANTS; v++) {
+    canvasTexture(scene, `${GTEX.puff}${v}`, PUFF_SIZE, PUFF_SIZE, (ctx) => {
+      const hash = (ix: number, iy: number, seed: number): number => {
+        const s = Math.sin(ix * 127.1 + iy * 311.7 + seed * 74.7) * 43758.5453;
+        return s - Math.floor(s);
+      };
+      const value = (x: number, y: number, seed: number): number => {
+        const ix = Math.floor(x);
+        const iy = Math.floor(y);
+        const fx = x - ix;
+        const fy = y - iy;
+        const ux = fx * fx * (3 - 2 * fx);
+        const uy = fy * fy * (3 - 2 * fy);
+        const a = hash(ix, iy, seed);
+        const b = hash(ix + 1, iy, seed);
+        const c = hash(ix, iy + 1, seed);
+        const d = hash(ix + 1, iy + 1, seed);
+        return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+      };
+      const fbm = (x: number, y: number, seed: number): number => 0.5 * value(x, y, seed) + 0.27 * value(x * 2.1, y * 2.1, seed + 3) + 0.15 * value(x * 4.3, y * 4.3, seed + 7) + 0.08 * value(x * 8.7, y * 8.7, seed + 11);
+      const img = ctx.createImageData(PUFF_SIZE, PUFF_SIZE);
+      const seed = 5 + v * 13;
+      for (let y = 0; y < PUFF_SIZE; y++) {
+        for (let x = 0; x < PUFF_SIZE; x++) {
+          const dx = (x / (PUFF_SIZE - 1)) * 2 - 1;
+          const dy = (y / (PUFF_SIZE - 1)) * 2 - 1;
+          const shape = fbm(x / 34, y / 34, seed);
+          const detail = fbm(x / 13, y / 13, seed + 20);
+          // a pamacs széle nem kör: a zaj kijjebb-beljebb húzza, a foszlányok áttetszők
+          const edge = 1 - Math.hypot(dx, dy) / (0.6 + 0.38 * shape);
+          const soft = Math.max(0, Math.min(1, edge / 0.5));
+          const alpha = soft * soft * (3 - 2 * soft) * (0.5 + 0.5 * detail);
+          const light = Math.max(0, Math.min(1, 0.7 + 0.3 * detail - 0.13 * (dx + dy) + 0.1 * edge));
+          const i = (y * PUFF_SIZE + x) * 4;
+          img.data[i] = 255 * light;
+          img.data[i + 1] = 255 * light;
+          img.data[i + 2] = 255 * Math.min(1, light * 1.02);
+          img.data[i + 3] = 255 * Math.min(1, alpha * 1.15);
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    });
+  }
 
   // jobbra mutató nyíl (fehér: a színt a tint adja)
   canvasTexture(scene, GTEX.arrow, 44, 44, (ctx) => {

@@ -84,21 +84,23 @@ export class TankView {
     private readonly kind: TankPaint,
     /** a tank fölé írt név (üres: nincs felirat) */
     name = '',
+    /** az alaptank fajtája: a test és a torony rajzai ebből a családból jönnek, minden szinten */
+    private readonly look = 0,
   ) {
     const scale = ppm / BASE_PPM;
     this.scale = scale;
     const enemy = kind !== 'own';
     this.enemy = enemy;
     this.shadow = scene.add.image(0, 0, TEX.shadow).setAlpha(0.3).setDepth(9).setScale(scale);
-    this.hull = scene.add.image(0, 0, tankTex.hull(kind, 0, 0)).setDepth(10).setScale(scale);
+    this.hull = scene.add.image(0, 0, tankTex.hull(kind, 0, 0, look)).setDepth(10).setScale(scale);
     this.turret = scene.add
-      .image(0, 0, tankTex.turret(kind, 0))
+      .image(0, 0, tankTex.turret(kind, 0, 0, look))
       .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
       .setDepth(11)
       .setScale(scale);
-    this.hullDamage = scene.add.image(0, 0, tankTex.damageHull(0, 1)).setDepth(10.5).setVisible(false);
+    this.hullDamage = scene.add.image(0, 0, tankTex.damageHull(0, 1, look)).setDepth(10.5).setVisible(false);
     this.turretDamage = scene.add
-      .image(0, 0, tankTex.damageTurret(0, 1))
+      .image(0, 0, tankTex.damageTurret(0, 1, look))
       .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
       .setDepth(11.5)
       .setVisible(false);
@@ -249,10 +251,10 @@ export class TankView {
       this.barBack.setDisplaySize(this.barWidth + 2 * this.scale, (BAR.height + 2) * this.scale);
       const tier = Math.min(TANK_TIERS - 1, tankTier(tank.level));
       // az osztályon belüli szintlépéseket a csövön gyűrűk jelzik
-      this.turret.setTexture(tankTex.turret(this.kind, tier, tank.level - LEVEL.tiers[tier]));
+      this.turret.setTexture(tankTex.turret(this.kind, tier, tank.level - LEVEL.tiers[tier], this.look));
       if (tier !== this.tier) {
         this.tier = tier;
-        this.hullFrames = Array.from({ length: TRACK_FRAMES }, (_, f) => tankTex.hull(this.kind, tier, f));
+        this.hullFrames = Array.from({ length: TRACK_FRAMES }, (_, f) => tankTex.hull(this.kind, tier, f, this.look));
         this.frame = -1;
         if (AURA[tier] && !this.aura) this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
         else if (!AURA[tier] && this.aura) {
@@ -331,8 +333,8 @@ export class TankView {
       this.turretDamage.setVisible(stage > 0);
       this.flame.setVisible(stage === 3);
       if (stage > 0) {
-        this.hullDamage.setTexture(tankTex.damageHull(this.tier, stage));
-        this.turretDamage.setTexture(tankTex.damageTurret(this.tier, stage));
+        this.hullDamage.setTexture(tankTex.damageHull(this.tier, stage, this.look));
+        this.turretDamage.setTexture(tankTex.damageTurret(this.tier, stage, this.look));
       }
     }
     if (stage > 0) {

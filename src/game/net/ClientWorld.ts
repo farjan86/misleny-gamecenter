@@ -12,7 +12,7 @@
 import type { GameMap } from '../maps/GameMap';
 import type { BarrelState, MineState, SmokeState, WorkshopState } from '../sim/gadgets';
 import type { TurretState, VehicleState } from '../sim/vehicles';
-import { SIM_DT, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
+import { SIM_DT, TANK_LOOKS, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
 import type { GameLink } from './LocalGame';
 import { blankTank, packInput, unpackBarrel, unpackBullet, unpackMine, unpackOil, unpackPickup, unpackSmoke, unpackTank, unpackTurret, unpackVehicle, unpackWreck, mergeSnapshot, type FullSnapshot, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
 
@@ -72,6 +72,8 @@ export class ClientWorld {
   private offX = 0;
   private offY = 0;
   private readonly names = new Map<number, string>();
+  /** a játékosok választott alaptankja; a botoké az azonosítójukból adódik (mint a szerveren) */
+  private readonly looks = new Map<number, number>();
   private predicting = false;
 
   constructor(
@@ -86,7 +88,10 @@ export class ClientWorld {
     this.workshops = workshops.map(([x, y], i) => ({ id: i + 1, x, y }));
     this.viewId = myId;
     this.timeLeft = room.settings.minutes * 60;
-    for (const p of players) this.names.set(p.tank, p.name);
+    for (const p of players) {
+      this.names.set(p.tank, p.name);
+      this.looks.set(p.tank, p.look ?? 0);
+    }
     // Az előrejelzés világa: ugyanaz a pálya, de a fák és az épületek állapotát nem
     // változtatja (azt csak a szerver eseményei módosítják).
     this.predict = new World(
@@ -104,6 +109,11 @@ export class ClientWorld {
   /** a szerver válaszideje ezredmásodpercben */
   get pingMs(): number {
     return this.net.ping;
+  }
+
+  /** A tank fajtája (megjelenése). */
+  lookOf(tankId: number): number {
+    return this.looks.get(tankId) ?? tankId % TANK_LOOKS;
   }
 
   nameOf(tankId: number): string {
@@ -184,6 +194,7 @@ export class ClientWorld {
       let tank = this.byId.get(id);
       if (!tank) {
         tank = blankTank(id);
+        tank.look = this.lookOf(id);
         this.byId.set(id, tank);
         this.tanks.push(tank);
       }

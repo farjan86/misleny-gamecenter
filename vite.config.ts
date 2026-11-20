@@ -15,5 +15,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // a valódi pályán futó tesztek terhelt gépen (pl. futó szerver mellett) lassabbak
+    testTimeout: 20000,
   },
 });

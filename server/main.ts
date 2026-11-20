@@ -8,6 +8,7 @@
 //   MAP_FILE  – a pályafájl (alapértelmezés: assets/maps/processed/misleny-kozpont.json)
 //   WEB_ROOT  – a kiszolgált oldal mappája (alapértelmezés: dist)
 //   ACCOUNTS_FILE – a játékosfiókok fájlja (alapértelmezés: data/accounts.json)
+//   STATS_FILE – a játéknapló: ki mikor és mennyit játszott (alapértelmezés: logs/statisztika.txt)
 
 import { readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -19,6 +20,7 @@ import { Accounts } from './accounts';
 import { Gate } from './gate';
 import { VERSION } from '../src/game/version';
 import { Lobby } from './lobby';
+import { StatsLog } from './stats';
 
 const PORT = Number(process.env.PORT) || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -26,6 +28,7 @@ const ROOT = process.cwd();
 const MAP_FILE = path.resolve(ROOT, process.env.MAP_FILE || 'assets/maps/processed/misleny-kozpont.json');
 const WEB_ROOT = path.resolve(ROOT, process.env.WEB_ROOT || 'dist');
 const ACCOUNTS_FILE = path.resolve(ROOT, process.env.ACCOUNTS_FILE || 'data/accounts.json');
+const STATS_FILE = path.resolve(ROOT, process.env.STATS_FILE || 'logs/statisztika.txt');
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -43,7 +46,7 @@ const TYPES: Record<string, string> = {
 const mapData = JSON.parse(readFileSync(MAP_FILE, 'utf8')) as MapData;
 const lobby = new Lobby(mapData);
 const accounts = new Accounts(ACCOUNTS_FILE);
-const gate = new Gate(lobby, accounts);
+const gate = new Gate(lobby, accounts, new StatsLog(STATS_FILE));
 
 const http = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -92,9 +95,26 @@ wss.on('connection', (socket: WebSocket) => {
 // a szimuláció a ténylegesen eltelt idő szerint, rögzített lépésekben halad.
 setInterval(() => lobby.tick(performance.now()), 4);
 
+// Játéknapló: néhány másodpercenként megnézi, ki van éppen meccsen (ebből lesz a játékidő);
+// egy sor akkor kerül a fájlba, amikor valaki elmegy. Leálláskor (Ctrl+C, az ablak bezárása)
+// a még bent lévők sora is kiíródik.
+let sampledAt = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  gate.sample(Math.min(60, (now - sampledAt) / 1000));
+  sampledAt = now;
+}, 5000);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(signal, () => {
+    gate.flush();
+    process.exit(0);
+  });
+}
+
 http.listen(PORT, HOST, () => {
   console.log(`TANK MISLENY ${VERSION} – a szerver fut: http://localhost:${PORT}/`);
   console.log(`  pálya: ${path.relative(ROOT, MAP_FILE)} (${mapData.meta.width} × ${mapData.meta.height} m)`);
   console.log(`  oldal: ${path.relative(ROOT, WEB_ROOT) || '.'}   állapot: http://localhost:${PORT}/status`);
   console.log(`  fiókok: ${path.relative(ROOT, ACCOUNTS_FILE)} (${accounts.count} regisztrált játékos)`);
+  console.log(`  játéknapló: ${path.relative(ROOT, STATS_FILE)} (ki mikor és mennyit játszott)`);
 });

@@ -177,6 +177,39 @@ A `http://localhost:8787/status` cím megmutatja, hányan vannak fent, hány szo
   ha a játék https-címen fut (az alagúton keresztül így van). Sima, helyi
   hálózati `http://` címen a kapcsolat nincs titkosítva.
 
+## Játéknapló: ki mennyit játszott
+
+A szerver egy egyszerű szöveges fájlba írja, **ki mikor és mennyi ideig
+játszott**: `logs/statisztika.txt` (a `logs/` mappa nincs verziókezelés
+alatt). Jegyzettömbbel és Excellel is megnyílik; statisztikát később ebből
+lehet készíteni.
+
+Egy sor egy látogatás – az oldal megnyitásától a bezárásáig vagy
+újratöltéséig –, pontosvesszővel tagolva:
+
+```
+kezdet;vege;jatekos;bent_mp;tobbjatekos_mp;egyjatekos_mp
+2026-11-21 20:15:03;2026-11-21 20:47:10;Pista;1927;1200;312
+2026-11-21 20:16:40;2026-11-21 20:21:02;(nincs belépve);262;0;240
+```
+
+| Oszlop | Jelentése |
+|---|---|
+| `kezdet`, `vege` | mikor nyitotta meg és mikor hagyta el az oldalt (a szerver helyi ideje) |
+| `jatekos` | a játékosnév; aki nem lépett be (a belépőképernyőn van, vagy onnan az „Egyjátékos (szerver nélkül)” gombbal játszik), annál „(nincs belépve)” |
+| `bent_mp` | ennyi másodpercig volt az oldalon (menü, váró, meccs együtt) |
+| `tobbjatekos_mp` | ebből a szerveren futó meccsen töltött idő |
+| `egyjatekos_mp` | ebből a böngészőben futó egyjátékos meccs (a böngésző jelzi, hogy elindult) |
+
+- A sor akkor kerül a fájlba, **amikor a látogató elmegy**; a szerver
+  leállításakor a még bent lévőké is kiíródik. Egy meccs után az oldal
+  újratöltődik, ezért egy játékosnak egy estére több sora is lehet – a
+  statisztikához ezeket név szerint össze kell adni.
+- A játékidő néhány másodperc pontosságú (ötmásodperces mintavétel).
+- Az egyjátékos idő addig számít, amíg a meccs oldala nyitva van.
+- A fájlban csak név és idő van: IP-cím, jelszó nincs. A `STATS_FILE`
+  környezeti változóval más fájl is megadható.
+
 ## A hálózati működés részletei
 
 - **Ütem:** a szimuláció 60 lépés/másodperc; a szerver 20 pillanatképet küld

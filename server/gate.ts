@@ -5,6 +5,7 @@
 import { encode, PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from '../src/game/net/protocol';
 import type { Accounts, AuthResult } from './accounts';
 import type { Link, Lobby } from './lobby';
+import type { StatsLog, Visit } from './stats';
 
 /** Ennyi sikertelen belépési kísérlet után a kapcsolat megszakad. */
 const MAX_FAILURES = 6;
@@ -17,11 +18,26 @@ interface Session {
 export class Gate {
   /** a belépett fiókok élő kapcsolata (egy fiókkal egyszerre egy helyről lehet játszani) */
   private readonly online = new Map<string, Link>();
+  /** minden élő látogatás (a be nem lépetteké is) – a statisztika naplójához */
+  private readonly present = new Set<Visit>();
 
   constructor(
     private readonly lobby: Lobby,
     private readonly accounts: Accounts,
+    /** a játéknapló (lásd stats.ts); nélküle nincs naplózás */
+    private readonly stats: StatsLog | null = null,
   ) {}
+
+  /** A statisztika mintavétele: az előző óta `seconds` telt el. */
+  sample(seconds: number): void {
+    this.stats?.sample(seconds, this.present, this.lobby.playingNames());
+  }
+
+  /** Leálláskor: a még bent lévők látogatása is bekerül a naplóba. */
+  flush(): void {
+    for (const visit of this.present) this.stats?.end(visit);
+    this.present.clear();
+  }
 
   connect(link: Link): Session {
     let inner: Session | null = null;
@@ -30,6 +46,8 @@ export class Gate {
     let failures = 0;
     let busy = false;
     let closed = false;
+    const here: Visit = this.stats?.begin() ?? { name: '', solo: false, start: new Date(), multiSeconds: 0, soloSeconds: 0 };
+    this.present.add(here);
     const send = (message: ServerMessage): void => link.send(encode(message));
 
     const accept = (result: AuthResult): void => {
@@ -47,6 +65,7 @@ export class Gate {
         previous.close();
       }
       account = result.name;
+      here.name = account;
       token = result.token;
       this.online.set(account, link);
       send({ t: 'auth', name: result.name, token: result.token });
@@ -83,12 +102,18 @@ export class Gate {
           link.close();
           return;
         }
+        // egyjátékos meccs indult a böngészőben: csak a statisztika jegyzi (belépés nélkül is)
+        if (msg.t === 'solo') {
+          here.solo = true;
+          return;
+        }
         // a nevet a fiók adja: a kliens nem jelentkezhet be maga
         if (msg.t === 'hello') return;
         inner?.message(text);
       },
       close: () => {
         closed = true;
+        if (this.present.delete(here)) this.stats?.end(here);
         if (account && this.online.get(account) === link) this.online.delete(account);
         inner?.close();
       },

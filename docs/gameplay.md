@@ -73,6 +73,40 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
 - **Az óra** a hátralévő játékidőt mutatja (perc:másodperc), alatta a
   kilövéseid száma és – többjátékos meccsben – a helyezésed. Az utolsó fél
   percben pirosan villog.
+- **Játékmenet a főképernyőn:** a főképernyő alján (belépés előtt és után is)
+  hat lépésben ott áll, hogyan működik a játék: belépés és mire való a jelszó,
+  csatlakozás egy játékhoz, saját játék létrehozása, a belépőkód (privát
+  játék), a váró és az indulás, és maga a meccs. Összecsukható; a böngésző
+  megjegyzi, hogy nyitva hagytad-e.
+- **Választható alaptank:** a főmenü *Tankom* gombja alatt három, teljesen
+  különböző tank közül lehet választani – *Harckocsi* (klasszikus lánctalpas),
+  *Vadász* (kerekes páncélvadász: lapos ék-test, nagyon hosszú cső) és
+  *Cirkáló* (légpárnás: csepp alakú test, ventilátorok, kerek kupola). **Csak
+  a megjelenés más**, a játékszabályokra nincs hatása. A szintekkel mindegyik
+  a saját formavilágában fejlődik (hat fokozat, saját nevekkel), a képernyő
+  meg is mutatja a teljes fejlődési sort. A többiek is azt a tankot látják,
+  amit választottál; a botok vegyesen kapnak a háromból.
+- **Útmutató a főmenüben:** az *Útmutató* gomb alatt minden felvehető tárgy
+  ott van az ikonjával – mit csinál, meddig tart, mivel lehet használni
+  (a nálad beállított billentyűvel) –, mellette a fegyverek és robbanások
+  sebzése, a tüzelési idők, és egy táblázat arról, mi meddig tart. A számok a
+  játék szabályaiból jönnek, ezért mindig egyeznek azzal, ami a pályán történik.
+- **Ki lőtt ki:** ha kilőnek, a képernyő közepe alatt az újraéledésig ott
+  áll, **ki és mivel** végzett veled – pl. „Béla lőtt ki – aknával.”, „Egy bot
+  lőtt ki – rakétával.”, „Felrobbant melletted egy gázpalack.” –, alatta a
+  szintvesztés és a visszaszámlálás. A fegyver lehet ágyú, nehéz lövedék,
+  rakéta, lézer, géppuska, telepített löveg, akna, tüzérségi csapás,
+  felrobbantott gázpalack vagy jármű. A jobb oldali kilövési értesítő
+  mindenkinek mutatja, mivel történt a kilövés, és a kilövő is megtudja, ha az
+  aknája, a lövege vagy a tüzérsége talált.
+- **Meccs végi statisztika:** a végeredmény táblázata játékosonként mutatja a
+  kilövéseket, a halálokat, az arányukat, az okozott és a kapott sebzést, a
+  találatokat és a leadott lövéseket, a pontosságot, a leghosszabb sorozatot,
+  a ledöntött házakat, a szintet és a **teljesítménypontot**. A pont: kilövés
+  100, halál −50, sebzés pontonként 0,3, sorozat 20, pontosság %-onként 1
+  (legalább 10 lövésnél), ledöntött ház 10 (legfeljebb 100), szint 15. Több
+  játékosnál a legtöbb pontot gyűjtő a **meccs legjobbja** (★) – ez nem
+  feltétlenül a győztes, mert a helyezés a kilövések száma szerint dől el.
 - **A végeredményben** játékosonként a legjobb kilövéssorozat, a ledöntött
   házak száma és a lövések pontossága is szerepel; több játékosnál különdíj
   jár a leghosszabb sorozatért, a legtöbb ledöntött házért és a legpontosabb
@@ -158,10 +192,10 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
   - **Játékos kilövése:** egy szint. Ha a kilőtt játékos **jóval magasabb
     szintű** volt – legalább három szinttel –, a győztes **két szintet** lép.
     Nagyjából egyszintű tankok párharcában tehát a győztes egyet nyer, a
-    vesztes kettőt veszít.
+    vesztes egyet veszít.
   - **Botok kilövése:** három bot ér egy szintet. A tank sávja mutatja, hol
     tartasz („bot 2/3”); a számláló a halállal nem vész el.
-  - **Halál:** a kilőtt tank **két szintet veszít** (az 1. szint alá nem megy),
+  - **Halál:** a kilőtt tank **egy szintet veszít** (az 1. szint alá nem megy),
     és az új szintjéhez járó teljes életerővel éled újra. A felszerelése is
     elvész: a felvett fegyver, a pajzs, az olaj, az akna, a füst, a
     telepíthető ágyú töltetei és az időre szóló hatások.
@@ -190,6 +224,16 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
   kilövésnek, az újraéledésnek, a szintlépésnek, a gyorsítónak, a tárgyak
   felvételének (fajtánként más) és az órának (figyelmeztetés 60 és 30
   másodpercnél, kattogás az utolsó tízben, kürt a végén). Esőben az eső zúg.
+  - **Lövés:** az ágyú hangja több rétegből áll – a torkolat éles csattanása,
+    a dörrenés teste, mély döngés, a hátrasikló cső fémes koppanása, és a
+    tájról visszaverődő, elnyúló visszhang. Távoli lövésnél a csattanás elvész,
+    a tompa dörgés marad. A nehéz lövedék után a talaj is morajlik, a löveg
+    csöve megcsendül, a rakéta begyújt és felsüvít.
+  - **Kidőlő fa:** a törzs elreccsen, recsegve megdől, a lomb suhog, majd a fa
+    puffanva földet ér (a nagyobb fa lassabban és mélyebben). Az oszlop csak reccsen.
+  - **Háznak ütközés:** az első ütésnél a fal megdöndül, tégla reped, ablak
+    csörren, pereg a vakolat; amíg a tank a falnak feszül, a fal csikorog és
+    hullik a törmelék.
 
   | Szint | Típus | Miről ismerhető fel |
   |---|---|---|
@@ -399,7 +443,7 @@ Fala nincs, be lehet hajtani.
   feltölt. Közben szikrák és racsnikattogás jelzi a javítást.
 - A műhely nem véd: a benne álló tankot ugyanúgy lehet lőni.
 - A térképen (a kicsin és a nagyon is) zöld négyzet jelöli fehér kereszttel.
-- Úttestre, épületbe és fák alá nem kerül; két műhely nincs egymás közelében.
+- Mindig egy út mellé kerül, ahonnan egy tank egyenesen be tud hajtani (nincs útban fal, kerítés, víz). Úttestre, épületre (a csarnok körül egy kis sávban sem), vízre és fák alá nem kerül; két műhely nincs egymás közelében.
 
 ### Kilövéssorozat és tüzérségi csapás
 
@@ -421,10 +465,13 @@ Fala nincs, be lehet hajtani.
   robban (6,5 méteres körben legfeljebb 70 sebzés). A sajátod jól látszik, az
   ellenfélé alig. A lerakója alatt nem robban; egyszerre 6 lehet kint, 3 perc
   után eltűnik. A kilövés a lerakóé.
-- **Füst** (tárgy, 2 töltet, legfeljebb 4): a **C** 13 méter sugarú felhőt
-  ereszt a tank köré 10 másodpercre. Ami benne van, az kívülről nem látszik
-  (a térképen sem), és a botok meg a telepített ágyúk sem látnak bele. Aki
-  benne áll, a közvetlen környezetét halványan látja.
+- **Füst** (tárgy, 2 töltet, legfeljebb 4): a **C** füstöt ereszt a tank
+  köré 16 másodpercre. A felhő 9 méter sugárral indul, és 4,5 másodperc alatt
+  **30 méter sugarúra** terjed szét (egy kisebb háztömböt beborít); közben a
+  szél lassan kelet felé sodorja (16 másodperc alatt kb. 10 métert). Gomolyog,
+  a széle foszlik, a végén a széléről befelé oszlik el. Ami benne van, az
+  kívülről nem látszik (a térképen sem), és a botok meg a telepített lövegek
+  sem látnak bele. Aki benne áll, a közvetlen környezetét halványan látja.
 - **Gázpalackok** állnak a házak fala mellett (négyzetkilométerenként 30,
   legalább 4, legfeljebb 140). Találattól vagy ráhajtástól felrobbannak
   (8,5 méteres körben legfeljebb 55 sebzés), és a közeli palackokat, aknákat
@@ -454,7 +501,7 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 | Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan (a rakéta és a lézer nem) | a kilövésig |
 | Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
-| Olajfolt | 3 lerakható folt; aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
+| Olajfolt | 3 lerakható, 7 méter sugarú folt (egy utcát teljes szélességében elzár); aki gyorsan hajt rá, 1,7 mp-ig irányíthatatlanul pörög és sodródik, és aki belehajt (akár lassan), annak **olajos lesz a lánctalpa**: a folton és utána még 4 mp-ig kipörög, mint a jégen – a végsebessége a 45%-a, a gyorsulása és a fékezése a 30%-a | 3 töltet, a folt 45 mp-ig marad |
 | Javítókészlet | azonnal visszaad 100 életerőt; a leggyakoribb tárgy (kb. minden ötödik) | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
 | Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg | 25 mp |
@@ -464,7 +511,7 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 | Löveg | lerakható (Q): magától lő a közeli ellenségre, és a tankkal együtt fejlődik | egy további löveg (legfeljebb 8 lehet a tanknál); a löveg a kilövéséig áll |
 | Akna | lerakható (R): az ellenséges tank alatt robban | 2 töltet (legfeljebb 4) |
 | Füst | lerakható (C): 13 méteres felhő, amely eltakar | 2 töltet (legfeljebb 4), a felhő 10 mp |
-| Géppuska | a tank jobb oldalára szerelt géppuska magától lő a legközelebbi ellenségre (40 m-en belül, ha rálát): másodpercenként kb. 8 lövés, egyenként 2,5 sebzés; a fő fegyver mellett működik, álcázva hallgat | 30 mp |
+| Géppuska | a tank jobb oldalára szerelt géppuska magától lő a legközelebbi ellenségre (40 m-en belül, ha rálát): másodpercenként kb. 8 lövés, egyenként 2,5 sebzés; a fő fegyver mellett működik, álcázva hallgat. A lövedékek rövid csíkként repülnek a célig (minden harmadik fényes nyomjelző), a csőnél torkolattűz villog, oldalra hüvelyek repülnek, a becsapódásnál szikra és por | 60 mp |
 | Szupertárgy | teljes javítás, tele pajzs, háromszoros sebzés (csak a pálya közepén jelenik meg, percenként) | 20 mp |
 
 Egyszerre egy fegyver lehet a tanknál: az újonnan felvett a régi helyére lép.

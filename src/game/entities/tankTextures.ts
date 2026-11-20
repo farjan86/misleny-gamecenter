@@ -29,15 +29,16 @@ export const TURRET_SIZE = { w: 84, h: 48 };
 /** a torony forgáspontja a textúrán belül (pixel) */
 export const TURRET_PIVOT = { x: 26, y: 24 };
 
+/** look: az alaptank fajtája (0 … TANK_LOOKS − 1); minden fajtának saját rajzai vannak osztályonként */
 export const tankTex = {
-  hull: (paint: TankPaint, tier: number, frame: number): string => `tank-${paint}-hull-${tier}-${frame}`,
+  hull: (paint: TankPaint, tier: number, frame: number, look = 0): string => `tank${look}-${paint}-hull-${tier}-${frame}`,
   /** marks: hány szintet lépett a tank az osztályán belül (0 … TANK_MARKS − 1) */
-  turret: (paint: TankPaint, tier: number, marks = 0): string => `tank-${paint}-turret-${tier}-${Math.max(0, Math.min(TANK_MARKS - 1, marks))}`,
+  turret: (paint: TankPaint, tier: number, marks = 0, look = 0): string => `tank${look}-${paint}-turret-${tier}-${Math.max(0, Math.min(TANK_MARKS - 1, marks))}`,
   /** sérülésréteg a test, illetve a torony fölé (stage: 1 … DAMAGE_STAGES) */
-  damageHull: (tier: number, stage: number): string => `tank-damage-hull-${tier}-${stage}`,
-  damageTurret: (tier: number, stage: number): string => `tank-damage-turret-${tier}-${stage}`,
-  wreckHull: (tier: number): string => `wreck-hull-${tier}`,
-  wreckTurret: (tier: number): string => `wreck-turret-${tier}`,
+  damageHull: (tier: number, stage: number, look = 0): string => `tank${look}-damage-hull-${tier}-${stage}`,
+  damageTurret: (tier: number, stage: number, look = 0): string => `tank${look}-damage-turret-${tier}-${stage}`,
+  wreckHull: (tier: number, look = 0): string => `wreck${look}-hull-${tier}`,
+  wreckTurret: (tier: number, look = 0): string => `wreck${look}-turret-${tier}`,
 } as const;
 
 /** A sérülés fokozatai: 1 – karcos, lyuggatott; 2 – kormos, repedt; 3 – szétlőtt, izzó. */
@@ -591,6 +592,439 @@ function turret5(ctx: Ctx, marks: number): void {
 
 const TURRETS = [turret0, turret1, turret2, turret3, turret4, turret5];
 
+// --- a 2. alaptank: Vadász – kerekes páncélvadász ---------------------------------------
+// Lánctalp helyett kerekeken gurul; a teste hosszú, lapos, hegyes ék, a tornya alacsony és
+// szögletes, a csöve nagyon hosszú és vékony. A fokozatokkal több tengely, pótpáncél,
+// rakétacsövek, végül ikersínágyú kerül rá – de mindvégig ugyanaz a jármű marad.
+
+/** Kerék felülről: gumiabroncs bordákkal; a képkockával a bordák „forognak”. */
+function wheel(ctx: Ctx, frame: number, x: number, y: number, w: number, h: number): void {
+  box(ctx, x, y, w, h, 2.6, '#141418', '#08080a', 1.4);
+  ctx.fillStyle = '#383840';
+  for (let lx = x + 1.6 + frame * 1.4; lx < x + w - 1.6; lx += 4.2) ctx.fillRect(lx, y + 1.2, 1.6, h - 2.4);
+}
+
+/** A rajz a test közepe körül megnő a fokozattal (a nagyobb osztály nagyobb jármű). */
+function grown(ctx: Ctx, tier: number, draw: () => void): void {
+  const k = 1 + tier * 0.044;
+  ctx.save();
+  ctx.translate(34, 21);
+  ctx.scale(k, k);
+  ctx.translate(-34, -21);
+  draw();
+  ctx.restore();
+}
+
+function hullB(ctx: Ctx, frame: number, tier: number): void {
+  grown(ctx, tier, () => {
+    // kerekek a test két oldalán: három tengely, a 3. osztálytól négy
+    const axles = tier >= 2 ? 4 : 3;
+    for (let i = 0; i < axles; i++) {
+      const x = 4 + (i * 48) / (axles - 1) - 5.5;
+      wheel(ctx, frame, x, -3, 12.5, 8.5);
+      wheel(ctx, frame, x, 36.5, 12.5, 8.5);
+    }
+    // a 2. osztálytól páncélkötény a kerekek fölött, a 4.-től acélból, szegecselve
+    if (tier >= 1) {
+      for (const y of [0.5, 36.5]) {
+        box(ctx, 0, y, 57, 5, 1.6, tier >= 3 ? STEEL_D : '#3a6a34', tier >= 3 ? STEEL_EDGE : INK, 1.2);
+        if (tier >= 3) rivets(ctx, 4, 54, y + 2.5, 7);
+      }
+    }
+    // test: hosszú, lapos ék – hátul levágott, elöl tűhegyes
+    poly(ctx, [0, 11.5, 11, 6.5, 44, 6.5, 60, 12.5, 71, 21, 60, 29.5, 44, 35.5, 11, 35.5, 0, 30.5], '#4c7c3c', INK, 2.5);
+    // lapolt páncél: világos felső lap, sötét alsó lap, közöttük éles gerinc
+    poly(ctx, [3.5, 12.5, 12, 8.6, 43.5, 8.6, 57.5, 13.6, 65, 19.6, 3.5, 19.6], '#659c50');
+    poly(ctx, [3.5, 22.4, 65, 22.4, 57.5, 28.4, 43.5, 33.4, 12, 33.4, 3.5, 29.5], '#356330');
+    ctx.fillStyle = tier >= 5 ? GOLD : '#8cc470';
+    ctx.fillRect(5, 20.3, 58, 1.4);
+    // sárga ékek az orron: ez a tank eleje
+    poly(ctx, [50.5, 9.8, 54.5, 11.4, 65, 21, 54.5, 30.6, 50.5, 32.2, 60, 21], tier >= 5 ? GOLD : YELLOW, '#3a2c06', 1.2);
+    poly(ctx, [42.5, 8.4, 46.5, 8.8, 55.5, 21, 46.5, 33.2, 42.5, 33.6, 51.5, 21], '#e0a81c', '#3a2c06', 1);
+    // hátul motorrács, két hosszú kipufogócső
+    grille(ctx, 5.5, 13.5, 10, 15, tier >= 4);
+    for (const y of [10.2, 28.2]) {
+      box(ctx, -5, y, 8.5, 3.6, 1.4, '#b05a2c', '#3c1c0c', 1);
+      ctx.fillStyle = tier >= 4 ? '#ffb040' : '#1a0c06';
+      ctx.fillRect(-4.4, y + 1, 1.8, 1.6);
+    }
+    if (tier >= 1) {
+      // málharács és tartalék kerék hátul
+      box(ctx, 17.5, 9, 7, 5, 1, '#7a6a48', '#2a2416', 1);
+      box(ctx, 17.5, 28, 7, 5, 1, '#7a6a48', '#2a2416', 1);
+      // fényszórók az orr két oldalán
+      for (const y of [13.2, 28.8]) disc(ctx, 57.5, y, 1.5, '#fff6c8', '#3a2c06', 0.8);
+    }
+    if (tier >= 2) {
+      // szögletes pótpáncél a test két oldalán
+      poly(ctx, [26, 4.4, 41, 4.4, 44, 7.6, 24, 7.6], STEEL, STEEL_EDGE, 1.2);
+      poly(ctx, [26, 37.6, 41, 37.6, 44, 34.4, 24, 34.4], STEEL, STEEL_EDGE, 1.2);
+      ctx.fillStyle = STEEL_L;
+      ctx.fillRect(27, 5.1, 13, 1);
+    }
+    if (tier >= 3) {
+      // acél törőél az orr hegyén, füstgránátvetők a két oldalon
+      poly(ctx, [61, 13.5, 66, 15.5, 74.5, 21, 66, 26.5, 61, 28.5, 68, 21], STEEL_L, STEEL_EDGE, 1.3);
+      for (const y of [9.6, 30.4]) for (let i = 0; i < 3; i++) box(ctx, 30 + i * 3.4, y, 2.6, 2, 0.6, GUN, '#000', 0.6);
+    }
+    if (tier >= 4) {
+      // reaktív páncélcsempék a felső és az alsó lapon, figyelmeztető csík hátul
+      for (let i = 0; i < 5; i++) {
+        box(ctx, 20 + i * 5.4, 10.4, 4.6, 3.6, 0.6, '#40703a', INK, 0.9);
+        box(ctx, 20 + i * 5.4, 28, 4.6, 3.6, 0.6, '#2c5a2c', INK, 0.9);
+      }
+      hazard(ctx, 0.8, 16, 3.6, 10);
+    }
+    if (tier >= 5) {
+      // arany szegély, izzó energiagerinc, rakétatárolók hátul
+      poly(ctx, [2.2, 12.6, 11.6, 8.3, 43.6, 8.3, 58.6, 13.8, 67.8, 21, 58.6, 28.2, 43.6, 33.7, 11.6, 33.7, 2.2, 29.4], null, GOLD, 1.2);
+      ctx.save();
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 5;
+      ctx.fillStyle = CYAN;
+      ctx.fillRect(18, 20.4, 30, 1.2);
+      ctx.restore();
+      for (const y of [1.4, 35.4]) {
+        box(ctx, 5, y, 14, 5.2, 1, GUN, GOLD, 1.1);
+        for (let i = 0; i < 3; i++) disc(ctx, 8 + i * 4, y + 2.6, 1.3, '#c8301c', '#3a0c06', 0.6);
+      }
+    }
+    turretRing(ctx, 10.5 + tier * 0.4, tier >= 5 ? GUN : '#325a2c', tier >= 5 ? GOLD : INK);
+  });
+}
+
+function turretB(ctx: Ctx, marks: number, tier: number): void {
+  const twin = tier >= 5;
+  const w = 4.4 + tier * 0.3;
+  // a 3. osztálytól párhuzamos gépágyú a cső mellett
+  if (tier >= 2 && !twin) barrel(ctx, 6, 25, 2.8, -6.4 - tier * 0.25, '#2c3a30', '#58725c');
+  if (twin) {
+    // ikersínágyú: két hosszú sín, közöttük izzó csatorna
+    ctx.save();
+    ctx.shadowColor = CYAN;
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = CYAN;
+    ctx.fillRect(10, -1.3, 36, 2.6);
+    ctx.restore();
+    for (const y of [-3.6, 3.6]) barrel(ctx, 6, 41, 3.6, y, GUN, '#5a6068');
+    for (const x of [16, 26, 36]) box(ctx, x, -6.6, 2.8, 13.2, 1, GOLD, GOLD_D, 0.9);
+    bands(ctx, marks, 20.4, 3.2, 3, -3.6);
+  } else {
+    // nagyon hosszú, vékony cső hőköpennyel és szögletes csőszájfékkel
+    barrel(ctx, 6, 38, w);
+    box(ctx, 15, -w / 2 - 1.1, 13, w + 2.2, 1.4, '#33502e', '#12200f', 1.1);
+    bands(ctx, marks, 30, 3.2, w - 0.6);
+    muzzle(ctx, 7.5 + tier * 0.4, w + 4.2 + tier * 0.5);
+  }
+  const k = 1 + tier * 0.05;
+  ctx.save();
+  ctx.scale(k, k);
+  if (tier >= 3) {
+    // rakétacsövek a torony két oldalán (a 5. osztályon három-három)
+    const tubes = tier >= 4 ? 3 : 2;
+    for (const side of [-1, 1]) {
+      const y = side * 13.2;
+      box(ctx, -12, y - (tubes * 1.7) / 2 - 0.9, 15, tubes * 1.7 + 1.8, 1, GUN, tier >= 5 ? GOLD : '#0a0a0c', 1);
+      for (let i = 0; i < tubes; i++) disc(ctx, 2, y + (i - (tubes - 1) / 2) * 1.75, 0.75, '#c8301c');
+    }
+  }
+  // lapos, szögletes ék-torony, hátrafelé megnyúlva
+  poly(ctx, [-16, -8, -3, -10.5, 8, -6.5, 13, 0, 8, 6.5, -3, 10.5, -16, 8], tier >= 5 ? '#2f5a34' : '#5c9448', '#14240f', 2.2);
+  poly(ctx, [-14.5, -6.8, -3.4, -8.8, 6.6, -5.4, 10, -1.2, -14.5, -1.2], tier >= 5 ? '#447a48' : '#86be6a');
+  poly(ctx, [-14.5, 6.8, -3.4, 8.8, 6.6, 5.4, 10, 1.2, -14.5, 1.2], tier >= 5 ? '#214526' : '#3e7036');
+  // irányzó optika elöl: sötét doboz kék lencsével
+  box(ctx, 1.5, -4.4, 5.5, 3.2, 0.8, '#0e1820', '#000', 0.8);
+  ctx.fillStyle = CYAN;
+  ctx.fillRect(2.6, -3.6, 3.2, 1.3);
+  hatch(ctx, -8.5, 3.2, 3.4);
+  if (tier >= 1) {
+    // rádióantenna és hátsó tárolóláda
+    box(ctx, -21, -5, 5.5, 10, 1, STEEL_D, STEEL_EDGE, 1);
+    ctx.strokeStyle = '#101214';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-12.5, -5.5);
+    ctx.lineTo(-22, -11);
+    ctx.stroke();
+  }
+  if (tier >= 4) {
+    // forgó radar a torony tetején
+    disc(ctx, -3, -3.6, 3.3, STEEL, STEEL_EDGE, 1);
+    ctx.strokeStyle = STEEL_EDGE;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-5.6, -5);
+    ctx.lineTo(-0.4, -2.2);
+    ctx.stroke();
+  }
+  if (tier >= 5) {
+    poly(ctx, [-14.6, -7, -3.2, -9.2, 7, -5.6, 10.8, 0, 7, 5.6, -3.2, 9.2, -14.6, 7], null, GOLD, 1.1);
+    const count = 1 + marks;
+    for (let i = 0; i < count; i++) star(ctx, -11.5, (i - (count - 1) / 2) * 3.4, count > 1 ? 1.8 : 2.6);
+  }
+  ctx.restore();
+}
+
+// --- a 3. alaptank: Cirkáló – légpárnás harcjármű --------------------------------------
+// Se lánctalp, se kerék: gumiszoknyás légpárnán siklik, hátul emelőventilátorok hajtják.
+// A teste csepp alakú, a tornya kerek kupola rövid, vastag ágyúval. A fokozatokkal
+// stabilizáló szárnyak, páncél, harmadik turbina, oldalgondolák, végül forgócsöves ágyú jön.
+
+/** Ventilátor felülről: a lapátok a képkockával forognak. */
+function fan(ctx: Ctx, frame: number, x: number, y: number, r: number, hot = false): void {
+  disc(ctx, x, y, r, '#101216', '#050608', 1.4);
+  disc(ctx, x, y, r - 1.5, hot ? '#3a1c0c' : '#242830');
+  ctx.strokeStyle = hot ? '#ff9a3c' : STEEL_L;
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + frame * 0.52;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * (r - 2), y + Math.sin(a) * (r - 2));
+    ctx.stroke();
+  }
+  disc(ctx, x, y, 1.4, STEEL, STEEL_EDGE, 0.8);
+}
+
+function ellipse(ctx: Ctx, x: number, y: number, rx: number, ry: number, fill: string | null, stroke?: string, lineWidth = 1.2): void {
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  if (fill) {
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+}
+
+function hullC(ctx: Ctx, frame: number, tier: number): void {
+  grown(ctx, tier, () => {
+    if (tier >= 4) {
+      // oldalgondolák saját ventilátorral, merevítőkkel a testhez kötve
+      for (const y of [-1.2, 43.2]) {
+        ctx.fillStyle = STEEL_D;
+        ctx.fillRect(22, Math.min(y, 21), 3, Math.abs(21 - y));
+        ctx.fillRect(40, Math.min(y, 21), 3, Math.abs(21 - y));
+        ellipse(ctx, 32, y, 15, 5, '#3a6a34', INK, 1.6);
+        fan(ctx, frame, 26, y, 3.6);
+        box(ctx, 34, y - 1.6, 13, 3.2, 1, GUN, tier >= 5 ? GOLD : '#0a0a0c', 1);
+      }
+    }
+    // légpárna-szoknya: sötét gumi, a bordái a képkockával körbefutnak
+    ellipse(ctx, 34, 21, 36, 22.5, '#17171c', '#08080a', 1.6);
+    ctx.strokeStyle = '#3c3c46';
+    ctx.lineWidth = 1.7;
+    for (let i = 0; i < 30; i++) {
+      const a = (i / 30) * Math.PI * 2 + frame * 0.07;
+      ctx.beginPath();
+      ctx.moveTo(34 + Math.cos(a) * 31, 21 + Math.sin(a) * 19.2);
+      ctx.lineTo(34 + Math.cos(a) * 35, 21 + Math.sin(a) * 21.8);
+      ctx.stroke();
+    }
+    if (tier >= 2) {
+      // páncéllemezek a szoknyán
+      for (const a of [0.55, 1.15, 1.99, 2.59, -0.55, -1.15, -1.99, -2.59]) {
+        ctx.save();
+        ctx.translate(34 + Math.cos(a) * 33, 21 + Math.sin(a) * 20.6);
+        ctx.rotate(Math.atan2(Math.sin(a) * 36, Math.cos(a) * 22.5) + Math.PI / 2);
+        box(ctx, -5, -2, 10, 4, 1, tier >= 5 ? GUN : STEEL, tier >= 5 ? GOLD : STEEL_EDGE, 1);
+        ctx.restore();
+      }
+    }
+    if (tier >= 1) {
+      // stabilizáló szárnyak a test két oldalán
+      poly(ctx, [20, 4, 40, 0.5, 44, 4.5, 26, 8.5], '#40703a', INK, 1.5);
+      poly(ctx, [20, 38, 40, 41.5, 44, 37.5, 26, 33.5], '#2c5a2c', INK, 1.5);
+    }
+    // test: csepp alak – hátul kerek, elöl hegyesedik
+    const body = (): void => {
+      ctx.beginPath();
+      ctx.moveTo(4, 21);
+      ctx.bezierCurveTo(4, 7, 26, 4, 46, 7);
+      ctx.bezierCurveTo(58, 9, 67, 16, 68.5, 21);
+      ctx.bezierCurveTo(67, 26, 58, 33, 46, 35);
+      ctx.bezierCurveTo(26, 38, 4, 35, 4, 21);
+      ctx.closePath();
+    };
+    body();
+    ctx.fillStyle = '#4c7c3c';
+    ctx.fill();
+    // fény felül, árnyék alul: ettől domború a test
+    ctx.save();
+    body();
+    ctx.clip();
+    ctx.fillStyle = '#6fa558';
+    ctx.beginPath();
+    ctx.ellipse(34, 9, 30, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#356330';
+    ctx.beginPath();
+    ctx.ellipse(34, 34.5, 30, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // sárga orr: ez a tank eleje
+    ctx.fillStyle = tier >= 5 ? GOLD : YELLOW;
+    ctx.beginPath();
+    ctx.ellipse(72, 21, 21, 19, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    body();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    arrows(ctx, [53, 58.5]);
+    // két hátsó emelőventilátor
+    fan(ctx, frame, 14, 13, 5.6, tier >= 4);
+    fan(ctx, frame, 14, 29, 5.6, tier >= 4);
+    if (tier >= 2) {
+      // acél orrvédő ív
+      ctx.strokeStyle = STEEL_L;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.ellipse(52, 21, 19, 15.5, 0, -0.62, 0.62);
+      ctx.stroke();
+      ctx.strokeStyle = STEEL_EDGE;
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(52, 21, 20.4, 16.8, 0, -0.62, 0.62);
+      ctx.stroke();
+    }
+    if (tier >= 3) {
+      // harmadik, nagy tolóturbina hátul középen, izzó fúvókával
+      box(ctx, -4, 15, 10, 12, 2.5, STEEL_D, STEEL_EDGE, 1.4);
+      const hot = ctx.createLinearGradient(-4, 0, 3, 0);
+      hot.addColorStop(0, '#fff0b0');
+      hot.addColorStop(1, '#ff7a1e');
+      ctx.fillStyle = hot;
+      ctx.fillRect(-3, 17, 4.5, 8);
+      // szellőzőrések a test hátán
+      for (const y of [17, 21, 25]) box(ctx, 21, y - 0.8, 6, 1.6, 0.6, '#0f1611');
+    }
+    if (tier >= 4) hazard(ctx, 7, 18.2, 3.4, 5.6);
+    if (tier >= 5) {
+      // arany perem, izzó energiacsíkok, két farokuszony
+      ctx.save();
+      body();
+      ctx.strokeStyle = GOLD;
+      ctx.lineWidth = 1.2;
+      ctx.translate(34, 21);
+      ctx.scale(0.93, 0.9);
+      ctx.translate(-34, -21);
+      body();
+      ctx.stroke();
+      ctx.restore();
+      ctx.save();
+      ctx.shadowColor = CYAN;
+      ctx.shadowBlur = 5;
+      ctx.strokeStyle = CYAN;
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
+      for (const y of [11.5, 30.5]) {
+        ctx.beginPath();
+        ctx.moveTo(22, y);
+        ctx.lineTo(46, y + (y < 21 ? 1.5 : -1.5));
+        ctx.stroke();
+      }
+      ctx.restore();
+      poly(ctx, [-3, 6, 9, 9.5, 9, 12, -3, 10], GUN, GOLD, 1);
+      poly(ctx, [-3, 36, 9, 32.5, 9, 30, -3, 32], GUN, GOLD, 1);
+    }
+    turretRing(ctx, 11 + tier * 0.45, tier >= 5 ? GUN : '#325a2c', tier >= 5 ? GOLD : INK);
+  });
+}
+
+function turretC(ctx: Ctx, marks: number, tier: number): void {
+  const fat = 7.6 + tier * 0.45;
+  if (tier >= 5) {
+    // forgócsöves ágyú: három cső közös abroncsban, izzó torkolattal
+    for (const y of [-5.4, 0, 5.4]) barrel(ctx, 8, 37, 4, y, GUN, '#5a6068');
+    for (const x of [18, 30]) box(ctx, x, -9, 3.4, 18, 1.4, GOLD, GOLD_D, 1);
+    ctx.save();
+    ctx.shadowColor = CYAN;
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = CYAN;
+    for (const y of [-5.4, 0, 5.4]) ctx.fillRect(44.4, y - 1.2, 2.6, 2.4);
+    ctx.restore();
+    bands(ctx, marks, 36, 2.8, 3.2);
+  } else if (tier >= 4) {
+    // ikerágyú
+    for (const y of [-5.2, 5.2]) {
+      barrel(ctx, 8, 32, 6.4, y);
+      muzzle(ctx, 8.5, 9, y);
+    }
+    bands(ctx, marks, 24, 3.2, 5.6, -5.2);
+  } else {
+    // rövid, vastag ágyú széles, tölcséres csőszájjal
+    barrel(ctx, 8, 31, fat);
+    box(ctx, 16, -fat / 2 - 1.3, 6.5, fat + 2.6, 1.6, '#33502e', '#12200f', 1.2);
+    bands(ctx, marks, 25, 3.2, fat - 0.8);
+    muzzle(ctx, 9.5, fat + 5.5);
+  }
+  // a 3. osztálytól kis gépágyú a kupola oldalán
+  if (tier >= 2 && tier < 5) barrel(ctx, 2, 19, 2.6, 10.2 + tier * 0.3, '#2c3a30', '#58725c');
+  const k = 1 + tier * 0.05;
+  ctx.save();
+  ctx.scale(k, k);
+  if (tier >= 3) {
+    // páncélgallér a kupola körül
+    disc(ctx, 0, 0, 14.2, tier >= 5 ? GUN : STEEL_D, tier >= 5 ? GOLD : STEEL_EDGE, 1.3);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + 0.3;
+      disc(ctx, Math.cos(a) * 12.9, Math.sin(a) * 12.9, 0.7, STEEL_L);
+    }
+  }
+  // kerek kupola: fény balra fent, árnyék jobbra lent
+  disc(ctx, 0, 0, 11.6, tier >= 5 ? '#2f5a34' : '#5c9448', '#14240f', 2.2);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(0, 0, 10.4, 0, Math.PI * 2);
+  ctx.clip();
+  disc(ctx, -3, -4.5, 8.5, tier >= 5 ? '#447a48' : '#86be6a');
+  disc(ctx, 4.5, 6.5, 7, tier >= 5 ? '#214526' : '#3e7036');
+  ctx.restore();
+  disc(ctx, 0, 0, 5.6, tier >= 5 ? '#244a2a' : '#4c7c3c', '#14240f', 1.1);
+  // kilátórés elöl: sötét üveg kék csíkkal
+  box(ctx, 4.4, -2.4, 6, 4.8, 2, '#0e1a24', '#000', 0.9);
+  ctx.fillStyle = CYAN;
+  ctx.fillRect(6, -1.4, 3, 1.1);
+  hatch(ctx, -3.5, 0, 2.8);
+  if (tier >= 1) {
+    // érzékelőárboc a kupola oldalán
+    disc(ctx, -6.5, -9.6, 2.5, STEEL, STEEL_EDGE, 1);
+    disc(ctx, -6.5, -9.6, 1, '#c8301c');
+  }
+  if (tier >= 5) {
+    ctx.strokeStyle = GOLD;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 9.7, 0, Math.PI * 2);
+    ctx.stroke();
+    const count = 1 + marks;
+    for (let i = 0; i < count; i++) star(ctx, -8.4 + (count > 3 ? 0.6 : 0), (i - (count - 1) / 2) * 3.2, count > 1 ? 1.6 : 2.4);
+  }
+  ctx.restore();
+}
+
+/** Az alaptankok: a név, egy rövid jellemzés, és az osztályok neve fokozatonként. */
+export const TANK_LOOK_NAMES = ['Harckocsi', 'Vadász', 'Cirkáló'] as const;
+export const TANK_LOOK_HINT = [
+  'Klasszikus lánctalpas harckocsi: hegyes orr, zömök torony – a végén tolólapos, négy futóműves titán.',
+  'Kerekes páncélvadász: hosszú, lapos ék-test, alacsony torony, nagyon hosszú cső – a végén ikersínágyú és rakéták.',
+  'Légpárnás cirkáló: csepp alakú test, ventilátorok, kerek kupola vastag ágyúval – a végén forgócsöves ágyú.',
+] as const;
+export const LOOK_TIER_NAMES: readonly (readonly string[])[] = [
+  TIER_NAMES,
+  ['Portyázó', 'Vadász', 'Páncélvadász', 'Ragadozó', 'Végrehajtó', 'Fantom'],
+  ['Sikló', 'Cirkáló', 'Fregatt', 'Csatahajó', 'Rettegett', 'Leviatán'],
+];
+
+const tiers = <T>(make: (tier: number) => T): T[] => Array.from({ length: TANK_TIERS }, (_, tier) => make(tier));
+/** A testek és a tornyok rajzai alaptankonként, osztályonként. */
+const HULL_SETS: ((ctx: Ctx, frame: number) => void)[][] = [HULLS, tiers((tier) => (ctx, frame) => hullB(ctx, frame, tier)), tiers((tier) => (ctx, frame) => hullC(ctx, frame, tier))];
+const TURRET_SETS: ((ctx: Ctx, marks: number) => void)[][] = [TURRETS, tiers((tier) => (ctx, marks) => turretB(ctx, marks, tier)), tiers((tier) => (ctx, marks) => turretC(ctx, marks, tier))];
+
 // --- textúrák ---------------------------------------------------------------------
 
 function canvasTexture(scene: Phaser.Scene, key: string, w: number, h: number, draw: (ctx: Ctx) => void): HTMLCanvasElement {
@@ -754,45 +1188,47 @@ export function createTankTextures(scene: Phaser.Scene): void {
       change(ctx, source.width, source.height);
     });
   };
-  for (let tier = 0; tier < TANK_TIERS; tier++) {
-    for (let frame = 0; frame < TRACK_FRAMES; frame++) {
-      const own = canvasTexture(scene, tankTex.hull('own', tier, frame), HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
-        ctx.translate(ox, oy);
-        HULLS[tier](ctx, frame);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-      });
-      variant(tankTex.hull('bot', tier, frame), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
-      variant(tankTex.hull('rival', tier, frame), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
-      if (frame === 0) {
-        variant(tankTex.wreckHull(tier), own, char);
-        // sérülésrétegek: a rajz csak ott látszik, ahol a tank teste van
-        for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
-          canvasTexture(scene, tankTex.damageHull(tier, stage), HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
-            drawDamage(ctx, stage, 101 + tier * 17, HULL_SIZE.w / 2, HULL_SIZE.h / 2, 27 + tier * 2.2, 16 + tier * 2.6);
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(own, 0, 0);
-            ctx.globalCompositeOperation = 'source-over';
-          });
+  for (let look = 0; look < HULL_SETS.length; look++) {
+    for (let tier = 0; tier < TANK_TIERS; tier++) {
+      for (let frame = 0; frame < TRACK_FRAMES; frame++) {
+        const own = canvasTexture(scene, tankTex.hull('own', tier, frame, look), HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
+          ctx.translate(ox, oy);
+          HULL_SETS[look][tier](ctx, frame);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+        });
+        variant(tankTex.hull('bot', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
+        variant(tankTex.hull('rival', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
+        if (frame === 0) {
+          variant(tankTex.wreckHull(tier, look), own, char);
+          // sérülésrétegek: a rajz csak ott látszik, ahol a tank teste van
+          for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
+            canvasTexture(scene, tankTex.damageHull(tier, stage, look), HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
+              drawDamage(ctx, stage, 101 + tier * 17 + look * 7, HULL_SIZE.w / 2, HULL_SIZE.h / 2, 27 + tier * 2.2, 16 + tier * 2.6);
+              ctx.globalCompositeOperation = 'destination-in';
+              ctx.drawImage(own, 0, 0);
+              ctx.globalCompositeOperation = 'source-over';
+            });
+          }
         }
       }
-    }
-    for (let marks = 0; marks < TANK_MARKS; marks++) {
-      const own = canvasTexture(scene, tankTex.turret('own', tier, marks), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
-        ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
-        TURRETS[tier](ctx, marks);
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-      });
-      variant(tankTex.turret('bot', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
-      variant(tankTex.turret('rival', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
-      if (marks === 0) {
-        variant(tankTex.wreckTurret(tier), own, char);
-        for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
-          canvasTexture(scene, tankTex.damageTurret(tier, stage), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
-            drawDamage(ctx, stage, 503 + tier * 29, TURRET_PIVOT.x + 8, TURRET_PIVOT.y, 26, 9 + tier * 1.2);
-            ctx.globalCompositeOperation = 'destination-in';
-            ctx.drawImage(own, 0, 0);
-            ctx.globalCompositeOperation = 'source-over';
-          });
+      for (let marks = 0; marks < TANK_MARKS; marks++) {
+        const own = canvasTexture(scene, tankTex.turret('own', tier, marks, look), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
+          ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
+          TURRET_SETS[look][tier](ctx, marks);
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+        });
+        variant(tankTex.turret('bot', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
+        variant(tankTex.turret('rival', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
+        if (marks === 0) {
+          variant(tankTex.wreckTurret(tier, look), own, char);
+          for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
+            canvasTexture(scene, tankTex.damageTurret(tier, stage, look), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
+              drawDamage(ctx, stage, 503 + tier * 29 + look * 11, TURRET_PIVOT.x + 8, TURRET_PIVOT.y, 26, 9 + tier * 1.2);
+              ctx.globalCompositeOperation = 'destination-in';
+              ctx.drawImage(own, 0, 0);
+              ctx.globalCompositeOperation = 'source-over';
+            });
+          }
         }
       }
     }
@@ -803,7 +1239,7 @@ export function createTankTextures(scene: Phaser.Scene): void {
  * A tank rajza önálló vásznakra, a játékjelenettől függetlenül (a menü
  * díszítéséhez): a test három lánctalp-képkockája és a torony.
  */
-export function tankSprites(tier: number, paint: TankPaint, marks = 0): { hull: HTMLCanvasElement[]; turret: HTMLCanvasElement } {
+export function tankSprites(tier: number, paint: TankPaint, marks = 0, look = 0): { hull: HTMLCanvasElement[]; turret: HTMLCanvasElement } {
   const make = (w: number, h: number, draw: (ctx: Ctx) => void): HTMLCanvasElement => {
     const canvas = document.createElement('canvas');
     canvas.width = w;
@@ -817,12 +1253,12 @@ export function tankSprites(tier: number, paint: TankPaint, marks = 0): { hull: 
   const hull = Array.from({ length: TRACK_FRAMES }, (_, frame) =>
     make(HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
       ctx.translate((HULL_SIZE.w - BODY.w) / 2, (HULL_SIZE.h - BODY.h) / 2);
-      HULLS[tier](ctx, frame);
+      HULL_SETS[look][tier](ctx, frame);
     }),
   );
   const turret = make(TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
     ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
-    TURRETS[tier](ctx, marks);
+    TURRET_SETS[look][tier](ctx, marks);
   });
   return { hull, turret };
 }
