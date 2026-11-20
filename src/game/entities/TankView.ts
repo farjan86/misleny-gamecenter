@@ -5,7 +5,7 @@
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
-import { angleDiff, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
+import { angleDiff, LEVEL, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
 import { GTEX } from './gameTextures';
 import { tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
 import { TEX } from './textures';
@@ -18,6 +18,8 @@ interface Snapshot {
 }
 
 const BAR = { width: 46, height: 5, above: 34 };
+/** a tank alatt lüktető fény színe osztályonként (0: nincs) – az ostromtanktól fölfelé */
+const AURA = [0, 0, 0, 0xff8a2a, 0xff5030, 0x5fe6ff];
 
 export class TankView {
   private readonly shadow: Phaser.GameObjects.Image;
@@ -28,8 +30,10 @@ export class TankView {
   private readonly ring: Phaser.GameObjects.Image;
   private readonly barBack: Phaser.GameObjects.Image;
   private readonly barFill: Phaser.GameObjects.Image;
-  /** a legfelső osztály tankja alatt lüktető fény */
+  /** a magasabb osztályú tank alatt lüktető fény */
   private aura: Phaser.GameObjects.Image | null = null;
+  /** szintjelvény az életerősáv elején (a 2. szinttől) */
+  private badge: Phaser.GameObjects.Text | null = null;
   private hullFrames: readonly string[] = [];
   private readonly prev: Snapshot;
   private readonly scale: number;
@@ -138,6 +142,7 @@ export class TankView {
     this.shown = visible;
     for (const part of [this.shadow, this.hull, this.turret, this.barBack, this.barFill]) part.setVisible(visible);
     this.aura?.setVisible(visible);
+    this.badge?.setVisible(visible);
     if (!visible) {
       this.ring.setVisible(false);
       this.marker?.setAlpha(0);
@@ -167,22 +172,35 @@ export class TankView {
       this.barWidth = BAR.width * size;
       this.barBack.setDisplaySize(this.barWidth + 2 * this.scale, (BAR.height + 2) * this.scale);
       const tier = Math.min(TANK_TIERS - 1, tankTier(tank.level));
+      // az osztályon belüli szintlépéseket a csövön gyűrűk jelzik
+      this.turret.setTexture(tankTex.turret(this.kind, tier, tank.level - LEVEL.tiers[tier]));
       if (tier !== this.tier) {
         this.tier = tier;
         this.hullFrames = Array.from({ length: TRACK_FRAMES }, (_, f) => tankTex.hull(this.kind, tier, f));
         this.frame = -1;
-        this.turret.setTexture(tankTex.turret(this.kind, tier));
-        if (tier === TANK_TIERS - 1 && !this.aura) {
-          this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setTint(0x5fe6ff).setBlendMode(Phaser.BlendModes.ADD);
-        } else if (tier < TANK_TIERS - 1 && this.aura) {
+        if (AURA[tier] && !this.aura) this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
+        else if (!AURA[tier] && this.aura) {
           this.aura.destroy();
           this.aura = null;
         }
+        this.aura?.setTint(AURA[tier]);
+      }
+      if (tank.level > 1) {
+        this.badge ??= this.scene.add
+          .text(0, 0, '', { fontFamily: 'Consolas, "Lucida Console", monospace', fontStyle: 'bold', fontSize: `${Math.round(15 * this.scale)}px`, color: '#ffd84a', stroke: '#101418', strokeThickness: Math.max(2, Math.round(4 * this.scale)) })
+          .setOrigin(1, 0.5)
+          .setDepth(18);
+        this.badge.setText(`★${tank.level}`);
+      } else if (this.badge) {
+        this.badge.destroy();
+        this.badge = null;
       }
     }
     if (this.aura) {
+      // a titán fénye erős, az ostromtanké és a rombolóé halvány parázslás
+      const strong = this.tier === TANK_TIERS - 1;
       const pulse = 0.5 + 0.5 * Math.sin(time * 3.2);
-      this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(0.3 + 0.16 * pulse);
+      this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(strong ? 0.3 + 0.16 * pulse : 0.14 + 0.1 * pulse);
     }
     const off = 6 * size;
     this.shadow.setPosition(x + off, y + off).setRotation(hull);
@@ -212,9 +230,10 @@ export class TankView {
     }
 
     // életerősáv
-    const ratio = Math.max(0, tank.hp / tankMaxHp(tank));
+    const ratio = Math.max(0, Math.min(1, tank.hp / tankMaxHp(tank)));
     const top = y - BAR.above * size;
     this.barBack.setPosition(x, top);
+    this.badge?.setPosition(x - this.barWidth / 2 - 4 * this.scale, top);
     this.barFill
       .setPosition(x - this.barWidth / 2, top)
       .setDisplaySize(Math.max(1, this.barWidth * ratio), BAR.height * this.scale)
@@ -244,6 +263,7 @@ export class TankView {
     this.heatBack?.destroy();
     this.heatFill?.destroy();
     this.aura?.destroy();
+    this.badge?.destroy();
     this.marker?.destroy();
   }
 }

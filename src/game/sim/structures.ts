@@ -49,6 +49,8 @@ export class Structures {
   /** Sebzés; igazat ad, ha az épület ettől dőlt össze. */
   damage(index: number, amount: number): boolean {
     if (index < 0 || index >= this.count || this.collapsed[index]) return false;
+    // a le nem dönthető épületet semmi nem sebzi (a végtelen sebzés sem)
+    if (this.maxHp[index] === Infinity) return false;
     this.hp[index] -= amount;
     if (this.hp[index] > 0) return false;
     this.hp[index] = 0;

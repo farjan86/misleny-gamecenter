@@ -14,6 +14,8 @@ import Phaser from 'phaser';
 
 export const TANK_TIERS = 6;
 export const TRACK_FRAMES = 3;
+/** egy osztályon belül ennyi szintlépést jelez külön rajz (kilövésgyűrűk a csövön, csillagok) */
+export const TANK_MARKS = 5;
 /** a saját tank zöld, a botoké vörös, a többi játékosé kék */
 export type TankPaint = 'own' | 'bot' | 'rival';
 
@@ -29,7 +31,8 @@ export const TURRET_PIVOT = { x: 26, y: 24 };
 
 export const tankTex = {
   hull: (paint: TankPaint, tier: number, frame: number): string => `tank-${paint}-hull-${tier}-${frame}`,
-  turret: (paint: TankPaint, tier: number): string => `tank-${paint}-turret-${tier}`,
+  /** marks: hány szintet lépett a tank az osztályán belül (0 … TANK_MARKS − 1) */
+  turret: (paint: TankPaint, tier: number, marks = 0): string => `tank-${paint}-turret-${tier}-${Math.max(0, Math.min(TANK_MARKS - 1, marks))}`,
   wreckHull: (tier: number): string => `wreck-hull-${tier}`,
   wreckTurret: (tier: number): string => `wreck-turret-${tier}`,
 } as const;
@@ -392,8 +395,29 @@ function hatch(ctx: Ctx, x: number, y: number, r: number, fill = '#2e5a2a', ligh
   ctx.fillRect(x - r * 0.5, y - r * 0.5, r * 0.75, 1.4);
 }
 
-function turret0(ctx: Ctx): void {
+/** Kilövésgyűrűk a csövön: az osztályon belül minden szintlépés egy újabb fehér gyűrű. */
+function bands(ctx: Ctx, marks: number, x: number, step: number, height: number, y = 0): void {
+  for (let i = 0; i < marks; i++) {
+    ctx.fillStyle = '#101410';
+    ctx.fillRect(x + i * step - 0.5, y - height / 2, 3, height);
+    ctx.fillStyle = '#f4f6ea';
+    ctx.fillRect(x + i * step, y - height / 2, 2, height);
+  }
+}
+
+function star(ctx: Ctx, x: number, y: number, r: number): void {
+  const pts: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    const d = i % 2 === 0 ? r : r * 0.42;
+    pts.push(x + Math.cos(a) * d, y + Math.sin(a) * d);
+  }
+  poly(ctx, pts, GOLD, GOLD_D, 0.8);
+}
+
+function turret0(ctx: Ctx, marks: number): void {
   barrel(ctx, 8, 36, 6);
+  bands(ctx, marks, 14, 3.8, 5.2);
   muzzle(ctx, 9, 9);
   poly(ctx, [-10, -8, 5, -10, 11, -5, 11, 5, 5, 10, -10, 8, -13, 0], '#5c9448', '#14240f', 2.2);
   poly(ctx, [-9, -6.5, 4.5, -8.5, 8, -5.5, -8, -3.5], '#86be6a');
@@ -401,8 +425,9 @@ function turret0(ctx: Ctx): void {
   hatch(ctx, -3, 0.5, 4.2);
 }
 
-function turret1(ctx: Ctx): void {
+function turret1(ctx: Ctx, marks: number): void {
   barrel(ctx, 9, 34, 7.4);
+  bands(ctx, marks, 14.5, 3.6, 6.6);
   // füstelszívó a cső közepén
   box(ctx, 23, -5.2, 9, 10.4, 2.2, '#33502e', '#12200f', 1.3);
   muzzle(ctx, 9.5, 10.5);
@@ -424,8 +449,9 @@ function turret1(ctx: Ctx): void {
   hatch(ctx, -3, -5, 2.8);
 }
 
-function turret2(ctx: Ctx): void {
+function turret2(ctx: Ctx, marks: number): void {
   barrel(ctx, 12, 30, 8.6);
+  bands(ctx, marks, 18.5, 4, 7.8);
   muzzle(ctx, 12.5, 12.5);
   poly(ctx, [-15, -10, -6, -13, 6, -13, 13.5, -8, 13.5, 8, 6, 13, -6, 13, -15, 10, -17.5, 0], '#58904a', '#14240f', 2.3);
   poly(ctx, [-13.5, -8.5, -5.5, -11.3, 5.5, -11.3, 10.5, -8, -12, -5.5], '#82ba68');
@@ -441,13 +467,14 @@ function turret2(ctx: Ctx): void {
   box(ctx, 2, -3, 4, 6, 0.8, GUN, '#0a0a0c', 1);
 }
 
-function turret3(ctx: Ctx): void {
+function turret3(ctx: Ctx, marks: number): void {
   // párhuzamos gépágyú a főlöveg mellett
   box(ctx, 9, 6.6, 25, 3.2, 1, GUN, '#0a0a0c', 1);
   barrel(ctx, 12, 29, 8.8);
   // hővédő köpeny acél bilincsekkel
   ctx.fillStyle = STEEL;
-  for (const x of [18.5, 26.5]) ctx.fillRect(x, -5.2, 2.4, 10.4);
+  for (const x of [17.5, 30]) ctx.fillRect(x, -5.2, 2.4, 10.4);
+  bands(ctx, marks, 21, 3, 8);
   muzzle(ctx, 13.5, 13.5);
   // acél málhadoboz hátul, antenna
   box(ctx, -23, -8.5, 7.5, 17, 1.2, STEEL, STEEL_EDGE, 1.2);
@@ -472,10 +499,11 @@ function turret3(ctx: Ctx): void {
   disc(ctx, -24.5, 14.5, 1.3, STEEL_L);
 }
 
-function turret4(ctx: Ctx): void {
+function turret4(ctx: Ctx, marks: number): void {
   // ikerlöveg
   for (const y of [-5.2, 5.2]) {
     barrel(ctx, 12, 30, 6.6, y, '#34502f', '#557a4a');
+    bands(ctx, marks, 18.5, 3.8, 5.8, y);
     muzzle(ctx, 10, 9.4, y);
   }
   // rakétavetők a torony két oldalán
@@ -507,7 +535,7 @@ function turret4(ctx: Ctx): void {
   ctx.stroke();
 }
 
-function turret5(ctx: Ctx): void {
+function turret5(ctx: Ctx, marks: number): void {
   // kiegészítő gépágyúk a torony két oldalán
   for (const y of [-12.8, 12.8]) box(ctx, 5, y - 1.7, 22, 3.4, 1, GUN, '#0a0a0c', 1);
   // energiaágyú: két sín között izzó sugárcsatorna, arany tekercsekkel
@@ -548,14 +576,9 @@ function turret5(ctx: Ctx): void {
   ctx.beginPath();
   ctx.arc(-3, 0, 6.4, 0, Math.PI * 2);
   ctx.stroke();
-  // arany csillag hátul
-  const star: number[] = [];
-  for (let i = 0; i < 10; i++) {
-    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
-    const r = i % 2 === 0 ? 3.6 : 1.5;
-    star.push(-14.5 + Math.cos(a) * r, Math.sin(a) * r);
-  }
-  poly(ctx, star, GOLD, GOLD_D, 0.8);
+  // arany csillagok hátul: szintenként eggyel több
+  const count = 1 + marks;
+  for (let i = 0; i < count; i++) star(ctx, -14.8, (i - (count - 1) / 2) * 5.3, count > 1 ? 2.7 : 3.6);
 }
 
 const TURRETS = [turret0, turret1, turret2, turret3, turret4, turret5];
@@ -630,13 +653,15 @@ export function createTankTextures(scene: Phaser.Scene): void {
       variant(tankTex.hull('rival', tier, frame), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
       if (frame === 0) variant(tankTex.wreckHull(tier), own, char);
     }
-    const own = canvasTexture(scene, tankTex.turret('own', tier), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
-      ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
-      TURRETS[tier](ctx);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    });
-    variant(tankTex.turret('bot', tier), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
-    variant(tankTex.turret('rival', tier), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
-    variant(tankTex.wreckTurret(tier), own, char);
+    for (let marks = 0; marks < TANK_MARKS; marks++) {
+      const own = canvasTexture(scene, tankTex.turret('own', tier, marks), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
+        ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
+        TURRETS[tier](ctx, marks);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      });
+      variant(tankTex.turret('bot', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
+      variant(tankTex.turret('rival', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
+      if (marks === 0) variant(tankTex.wreckTurret(tier), own, char);
+    }
   }
 }

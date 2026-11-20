@@ -101,7 +101,7 @@ class Room {
 }
 
 /** A csak látványt adó események: ezek csak a közelben lévőknek mennek ki. */
-const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown']);
+const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'ram', 'structure', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown']);
 
 function eventPosition(ev: SimEvent): { x: number; y: number } | null {
   if (ev.type === 'laser') return { x: ev.x1, y: ev.y1 };

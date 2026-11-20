@@ -8,7 +8,7 @@ import type { MapData } from '../src/game/maps/types';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { areaOfCells, gridSize, MATCH, Match, matchPlan, sanitizeSettings, type MatchSettings } from '../src/game/sim/match';
 import { Structures } from '../src/game/sim/structures';
-import { CRUSH, DAMAGE, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
+import { CRUSH, DAMAGE, ramPower, ramThrough, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
 
 const idle: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false };
 const seconds = (s: number): number => Math.round(s / SIM_DT);
@@ -23,10 +23,10 @@ function run(world: World, inputs: Record<number, Partial<TankInput>>, steps: nu
 }
 
 /** Üres pálya egy 10 × 10 m-es házzal (140..150, 195..205), amelynek az életereje 100 m² alapján számolódik. */
-function withHouse(extra: Partial<Terrain> = {}, indestructible = false): Terrain & { structures: Structures } {
+function withHouse(extra: Partial<Terrain> = {}, indestructible = false, area = 100): Terrain & { structures: Structures } {
   const walls = new SegmentGrid(400, 400);
   walls.addPolygon([140, 195, 150, 195, 150, 205, 140, 205], 0);
-  const structures = new Structures([{ area: 100, x: 145, y: 200, indestructible }]);
+  const structures = new Structures([{ area, x: 145, y: 200, indestructible }]);
   return { width: 400, height: 400, walls, structures, speedFactor: () => 1, ...extra };
 }
 
@@ -61,6 +61,14 @@ describe('ledönthető épületek', () => {
       return fired;
     };
     expect(shots(null)).toBe(6);
+    // minden találat után megy az épület megmaradt életereje (az utolsó után az összedőlés)
+    const hitTerrain = withHouse();
+    const hitWorld = new World(hitTerrain);
+    const gunner = hitWorld.addTank(110, 200, 0);
+    const hits = run(hitWorld, { [gunner.id]: { fire: true, aim: 0 } }, seconds(1)).flatMap((e) => (e.type === 'structure' ? [e] : []));
+    expect(hits.length).toBeGreaterThanOrEqual(2);
+    expect(hits[0]).toMatchObject({ index: 0, x: 145, y: 200 });
+    expect(hits[0].left).toBeCloseTo(1 - DAMAGE.shell / 150, 5);
     expect(shots('heavy')).toBe(3);
     expect(shots('rocket')).toBe(3);
   });
@@ -74,30 +82,99 @@ describe('ledönthető épületek', () => {
     expect(terrain.structures.collapsed[0]).toBe(0);
   });
 
-  it('a magas szintű tank az ütközésével is összedönti, az alacsony szintű nem', () => {
-    const low = withHouse();
-    const lowWorld = new World(low);
-    const a = lowWorld.addTank(125, 200, 0);
-    a.level = CRUSH.minLevel - 1;
-    run(lowWorld, { [a.id]: { throttle: 1 } }, seconds(6));
-    expect(low.structures.collapsed[0]).toBe(0);
-    expect(a.x).toBeLessThan(140);
+  /** A tank nekihajt a háznak; visszaadja, hány másodperc múlva dőlt össze (−1: a megadott idő alatt nem). */
+  const ram = (terrain: Terrain & { structures: Structures }, level: number, limit: number, options: { bot?: boolean } = {}): { time: number; tank: TankState; events: SimEvent[] } => {
+    const world = new World(terrain);
+    const tank = world.addTank(125, 200, 0, options);
+    tank.level = level;
+    const events: SimEvent[] = [];
+    const inputs = new Map<number, TankInput>([[tank.id, { ...idle, throttle: 1 }]]);
+    let time = -1;
+    for (let i = 0; i < seconds(limit); i++) {
+      world.step(inputs);
+      events.push(...world.events);
+      if (time < 0 && terrain.structures.collapsed[0]) time = (i + 1) * SIM_DT;
+    }
+    return { time, tank, events };
+  };
 
-    const high = withHouse();
-    const highWorld = new World(high);
-    const b = highWorld.addTank(125, 200, 0);
-    b.level = CRUSH.minLevel + 2;
-    const events = run(highWorld, { [b.id]: { throttle: 1 } }, seconds(6));
-    expect(high.structures.collapsed[0]).toBe(1);
-    expect(events.some((e) => e.type === 'collapse')).toBe(true);
-    expect(b.x).toBeGreaterThan(150);
+  it('minden szintű tank rombolja az épületet, amelynek nekifeszül – a nagyobb tank gyorsabban', () => {
+    // 100 m²-es ház: 150 életerő; az 1. szintű tank kb. 11 másodperc alatt dönti le
+    const first = ram(withHouse(), 1, 16);
+    expect(first.time).toBeGreaterThan(8);
+    expect(first.time).toBeLessThan(14);
+    // közben por és recsegés jelzi, hogy a fal sérül, és megy az épület fogyó életereje is
+    expect(first.events.filter((e) => e.type === 'ram').length).toBeGreaterThan(20);
+    const left = first.events.flatMap((e) => (e.type === 'structure' ? [e.left] : []));
+    expect(left.length).toBeGreaterThan(20);
+    expect(left[0]).toBeGreaterThan(0.9);
+    expect(left[left.length - 1]).toBeLessThan(0.1);
+    expect(left.every((v, i) => i === 0 || v < left[i - 1])).toBe(true);
+    expect(first.events.some((e) => e.type === 'collapse')).toBe(true);
+    // a romon át lehet hajtani
+    expect(first.tank.x).toBeGreaterThan(150);
+    const second = ram(withHouse(), 2, 16);
+    const fourth = ram(withHouse(), 4, 16);
+    expect(second.time).toBeLessThan(first.time);
+    expect(fourth.time).toBeLessThan(second.time * 0.7);
+    expect(ramPower(2)).toBeCloseTo(CRUSH.ramPerSecond * CRUSH.ramGrowth, 5);
+    // ha a tank nem megy neki (áll mellette), nem sebzi
+    const idleHouse = withHouse();
+    const world = new World(idleHouse);
+    world.addTank(137, 200, 0);
+    run(world, {}, seconds(5));
+    expect(idleHouse.structures.hp[0]).toBe(idleHouse.structures.maxHp[0]);
+  });
 
-    const top = withHouse();
-    const topWorld = new World(top);
-    const c = topWorld.addTank(125, 200, 0);
-    c.level = CRUSH.instantLevel;
-    run(topWorld, { [c.id]: { throttle: 1 } }, seconds(1.2));
-    expect(top.structures.collapsed[0]).toBe(1); // érintésre
+  it('a nehéz tank a kisebb házon megállás nélkül áthajt, a nagy épületet viszont csak fokozatosan rombolja', () => {
+    expect(ramThrough(1)).toBe(0);
+    expect(ramThrough(2)).toBe(0);
+    expect(ramThrough(3)).toBe(80);
+    expect(ramThrough(CRUSH.minLevel)).toBeGreaterThanOrEqual(150);
+    expect(ramThrough(CRUSH.instantLevel - 1)).toBeLessThan(600);
+    expect(ramThrough(CRUSH.instantLevel)).toBe(Infinity);
+    // 100 m²-es ház (150 életerő): a 6. szintű tank az első érintésre ledönti, és megy tovább
+    const small = ram(withHouse(), CRUSH.minLevel, 3);
+    expect(small.time).toBeGreaterThan(0);
+    expect(small.time).toBeLessThan(1.5);
+    expect(small.events.some((e) => e.type === 'ram')).toBe(false);
+    expect(small.tank.x).toBeGreaterThan(165);
+    // ugyanez egy megállás nélküli úthoz képest alig lassabb
+    const free = ram(withHouse({ walls: new SegmentGrid(400, 400) }), CRUSH.minLevel, 3);
+    expect(free.tank.x - small.tank.x).toBeLessThan(8);
+    // 500 m²-es épület (510 életerő): ezen nem megy át, de rombolja
+    const big = ram(withHouse({}, false, 500), CRUSH.minLevel, 3);
+    expect(big.time).toBe(-1);
+    expect(big.tank.x).toBeLessThan(140);
+    const later = ram(withHouse({}, false, 500), CRUSH.minLevel, 14);
+    expect(later.time).toBeGreaterThan(3);
+    // a megrongált nagy épületen már áthajt: néhány találat után érintésre összedől
+    const hurt = withHouse({}, false, 500);
+    hurt.structures.damage(0, 510 - ramThrough(CRUSH.minLevel));
+    expect(ram(hurt, CRUSH.minLevel, 3).time).toBeLessThan(1.5);
+    // a 3. szintű tank csak a legkisebb fészeren megy át
+    expect(ram(withHouse({}, false, 15), 3, 3).time).toBeLessThan(1.5);
+    expect(ram(withHouse(), 3, 3).time).toBe(-1);
+  });
+
+  it('a legmagasabb szinteken minden épület érintésre összedől – a le nem dönthető hivatal kivételével', () => {
+    const top = ram(withHouse({}, false, 5000), CRUSH.instantLevel, 2);
+    expect(top.time).toBeGreaterThan(0);
+    expect(top.time).toBeLessThan(1.5);
+    const hall = withHouse({}, true);
+    const result = ram(hall, CRUSH.instantLevel + 3, 6);
+    expect(result.time).toBe(-1);
+    expect(hall.structures.collapsed[0]).toBe(0);
+    expect(hall.structures.hp[0]).toBe(Infinity);
+    expect(result.tank.x).toBeLessThan(140);
+    expect(result.events.some((e) => e.type === 'ram')).toBe(false);
+  });
+
+  it('a botok az ütközésükkel nem rombolnak (csak véletlenül mennek falnak)', () => {
+    const terrain = withHouse();
+    const result = ram(terrain, 1, 20, { bot: true });
+    expect(result.time).toBe(-1);
+    expect(terrain.structures.hp[0]).toBe(terrain.structures.maxHp[0]);
   });
 });
 

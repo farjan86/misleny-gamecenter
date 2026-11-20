@@ -9,7 +9,7 @@ import type { MatchPlan, MatchSettings } from '../sim/match';
 import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehicles';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -88,7 +88,7 @@ export interface Snapshot {
   /** annak a tanknak az azonosítója, amelyet a kamera követ (kiesés után egy másik játékosé) */
   v: number;
   T: PackedTank[];
-  /** lövedékek: [id, fajta (0 sima, 1 nehéz, 2 rakéta), x, y, vx, vy] */
+  /** lövedékek: [id, fajta (0 sima, 1 nehéz, 2 rakéta), x, y, vx, vy, a kilövő tank] */
   B: number[][];
   /** tárgyak: [id, fajta sorszáma, x, y] */
   P: number[][];
@@ -219,8 +219,8 @@ export function unpackTank(p: PackedTank, into: TankState): TankState {
 }
 
 const SHELLS: ShellKind[] = ['shell', 'heavy', 'rocket'];
-export const packBullet = (b: BulletState): number[] => [b.id, SHELLS.indexOf(b.kind), b.x, b.y, b.vx, b.vy];
-export const unpackBullet = (p: number[]): BulletState => ({ id: p[0], owner: 0, team: 0, kind: SHELLS[p[1]] ?? 'shell', x: p[2], y: p[3], vx: p[4], vy: p[5], life: 1, bounces: 0 });
+export const packBullet = (b: BulletState): number[] => [b.id, SHELLS.indexOf(b.kind), b.x, b.y, b.vx, b.vy, b.owner];
+export const unpackBullet = (p: number[]): BulletState => ({ id: p[0], owner: p[6] ?? 0, team: 0, kind: SHELLS[p[1]] ?? 'shell', x: p[2], y: p[3], vx: p[4], vy: p[5], life: 1, bounces: 0 });
 export const packPickup = (p: PickupState): number[] => [p.id, PICKUP_KINDS.indexOf(p.kind), p.x, p.y];
 export const unpackPickup = (p: number[]): PickupState => ({ id: p[0], kind: PICKUP_KINDS[p[1]] ?? 'repair', x: p[2], y: p[3] });
 export const packOil = (o: OilState): number[] => [o.id, o.x, o.y];

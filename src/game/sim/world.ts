@@ -61,9 +61,9 @@ export const LEVEL = {
   /** az osztályok első szintjei: felderítő, közepes, nehéz, ostromtank, romboló, titán */
   tiers: [1, 3, 6, 9, 12, 16],
   /** méretnövekedés szintenként */
-  size: 0.03,
+  size: 0.04,
   /** további méretnövekedés osztályonként */
-  tierSize: 0.05,
+  tierSize: 0.07,
   /** többlet életerő szintenként */
   hp: 12,
   /** többlet sebzés szintenként */
@@ -82,15 +82,46 @@ export const tankRadius = (tank: { level: number }): number => TANK.radius * tan
 export const tankMaxHp = (tank: { level: number }): number => TANK.maxHp + LEVEL.hp * (tank.level - 1);
 const damageBoost = (tank: { level: number }): number => 1 + LEVEL.damage * (tank.level - 1);
 
-/** A magas szintű tank nekimenve is rombolja az épületeket. */
+/**
+ * A tank az ütközésével is rombol. Az épületet minden szint sebzi, amíg
+ * nekifeszül – a nagyobb tank gyorsabban –, a nehéz tanktól fölfelé pedig a
+ * kisebb (vagy már megrongált) házakon megállás nélkül áthajt. A járműveket
+ * és az ellenséges ágyúkat a nehéz tanktól (minLevel) rombolja.
+ */
 export const CRUSH = {
-  /** ettől a szinttől rombol a tank az ütközésével */
+  /** az épületnek feszülő tank sebzése másodpercenként az 1. szinten (az épület életereje 80–600) */
+  ramPerSecond: 14,
+  /** ennyivel szorzódik szintenként */
+  ramGrowth: 1.3,
+  /**
+   * Ekkora (vagy kisebb) életerejű épületen a tank megállás nélkül áthajt:
+   * [első szint, életerő ezen a szinten, növekmény szintenként]. A 3. szinttől
+   * a kis fészereken, a 6.-tól a kisebb családi házakon megy át.
+   */
+  through: [
+    [3, 80, 15],
+    [6, 170, 45],
+  ],
+  /** áthajtáskor ennyire lassul a tank */
+  throughSlow: 0.75,
+  /** ettől a szinttől rombolja a tank az ütközésével a járműveket és az ágyúkat */
   minLevel: 6,
-  /** sebzés másodpercenként, a minLevel fölötti szintenként (az épület életereje 80–600) */
+  /** a járművek, ágyúk sebzése másodpercenként, a minLevel fölötti szintenként */
   perSecond: 45,
-  /** ettől a szinttől az épület érintésre összedől */
+  /** ettől a szinttől minden épület, jármű és ágyú érintésre megsemmisül */
   instantLevel: 12,
 } as const;
+
+/** Az épületnek feszülő tank sebzése másodpercenként. */
+export const ramPower = (level: number): number => CRUSH.ramPerSecond * CRUSH.ramGrowth ** (level - 1);
+
+/** Ekkora (vagy kisebb) életerejű épületen a tank megállás nélkül áthajt (0: egyiken sem). */
+export function ramThrough(level: number): number {
+  if (level >= CRUSH.instantLevel) return Infinity;
+  let limit = 0;
+  for (const [from, hp, step] of CRUSH.through) if (level >= from) limit = hp + step * (level - from);
+  return limit;
+}
 
 /** Időjárás: esőben a burkolatlan talaj sáros és csúszik. */
 export type Weather = 'day' | 'rain' | 'night';
@@ -277,6 +308,10 @@ export type SimEvent =
   | { type: 'oil'; tank: number; x: number; y: number }
   | { type: 'slip'; tank: number; x: number; y: number }
   | { type: 'bump'; tank: number; x: number; y: number }
+  /** a tank egy épületnek feszül és rombolja (por, recsegés) */
+  | { type: 'ram'; tank: number; x: number; y: number }
+  /** egy épület megsérült, de még áll; left: a megmaradt életereje (0..1), x, y: a közepe */
+  | { type: 'structure'; index: number; x: number; y: number; left: number }
   /** kidőlt egy fa vagy oszlop (index: a pálya kidönthető tárgyainak sorszáma) */
   | { type: 'felled'; index: number; x: number; y: number; angle: number; shot: boolean }
   /** találat: `absorbed` jelzi, ha pajzs vagy sebezhetetlenség fogta fel */
@@ -695,16 +730,31 @@ export class World {
     let nx = tank.x + Math.cos(heading) * stepLen;
     let ny = tank.y + Math.sin(heading) * stepLen;
 
-    const res = terrain.walls.resolveCircle(nx, ny, radius);
+    let res = terrain.walls.resolveCircle(nx, ny, radius);
+    // A tank az ütközésével rombolja az épületet, amelynek nekifeszül: minden szinten, a
+    // nagyobb tank gyorsabban; a kisebb házakon a nehéz tank megállás nélkül áthajt.
+    // (A botok nem rombolnak így: ők csak véletlenül mennek falnak.)
+    const structures = terrain.structures;
+    if (res.owner >= 0 && structures && !tank.bot && Math.abs(stepLen) > 0.001 && structures.maxHp[res.owner] !== Infinity) {
+      const index = res.owner;
+      if (structures.hp[index] <= ramThrough(tank.level)) {
+        this.damageStructure(index, Infinity);
+        // a falai eltűntek: a tank továbbmegy, csak kicsit lelassul
+        tank.speed *= CRUSH.throughSlow;
+        res = terrain.walls.resolveCircle(nx, ny, radius);
+      } else {
+        // a folyamatos rombolásról csak időnként megy esemény (por, hang, az épület életerősávja)
+        const pulse = (this.tick + tank.id * 7) % 14 === 0;
+        this.damageStructure(index, ramPower(tank.level) * dt, !pulse);
+        if (pulse && !structures.collapsed[index]) {
+          this.events.push({ type: 'ram', tank: tank.id, x: tank.x + Math.cos(heading) * radius * Math.sign(stepLen), y: tank.y + Math.sin(heading) * radius * Math.sign(stepLen) });
+        }
+      }
+    }
     const area = this.area();
     nx = Math.max(area.minX + radius, Math.min(area.maxX - radius, res.x));
     ny = Math.max(area.minY + radius, Math.min(area.maxY - radius, res.y));
     let blocked = res.hit || nx !== res.x || ny !== res.y;
-    // a magas szintű tank az ütközésével is rombolja az épületet, amelynek nekifeszül
-    if (res.owner >= 0 && tank.level >= CRUSH.minLevel && Math.abs(stepLen) > 0.001) {
-      const power = tank.level >= CRUSH.instantLevel ? Infinity : CRUSH.perSecond * (tank.level - CRUSH.minLevel + 1) * dt;
-      this.damageStructure(res.owner, power);
-    }
     // a roncsokat ki kell kerülni
     for (const w of this.wrecks) {
       const dx = nx - w.x;
@@ -840,11 +890,16 @@ export class World {
   }
 
   /** Épület sebzése; ha ettől összedől, a falai eltűnnek az ütközési rácsból. */
-  private damageStructure(index: number, amount: number): void {
+  /** Épület sebzése; `silent`: a sérülésről ne menjen esemény (az összedőlésről mindig megy). */
+  private damageStructure(index: number, amount: number, silent = false): void {
     const structures = this.terrain.structures;
-    if (!structures || index < 0 || !structures.damage(index, amount)) return;
-    this.terrain.walls.setOwnerEnabled(index, false);
-    this.events.push({ type: 'collapse', index, x: structures.x[index], y: structures.y[index] });
+    if (!structures || index < 0 || index >= structures.count) return;
+    if (structures.damage(index, amount)) {
+      this.terrain.walls.setOwnerEnabled(index, false);
+      this.events.push({ type: 'collapse', index, x: structures.x[index], y: structures.y[index] });
+    } else if (!silent && !structures.collapsed[index] && structures.maxHp[index] !== Infinity) {
+      this.events.push({ type: 'structure', index, x: structures.x[index], y: structures.y[index], left: structures.hp[index] / structures.maxHp[index] });
+    }
   }
 
   /** Az egymásba csúszott tankok szétválasztása. */

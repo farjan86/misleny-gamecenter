@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { GameMap, pointInPolygon } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
+import { packBullet, unpackBullet } from '../src/game/net/protocol';
 import { BOT, BotBrain, BotManager, botTuning } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET } from '../src/game/sim/pickups';
@@ -694,9 +695,12 @@ describe('szintek', () => {
       // osztályon belül egyenletesen nő, osztályváltáskor nagyobbat
       expect(step).toBeCloseTo(LEVEL.tiers.includes(level as never) ? LEVEL.size + LEVEL.tierSize : LEVEL.size, 5);
     }
-    // a legnagyobb tank jóval nagyobb a kezdőnél, de még elfér egy utcában
-    expect(tankSize({ level: LEVEL.max })).toBeGreaterThan(1.7);
-    expect(tankRadius({ level: LEVEL.max })).toBeLessThan(3.5);
+    // a legnagyobb tank több mint kétszerese a kezdőnek, de még elfér egy utcában
+    expect(tankSize({ level: LEVEL.max })).toBeGreaterThan(2);
+    expect(tankRadius({ level: LEVEL.max })).toBeLessThan(3.8);
+    // a lövedék gazdája átmegy a hálózaton: a kliens ebből tudja, mekkora tank lőtte ki
+    const bullet = { id: 5, owner: 42, team: 1, kind: 'shell' as const, x: 1, y: 2, vx: 3, vy: 4, life: 1, bounces: 0 };
+    expect(unpackBullet(packBullet(bullet)).owner).toBe(42);
   });
 
   it('a botok nem lépnek szintet', () => {

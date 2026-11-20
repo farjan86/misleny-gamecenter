@@ -109,16 +109,22 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   kevesebbszer lőttek ki; ha ez is egyezik, döntetlen. Ha egy többjátékos
   meccsből mindenki más kilép, a bent maradó nyer.
 - **Szintek:** a játékos tankja minden kilőtt tank után szintet lép (legfeljebb
-  a 20. szintig): szintenként 3%-kal nagyobb, 12-vel több a legnagyobb
+  a 20. szintig): szintenként 4%-kal nagyobb, 12-vel több a legnagyobb
   életereje, és 8%-kal többet sebez. A botok nem lépnek szintet.
 - **A szint megmarad:** a kilőtt tank ugyanazon a szinten, a szintjéhez járó
   teljes életerővel éled újra. Csak a felszerelése vész el: a felvett fegyver,
   a pajzs, az olaj, a telepíthető ágyú töltetei és az időre szóló hatások.
 - **Tanktípusok:** a szintek hat osztályba tartoznak, és osztályváltáskor a
   tank más típus lesz – más a teste és a tornya, és a mérete is ugrik (további
-  5%-kal). A váltást aranyszínű fénygyűrű és hang jelzi; a tank sávja és az
+  7%-kal). A váltást aranyszínű fénygyűrű és hang jelzi; a tank sávja és az
   információs panel a típus nevét is mutatja. A roncs akkora és olyan, amilyen
   a kilőtt tank volt.
+- **A szint látszik a tankon:** az életerősáv elején csillag és a szint száma
+  áll (a 2. szinttől, minden játékos tankján). A típuson belüli szintlépéseket
+  fehér gyűrűk jelzik a csövön (a titánnál arany csillagok a tornyon). A
+  nagyobb tank lövedéke és torkolattüze is nagyobb; a nehéz tanktól fölfelé a
+  kipufogó füstöl, az ostromtank és a romboló alatt parázsló, a titán alatt
+  kék fény lüktet, és a titán lövedéke kéken izzik.
 
   | Szint | Típus | Miről ismerhető fel |
   |---|---|---|
@@ -129,7 +135,7 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   | 12–15 | Romboló | négy külön futómű, tolólap, ikerlöveg, rakétavetők (érintésre dönt házat) |
   | 16–20 | Titán | sötét páncél arany szegéllyel, energiaágyú, lüktető fény a tank alatt |
 
-  A 20. szintű tank a kezdő méretének kb. 1,8-szerese. A típus csak a
+  A 20. szintű tank a kezdő méretének kb. 2,1-szerese. A típus csak a
   kinézetet és a méretet adja; az erőt (életerő, sebzés, rombolás) a szint.
 
 ### A pálya rombolása
@@ -141,9 +147,19 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   (ugyanannyit, amennyit egy tankon sebeznének, a lövő szintjével növelve);
   ha elfogy, **az épület összedől**: rom marad a helyén, amelyen át lehet
   hajtani. Egy 100 m²-es ház 6 sima vagy 3 nehéz lövedéket, illetve 3 rakétát bír.
-- **Magas szintű tank:** a 6. szinttől a tank az ütközésével is rombolja az
-  épületet, amelynek nekifeszül (szintenként egyre gyorsabban), a 12. szinttől
-  pedig az épület érintésre összedől.
+- **A tank az ütközésével is rombol:** minden szintű tank sebzi az épületet,
+  amíg nekifeszül (gázt ad a fal felé): az 1. szinten másodpercenként 14
+  életerőt, szintenként 30%-kal többet (a 6. szinten 52-t, a 11.-en 193-at).
+  Egy 100 m²-es házat az 1. szintű tank kb. 11 másodperc alatt dönt le.
+- **Áthajtás:** az elég nagy tank a kisebb (vagy már megrongált) épületen
+  megállás nélkül áthajt – az épület az érintésre összedől, a tank csak kicsit
+  lassul. A határ az épület pillanatnyi életereje: a 3. szinten 80 (kis
+  fészer), szintenként 15-tel több; a 6. szinttől (nehéz harckocsi) 170 – ez
+  már egy kisebb családi ház –, szintenként 45-tel több; a 12. szinttől
+  minden épület érintésre összedől. Egy nagy épületet tehát érdemes előbb
+  megbontani néhány lövéssel. A botok az ütközésükkel nem rombolnak.
+- **Sérülésjelző:** a megsérült épület fölött rövid időre megjelenik az
+  életerősávja (lövésnél és nekifeszülésnél is); a falnál por száll, recseg.
 - **A Polgármesteri Hivatal nem dönthető le.**
 - **Tűz:** a találatot kapott háztető, a lövéstől kidőlt fa, az összedőlő
   épület és a kilőtt tank kigyullad, és egy ideig ég (kb. 10–45 másodperc).

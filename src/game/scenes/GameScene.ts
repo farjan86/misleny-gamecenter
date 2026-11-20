@@ -83,6 +83,8 @@ export class GameScene extends Phaser.Scene {
   private readonly oilViews = new Map<number, Phaser.GameObjects.Image>();
   /** a roncsok képei: test és torony */
   private readonly wreckViews = new Map<number, Phaser.GameObjects.Image[]>();
+  /** a nemrég megsérült épületek életerősávjai (az épület sorszáma szerint) */
+  private readonly structureBars = new Map<number, { back: Phaser.GameObjects.Image; fill: Phaser.GameObjects.Image; hide: Phaser.Time.TimerEvent }>();
   /** újrahasznált effekt-sprite-ok */
   private readonly boomPool: Phaser.GameObjects.Sprite[] = [];
   private readonly flashPool: Phaser.GameObjects.Image[] = [];
@@ -493,8 +495,10 @@ export class GameScene extends Phaser.Scene {
           else this.sfx.shot(volume);
         }
         if (ev.kind !== 'laser') {
-          const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setScale(this.spriteScale).setDepth(12);
-          flash.setPosition(ev.x * ppm, ev.y * ppm).setRotation(ev.angle).setVisible(true);
+          const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setDepth(12);
+          // a nagyobb tank torkolattüze is nagyobb
+          const shooter = world.tank(ev.tank);
+          flash.setScale(this.spriteScale * (shooter ? tankSize(shooter) : 1)).setPosition(ev.x * ppm, ev.y * ppm).setRotation(ev.angle).setVisible(true);
           this.time.delayedCall(70, () => {
             flash.setVisible(false);
             this.flashPool.push(flash);
@@ -585,8 +589,23 @@ export class GameScene extends Phaser.Scene {
         break;
       }
       case 'collapse':
+        this.dropStructureBar(ev.index);
         this.collapse(ev.index);
         break;
+      case 'structure':
+        this.showStructureBar(ev.index, ev.x, ev.y, ev.left);
+        break;
+      case 'ram': {
+        // a tank egy épületnek feszül: por és törmelék a falnál, recsegés
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume <= 0) break;
+        const rammer = world.tank(ev.tank);
+        const size = rammer ? tankSize(rammer) : 1;
+        for (let i = 0; i < 3; i++) this.puff((ev.x + (i - 1) * 1.1 * size) * ppm, (ev.y + ((i * 7 + this.frame) % 5) * 0.4 - 1) * ppm, 0xb9ab98, 0.9 * size, 520);
+        this.sfx.crunch(volume * 0.45);
+        if (mine) this.cameras.main.shake(90, 0.0016 * size);
+        break;
+      }
       case 'overheat':
         if (mine) {
           this.sfx.overheat();
@@ -652,6 +671,32 @@ export class GameScene extends Phaser.Scene {
         break;
       }
     }
+  }
+
+  /** A megsérült épület fölött rövid időre megjelenik az életerősávja: így látszik, hogy a lövés vagy az ütközés rombolja. */
+  private showStructureBar(index: number, x: number, y: number, left: number): void {
+    const scale = this.spriteScale;
+    const width = 64 * scale;
+    let bar = this.structureBars.get(index);
+    if (!bar) {
+      const back = this.add.image(x * this.ppm, y * this.ppm, GTEX.px).setDepth(17).setTint(0x101418).setAlpha(0.85).setDisplaySize(width + 2 * scale, 8 * scale);
+      const fill = this.add.image(x * this.ppm - width / 2, y * this.ppm, GTEX.px).setDepth(18).setOrigin(0, 0.5);
+      bar = { back, fill, hide: this.time.delayedCall(0, () => undefined) };
+      this.structureBars.set(index, bar);
+    }
+    const ratio = Math.max(0, Math.min(1, left));
+    bar.fill.setDisplaySize(Math.max(1, width * ratio), 6 * scale).setTint(ratio > 0.5 ? 0xe8c23a : ratio > 0.25 ? 0xf08a2a : 0xe0483a);
+    bar.hide.remove();
+    bar.hide = this.time.delayedCall(2200, () => this.dropStructureBar(index));
+  }
+
+  private dropStructureBar(index: number): void {
+    const bar = this.structureBars.get(index);
+    if (!bar) return;
+    bar.hide.remove();
+    bar.back.destroy();
+    bar.fill.destroy();
+    this.structureBars.delete(index);
   }
 
   /** Épület összedőlése: a pályán rom lesz belőle (át lehet hajtani rajta), porfelhő és tűz kíséri. */
@@ -818,10 +863,19 @@ export class GameScene extends Phaser.Scene {
   private dust(view: Phaser.Geom.Rectangle): void {
     const rain = this.world.room.settings.weather === 'rain';
     for (const tank of this.world.tanks) {
-      if (!tank.alive || Math.abs(tank.speed) < 6) continue;
+      if (!tank.alive || Math.abs(tank.speed) < 2) continue;
       const px = tank.x * this.ppm;
       const py = tank.y * this.ppm;
       if (px < view.x || px > view.right || py < view.y || py > view.bottom) continue;
+      // a nehéz tanktól fölfelé a kipufogó sötét füstöt ereget
+      const tier = tankTier(tank.level);
+      if (tier >= 2 && (this.frame / 5) % 2 === 0) {
+        const size = tankSize(tank);
+        const rear = -2.9 * size * this.ppm;
+        const off = ((this.frame / 10) & 1 ? 1 : -1) * 1.2 * size * this.ppm;
+        this.puff(px + Math.cos(tank.hullAngle) * rear - Math.sin(tank.hullAngle) * off, py + Math.sin(tank.hullAngle) * rear + Math.cos(tank.hullAngle) * off, 0x2e2b28, 0.45 + 0.12 * tier, 520);
+      }
+      if (Math.abs(tank.speed) < 6) continue;
       if (this.map.speedFactor(tank.x, tank.y) >= 1) continue;
       const back = (tank.speed > 0 ? -1.9 : 1.9) * this.ppm;
       const side = ((this.frame / 5) & 1 ? 1 : -1) * 1.2 * this.ppm;
@@ -927,8 +981,11 @@ export class GameScene extends Phaser.Scene {
         view = this.add
           .image(0, 0, rocket ? GTEX.rocket : heavy ? GTEX.heavyShell : TEX.bullet)
           .setOrigin(rocket ? 0.7 : heavy ? 0.8 : 0.85, 0.5)
-          .setScale(this.spriteScale * (heavy ? 1.15 : 1))
           .setDepth(12);
+        // a nagyobb tank lövedéke is nagyobb; a titán energiaágyúja kéken izzó lövedéket lő
+        const shooter = this.world.tank(b.owner);
+        view.setScale(this.spriteScale * (heavy ? 1.15 : 1) * (shooter ? 0.8 + 0.2 * tankSize(shooter) + 0.25 * (tankSize(shooter) - 1) : 1));
+        if (shooter && !rocket && !heavy && tankTier(shooter.level) === LEVEL.tiers.length - 1) view.setTint(0x8ff0ff);
         this.bulletViews.set(b.id, view);
       }
       const x = (b.x + b.vx * t) * this.ppm;
