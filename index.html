@@ -53,6 +53,8 @@
       <!-- kilövési értesítő: ki kit lőtt ki -->
       <div id="hud-feed"></div>
       <div id="hud-toast" class="panel"></div>
+      <!-- a meccs első 3 másodpercében villogó felhívás: teljes képernyőn érdemes játszani -->
+      <div id="hud-fullscreen-tip" class="panel hidden" role="button" title="Teljes képernyő"></div>
       <div id="hud-death" class="panel hidden"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
@@ -132,7 +134,7 @@
 
       <div class="screen hidden wide" id="screen-garage">
         <h2>Válassz alaptankot</h2>
-        <p class="note">Csak a megjelenés más: a méret, az életerő, a sebesség és a sebzés mindhárom tanknál ugyanaz. A szintekkel a választott tank a saját formájában fejlődik.</p>
+        <p class="note">Csak a megjelenés más: a méret, az életerő, a sebesség és a sebzés mind a hat tanknál ugyanaz. A szintekkel a választott tank a saját formájában fejlődik. Az alsó sor három klasszikus, II. világháborús tank korhű festéssel: náluk a csapat színét (saját zöld, bot vörös, másik játékos kék) a motortéren és a torony tetején lévő azonosító lap mutatja.</p>
         <div id="garage-cards"></div>
         <p class="sub" id="garage-title"></p>
         <div id="garage-tiers"></div>
@@ -193,12 +195,16 @@
             <label class="field" id="create-code-field"
               >Belépőkód – privát játékhoz (üresen hagyva bárki beléphet)<input id="create-code" maxlength="16" autocomplete="off" spellcheck="false" placeholder="pl. tankcsata7"
             /></label>
+            <label class="field demo-field hidden" id="create-demo-field"
+              ><input type="checkbox" id="create-demo" /> Nyitott játék – azonnal indul (te nem kerülsz bele, de a listából beléphetsz), bárki bármikor beléphet, a létszám 2–100 fő között állítható, és addig fut, amíg le nem állítod</label
+            >
             <label class="field" id="create-mode-field">Játékmód<select id="create-mode"></select></label>
             <p class="note" id="mode-note"></p>
             <label class="slider" id="create-players-field">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
             <label class="slider">Játékidő <b id="val-minutes"></b><input type="range" id="sl-minutes" min="5" max="30" step="5" /></label>
             <label class="slider">Botok <b id="val-bots"></b><input type="range" id="sl-bots" min="0" max="5" step="1" /></label>
-            <label class="slider">Botok ügyessége <b id="val-skill"></b><input type="range" id="sl-skill" min="1" max="5" step="1" /></label>
+            <label class="slider">Botok ügyessége <b id="val-skill"></b><input type="range" id="sl-skill" min="1" max="6" step="1" /></label>
+            <label class="slider">Botok szívóssága <b id="val-toughness"></b><input type="range" id="sl-toughness" min="1" max="5" step="1" /></label>
             <label class="slider">Botok agresszivitása <b id="val-aggression"></b><input type="range" id="sl-aggression" min="1" max="5" step="1" /></label>
             <label class="slider">Felvehető tárgyak <b id="val-pickups"></b><input type="range" id="sl-pickups" min="0" max="5" step="1" /></label>
             <label class="slider">Forgalom (autók, buszok) <b id="val-traffic"></b><input type="range" id="sl-traffic" min="0" max="5" step="1" /></label>

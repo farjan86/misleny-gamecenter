@@ -8,9 +8,9 @@ import type { NetClient, NetStatus } from '../net/NetClient';
 import { CHAT, cleanCode, ROOM_CODE, type OnlinePlayer, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
 import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
 import { Sfx } from '../systems/audio';
-import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings } from '../sim/match';
+import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings, DEMO, demoPlayers } from '../sim/match';
 import { HULL_SIZE, LOOK_TIER_NAMES, TANK_LOOK_HINT, TANK_LOOK_NAMES, tankSprites, TURRET_PIVOT } from '../entities/tankTextures';
-import { LEVEL } from '../sim/world';
+import { LEVEL, BOT_TOUGHNESS, BOT_TOUGHNESS_LEVELS, DAMAGE, TANK } from '../sim/world';
 import { buildGuide, buildHowTo } from './Guide';
 import { guardLeave } from './leaveGuard';
 import { MenuArt } from './MenuArt';
@@ -19,12 +19,15 @@ type Screen = 'main' | 'settings' | 'guide' | 'garage' | 'lobby' | 'create' | 'r
 const SCREENS: Screen[] = ['main', 'settings', 'guide', 'garage', 'lobby', 'create', 'room', 'results'];
 
 const LEVEL_NAME = ['nincs', 'nagyon kevés', 'kevés', 'közepes', 'sok', 'nagyon sok'];
-const SKILL_NAME = ['', 'kezdő', 'gyenge', 'közepes', 'ügyes', 'mesterlövész'];
+const SKILL_NAME = ['', 'kezdő', 'gyenge', 'közepes', 'ügyes', 'nagyon ügyes – tárgyat vesz fel, fejlődik', 'ultra ügyes – tárgyat vesz fel, fejlődik'];
+const TOUGHNESS_NAME = ['', 'törékeny', 'gyenge', 'közepes', 'szívós', 'páncélos'];
 const AGGRESSION_NAME = ['', 'békés', 'óvatos', 'közepes', 'harcias', 'vadászik rád'];
 const WEATHER_NAME = { day: 'Nappal', rain: 'Eső', night: 'Este' } as const;
 const STATUS_NAME = { waiting: 'Játékra vár', starting: 'Betelt – indul', playing: 'Betelt – játékban' } as const;
 /** az oldal újratöltése után egyből ide térjen vissza a menü */
 const RETURN_KEY = 'tank-misleny.return';
+/** újratöltés után ebbe a (nyitott) játékba lép vissza */
+const REJOIN_KEY = 'tank-misleny.rejoin';
 /** nyitva van-e a főképernyőn a játékmenet leírása */
 const HOWTO_KEY = 'tank-misleny.howto';
 
@@ -43,7 +46,7 @@ function roomDetails(room: RoomInfo): string {
   const bots = room.plan.bots ? `kb. ${room.plan.bots} bot` : 'bot nélkül';
   // a területet a határokból számoljuk (a hálózaton átjövő érték két tizedesre kerekített)
   const size = ((s.area.maxX - s.area.minX) * (s.area.maxY - s.area.minY)) / 1e6;
-  return `${GAME_MODE_NAME[s.mode] ?? s.mode} · ${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${s.minutes} perc · ${bots}`;
+  return `${GAME_MODE_NAME[s.mode] ?? s.mode} · ${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${room.demo ? 'korlátlan ideig' : `${s.minutes} perc`} · ${bots}`;
 }
 
 export class Menu {
@@ -68,6 +71,12 @@ export class Menu {
   private codeRoom: string | null = null;
   /** az „Új játék” képernyő egyjátékos módban van-e (szerver nélkül indul) */
   private single = false;
+  /** a szerver gazdája (nyitott játékot nyithat, módosíthat és állíthat le) */
+  private admin = false;
+  /** a módosítás alatt álló nyitott játék (null: új játék létrehozása) */
+  private editing: RoomInfo | null = null;
+  /** újratöltés után ebbe a játékba lép vissza, amint megjön a játékok listája */
+  private rejoin: string | null = null;
   /** az egyjátékos játék indítását kérő visszahívás */
   onSingle: (settings: MatchSettings, name: string) => void = () => undefined;
   /** hová térjen vissza a menü a meccs után */
@@ -99,6 +108,16 @@ export class Menu {
   }
 
   /** Az oldal újratöltése úgy, hogy utána a megadott menü nyíljon meg (a játék így tisztán indul újra). */
+  /** Újratöltés, utána automatikus visszalépés a megadott (nyitott) játékba. */
+  static reloadToRoom(room: string): void {
+    try {
+      window.sessionStorage.setItem(REJOIN_KEY, room);
+    } catch {
+      /* ha nem megy, a játékok listája nyílik meg */
+    }
+    Menu.reloadTo('lobby');
+  }
+
   static reloadTo(screen: 'lobby' | 'main'): void {
     try {
       window.sessionStorage.setItem(RETURN_KEY, screen);
@@ -301,6 +320,7 @@ export class Menu {
       case 'auth': {
         this.settings.token = message.token;
         this.settings.name = message.name;
+        this.admin = message.admin === true;
         this.save();
         el<HTMLInputElement>('auth-password').value = '';
         this.showAuth(true);
@@ -313,6 +333,12 @@ export class Menu {
           /* nincs munkamenet-tároló */
         }
         if (back === 'lobby') this.show('lobby');
+        try {
+          this.rejoin = window.sessionStorage.getItem(REJOIN_KEY);
+          window.sessionStorage.removeItem(REJOIN_KEY);
+        } catch {
+          this.rejoin = null;
+        }
         break;
       }
       case 'authError':
@@ -329,6 +355,12 @@ export class Menu {
         break;
       case 'rooms':
         this.renderRooms(message.rooms);
+        // a módosított nyitott játékba automatikusan visszalép
+        if (this.rejoin) {
+          const room = message.rooms.find((r) => r.id === this.rejoin);
+          this.rejoin = null;
+          if (room) this.net.send({ t: 'join', room: room.id, look: this.settings.look });
+        }
         break;
       case 'chat':
         this.chatLine(message.from, message.text, [message.me ? 'me' : '', `scope-${message.scope}`].join(' ').trim());
@@ -443,6 +475,7 @@ export class Menu {
     el('lobby-create').onclick = () => {
       this.closeCode();
       this.single = false;
+      this.editing = null;
       this.show('create');
     };
     const input = el<HTMLInputElement>('code-input');
@@ -487,7 +520,8 @@ export class Menu {
       return;
     }
     for (const room of rooms) {
-      const open = room.status === 'waiting' && room.players.length < room.settings.maxPlayers;
+      // a nyitott játékba menet közben is be lehet lépni
+      const open = (room.demo || room.status === 'waiting') && room.players.length < room.settings.maxPlayers;
       const row = document.createElement('div');
       row.className = 'room';
       row.innerHTML =
@@ -495,7 +529,7 @@ export class Menu {
         `<div class="small">létrehozta: ${esc(room.host)}${room.locked ? ' · privát' : ''}</div></div>` +
         `<div>${room.players.length} / ${room.settings.maxPlayers} játékos</div>` +
         `<div class="small">${roomDetails(room)}</div>` +
-        `<div class="state ${open ? 'waiting' : 'full'}">${STATUS_NAME[room.status]}</div>`;
+        `<div class="state ${room.demo ? 'demo' : open ? 'waiting' : 'full'}">${room.demo ? 'Nyitott játék – bármikor beléphetsz' : STATUS_NAME[room.status]}</div>`;
       const join = document.createElement('span');
       join.className = open ? 'btn' : 'btn disabled';
       join.textContent = 'Belépés';
@@ -505,16 +539,38 @@ export class Menu {
         else this.net.send({ t: 'join', room: room.id, look: this.settings.look });
       };
       row.appendChild(join);
+      // a nyitott játékot csak a szerver gazdája módosíthatja és állíthatja le
+      if (room.demo && this.admin) {
+        const change = document.createElement('span');
+        change.className = 'btn stop';
+        change.textContent = 'Módosítás';
+        change.onclick = () => {
+          this.editing = room;
+          this.single = false;
+          this.show('create');
+        };
+        row.appendChild(change);
+        const stop = document.createElement('span');
+        stop.className = 'btn danger stop';
+        stop.textContent = 'Leállítás';
+        stop.onclick = () => {
+          if (window.confirm(`Leállítod a nyitott játékot? A bent lévő ${room.players.length} játékos visszakerül a játékok listájához.`)) this.net.send({ t: 'closeDemo', room: room.id });
+        };
+        row.appendChild(stop);
+      }
       list.appendChild(row);
     }
   }
 
   // --- új játék ------------------------------------------------------------------
 
-  private readonly sliders = ['players', 'minutes', 'bots', 'skill', 'aggression', 'pickups', 'traffic', 'weather'] as const;
+  private readonly sliders = ['players', 'minutes', 'bots', 'skill', 'aggression', 'toughness', 'pickups', 'traffic', 'weather'] as const;
 
   private bindCreate(): void {
-    el('create-back').onclick = () => this.show(this.single ? 'main' : 'lobby');
+    el('create-back').onclick = () => {
+      this.editing = null;
+      this.show(this.single ? 'main' : 'lobby');
+    };
     el('create-ok').onclick = () => {
       const settings = this.readCreate();
       // a létszám a többjátékos beállítás része: egyjátékos indítás nem írja felül
@@ -523,6 +579,20 @@ export class Menu {
       if (this.single) return this.onSingle(settings, this.net.name || this.settings.name || 'Játékos');
       const code = el<HTMLInputElement>('create-code').value;
       if (code.trim() && cleanCode(code).length < ROOM_CODE.min) return this.error(`A belépőkód legalább ${ROOM_CODE.min} karakter legyen.`);
+      if (this.editing) {
+        // a futó nyitott játék módosítása: a bent lévők újratöltenek, és az új pályán folytatják
+        const room = this.editing;
+        this.editing = null;
+        this.net.send({ t: 'modifyOpen', room: room.id, settings });
+        this.show('lobby');
+        return;
+      }
+      if (this.demoChosen()) {
+        // a nyitott játék a gazdája nélkül indul: ő a játékok listájához kerül, onnan beléphet, ha akar
+        this.net.send({ t: 'create', settings, look: this.settings.look, demo: true });
+        this.show('lobby');
+        return;
+      }
       this.net.send({ t: 'create', settings, look: this.settings.look, ...(code.trim() ? { code } : {}) });
     };
     for (const name of this.sliders) el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => this.updateCreate());
@@ -537,6 +607,15 @@ export class Menu {
       }),
     );
     mode.addEventListener('change', () => this.updateCreate());
+    el<HTMLInputElement>('create-demo').addEventListener('change', () => {
+      // nyitott játéknál a létszám 2–100 között állítható (alapból 100), különben 1–8
+      const slider = el<HTMLInputElement>('sl-players');
+      const demo = el<HTMLInputElement>('create-demo').checked;
+      slider.min = String(demo ? DEMO.minPlayers : MATCH.players.min);
+      slider.max = String(demo ? DEMO.maxPlayers : MATCH.players.max);
+      slider.value = String(demo ? DEMO.maxPlayers : Math.min(Number(slider.value), MATCH.players.max));
+      this.updateCreate();
+    });
 
     const canvas = el<HTMLCanvasElement>('area-map');
     const cellAt = (ev: MouseEvent): { c: number; r: number } => {
@@ -620,6 +699,7 @@ export class Menu {
       el<HTMLInputElement>('sl-bots').value = String(last.bots);
       el<HTMLInputElement>('sl-skill').value = String(last.botSkill);
       el<HTMLInputElement>('sl-aggression').value = String(last.botAggression);
+      el<HTMLInputElement>('sl-toughness').value = String(last.botToughness ?? BOT_TOUGHNESS_LEVELS.normal);
       el<HTMLInputElement>('sl-pickups').value = String(last.pickups);
       el<HTMLInputElement>('sl-traffic').value = String(last.traffic);
       el<HTMLInputElement>('sl-weather').value = String(WEATHERS.indexOf(last.weather));
@@ -631,13 +711,60 @@ export class Menu {
     el('create-players-field').classList.toggle('hidden', this.single);
     el('create-code-field').classList.toggle('hidden', this.single);
     el('create-ok').textContent = this.single ? 'Indítás' : 'Létrehozás';
+    // nyitott játékot csak a szerver gazdája nyithat
+    el('create-demo-field').classList.toggle('hidden', this.single || !this.admin);
+    const open = el<HTMLInputElement>('create-demo');
+    open.checked = false;
+    open.disabled = false;
+    el<HTMLInputElement>('sl-players').min = String(MATCH.players.min);
+    el<HTMLInputElement>('sl-players').max = String(MATCH.players.max);
+    if (this.editing && this.admin && !this.single) this.fillFromRoom(this.editing);
     this.updateCreate();
+  }
+
+  /** A futó nyitott játék beállításai a létrehozó képernyőn (módosításhoz). */
+  private fillFromRoom(room: RoomInfo): void {
+    const s = room.settings;
+    const cw = this.map.width / this.grid.cols;
+    const ch = this.map.height / this.grid.rows;
+    this.sel = { c0: Math.round(s.area.minX / cw), r0: Math.round(s.area.minY / ch), c1: Math.round(s.area.maxX / cw) - 1, r1: Math.round(s.area.maxY / ch) - 1 };
+    el<HTMLInputElement>('create-name').value = s.name;
+    el<HTMLSelectElement>('create-mode').value = s.mode;
+    const open = el<HTMLInputElement>('create-demo');
+    open.checked = true;
+    open.disabled = true;
+    // a létszám nem lehet kisebb, mint ahányan éppen bent vannak
+    const players = el<HTMLInputElement>('sl-players');
+    players.min = String(Math.max(DEMO.minPlayers, room.players.length));
+    players.max = String(DEMO.maxPlayers);
+    players.value = String(Math.max(s.maxPlayers, room.players.length));
+    const set = (id: string, v: number): void => {
+      el<HTMLInputElement>(id).value = String(v);
+    };
+    set('sl-bots', s.bots);
+    set('sl-skill', s.botSkill);
+    set('sl-aggression', s.botAggression);
+    set('sl-toughness', s.botToughness ?? BOT_TOUGHNESS_LEVELS.normal);
+    set('sl-pickups', s.pickups);
+    set('sl-traffic', s.traffic);
+    set('sl-weather', WEATHERS.indexOf(s.weather));
+    el('create-title').textContent = `Nyitott játék módosítása – ${s.name}`;
+  }
+
+  /** A szerver gazdája nyitott játékot kért (korlátlan ideig fut, szabad belépéssel). */
+  private demoChosenOrEditing(): boolean {
+    return this.editing !== null || this.demoChosen();
+  }
+
+  /** A szerver gazdája új nyitott játékot kért. */
+  private demoChosen(): boolean {
+    return !this.single && this.admin && el<HTMLInputElement>('create-demo').checked;
   }
 
   private readCreate(): MatchSettings {
     const value = (name: string): number => Number(el<HTMLInputElement>(`sl-${name}`).value);
     const s = this.selection();
-    return sanitizeSettings(
+    const settings = sanitizeSettings(
       {
         name: el<HTMLInputElement>('create-name').value,
         mode: el<HTMLSelectElement>('create-mode').value as GameMode,
@@ -647,6 +774,7 @@ export class Menu {
         bots: value('bots'),
         botSkill: value('skill'),
         botAggression: value('aggression'),
+        botToughness: value('toughness'),
         pickups: value('pickups'),
         traffic: value('traffic'),
         weather: WEATHERS[value('weather')] ?? 'day',
@@ -654,6 +782,9 @@ export class Menu {
       this.map.width,
       this.map.height,
     );
+    // a nyitott játék létszáma nagyobb lehet (2–100): a gazdája adja meg
+    if (this.demoChosenOrEditing()) settings.maxPlayers = demoPlayers(value('players'));
+    return settings;
   }
 
   /** A csúszkák feliratai és a térkép a kijelöléssel; a tényleges létszámokat a pálya mérete adja. */
@@ -666,9 +797,21 @@ export class Menu {
     el('val-bots').textContent = settings.bots ? `${LEVEL_NAME[settings.bots]} – kb. ${plan.bots} bot` : 'nincs';
     el('val-skill').textContent = settings.bots ? SKILL_NAME[settings.botSkill] : '–';
     el('val-aggression').textContent = settings.bots ? AGGRESSION_NAME[settings.botAggression] : '–';
+    {
+      // a szívósság: mennyit sebez egy lövése, és hány találatot bír ki (a játékos 1. szintű tankjához mérve)
+      const t = BOT_TOUGHNESS[settings.botToughness - 1];
+      const hits = Math.ceil(TANK.maxHp / (DAMAGE.shell * t.armor));
+      el('val-toughness').textContent = settings.bots ? `${TOUGHNESS_NAME[settings.botToughness]} – lövése ${Math.round(DAMAGE.shell * t.damage)}, ${hits} találatot bír` : '–';
+    }
     el('val-pickups').textContent = settings.pickups ? `${LEVEL_NAME[settings.pickups]} – kb. ${plan.pickups} db` : 'nincs';
     el('val-traffic').textContent = settings.traffic ? `${LEVEL_NAME[settings.traffic]} – kb. ${plan.traffic} jármű` : 'nincs';
     el('val-weather').textContent = WEATHER_NAME[settings.weather];
+    // nyitott játék: nincs létszám (legfeljebb 100), időkorlát és belépőkód
+    const demo = this.demoChosenOrEditing();
+    el('create-players-field').classList.toggle('hidden', this.single);
+    el('sl-minutes').closest('label')?.classList.toggle('hidden', demo);
+    el('create-code-field').classList.toggle('hidden', this.single || demo);
+    if (!this.single) el('create-ok').textContent = this.editing ? 'Módosítás mentése' : demo ? 'Nyitott játék indítása' : 'Létrehozás';
     const { area } = settings;
     el('area-text').textContent = `Kijelölt játéktér: ${area.maxX - area.minX} × ${area.maxY - area.minY} m (${km2(plan.km2)}) – a legkisebb kb. ${Math.round((this.map.width / this.grid.cols) * MATCH.minCells)} m széles`;
 

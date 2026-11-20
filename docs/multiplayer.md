@@ -177,6 +177,93 @@ A `http://localhost:8787/status` cím megmutatja, hányan vannak fent, hány szo
   ha a játék https-címen fut (az alagúton keresztül így van). Sima, helyi
   hálózati `http://` címen a kapcsolat nincs titkosítva.
 
+## Biztonság
+
+A szerver az internetről is elérhető, ezért:
+
+- **Csak a `dist/` mappa** (a játék oldala) adható ki; a projekt többi fájlja
+  – a fiókok, a napló, a szerver programja – nem. A hibás kódolású cím
+  „400 – Hibás cím” választ kap, egy hibás kérés nem állíthatja le a szervert.
+- **Jelszó:** csak a sózott, visszafejthetetlen lenyomata (scrypt) tárolódik; a
+  belépve maradás kulcsa véletlenszerű, abból is csak a lenyomat. A hibás és a
+  nem létező névre ugyanannyi idő alatt jön a válasz.
+- **A szerver dönt mindenről** (mozgás, találat, sebzés, szint), a kliens csak a
+  billentyűket küldi: a játék kliensoldali átírásával nem lehet sebezhetetlenné
+  vagy gyorsabbá válni. A nyitott játék kezelését a szerver is a fiók nevéhez köti.
+- **Nevek, üzenetek:** a szerver kiszűri belőlük a `<` és `>` jelet, a
+  kliens pedig minden kiírásnál hatástalanítja a HTML-t.
+- **Elárasztás ellen:** kapcsolatonként legfeljebb 240 üzenet másodpercenként
+  (fölötte bontás), legfeljebb 16 KB-os üzenet; egy címről legfeljebb 60
+  kapcsolat, óránként 30 regisztráció, és 30 sikertelen belépés után 15 percig
+  nem lehet jelszóval belépni. (A címet az alagúton át a Cloudflare adja – a
+  `cf-connecting-ip` fejléc –, helyi hálózatról a kapcsolat címe.) Összesen
+  400 kapcsolat és 60 szoba.
+- **Fejlécek:** `Content-Security-Policy` (csak a saját oldal szkriptjei
+  futhatnak, és csak a saját szerverhez kapcsolódhatnak – ha mégis bekerülne
+  idegen kód, ne tudjon adatot kivinni), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN` (idegen oldal nem ágyazhatja be),
+  `Referrer-Policy: no-referrer`, `Permissions-Policy` (kamera, helyadat tiltva;
+  a mikrofon a hanghoz megmarad).
+- **Idegen weboldal** nem kapcsolódhat a szerverhez a játékos böngészőjéből
+  (a WebSocket `Origin` fejlécét a szerver ellenőrzi).
+- **Jelszótalálgatás:** egy fiókra 20 sikertelen belépés után 15 percig – bárhonnan
+  – nem lehet jelszóval belépni; a megőrzött kulccsal (a böngésző emlékszik) a
+  gazda ilyenkor is be tud lépni.
+- **A valódi cím** (`cf-connecting-ip`) fejlécét a szerver csak a saját gépén
+  futó alagúttól fogadja el; a helyi hálózatról jövő kérés nem hamisíthatja.
+- **Amire neked kell figyelni:** a ProWolf fiók erős jelszava (aki tudja, az
+  nyitott játékot nyithat, módosíthat, leállíthat); a `data/` mappa és a
+  `C:Users….cloudflared` mappa tartalma ne kerüljön ki. A helyi hálózati
+  címen (http://…:8787) a forgalom titkosítatlan – nyilvános wifin inkább a
+  https-es címet használd.
+
+## Nyitott játék: szabad belépés, korlátlan ideig
+
+A szerver gazdája **nyitott játékot** indíthat: azonnal indul, bárki bármikor
+beléphet és kiléphet, és addig fut, amíg a gazdája le nem állítja. (A kódban
+és a protokollban a neve `demo`.)
+
+- **Ki indíthatja, módosíthatja, állíthatja le:** csak a `data/admins.txt`
+  fájlban felsorolt fiókok (soronként egy fióknév, a `#` utáni rész
+  megjegyzés; most: ProWolf). A változás a szerver újraindítása után érvényes;
+  induláskor a szerver kiírja, ki a gazda. A `data/` mappa nincs
+  verziókezelés alatt. Minden ilyen kérést a szerver is ellenőriz.
+- **Indítás:** *Multiplayer → Új játék*, a gazdának megjelenik a „Nyitott
+  játék” jelölőnégyzet. A beállítások a szokásosak (terület, botok, tárgyak,
+  forgalom, időjárás); a létszám 2–100 fő között állítható, játékidő és
+  belépőkód nincs. Egyszerre több nyitott játék is futhat.
+- **A gazda nem kerül bele:** a játék üresen indul, ő a játékok listájánál
+  marad, és ha akar, a „Belépés” gombbal ugyanúgy becsatlakozhat, mint bárki.
+- **Belépés:** a listában „Nyitott játék – bármikor beléphetsz” felirattal
+  látszik; menet közben is be lehet lépni, amíg van hely. A belépő rögtön
+  tankot kap; aki kilép, annak a tankja eltűnik, a játék megy tovább. Az óra
+  helyén „NYITOTT” áll; a csevegés és a hang mindig működik.
+- **Kilépés és visszatérés:** aki kilép (vagy véletlenül újratölti az
+  oldalt), annak a szintje, az eredményei és a felszerelése (fegyver, pajzs,
+  aknák, füst, lövegek…) 2 percig megmarad: ha addig visszalép, onnan folytatja.
+- **Módosítás menet közben:** a listában a gazdának „Módosítás” gombja van; a
+  létrehozó képernyő a játék mostani beállításaival nyílik meg, és bármi
+  átállítható (a terület is). A létszám nem vehető a bent lévők száma alá. Mentéskor
+  a szerver új pályát épít a megadott beállításokkal (botok, forgalom, tárgyak,
+  időjárás), a bent lévők oldala magától újratölt (pár másodperc), visszalép,
+  és az új pályán éled újra – a szintjük, az eredményeik és a felszerelésük megmarad.
+- **Üresen szünetel:** ha senki nincs bent, a szimuláció áll (nem fogyaszt
+  gépidőt), és a következő belépővel onnan folytatódik.
+- **Leállítás:** a gazdának „Leállítás” gombja van; a bent lévők visszakerülnek
+  a játékok listájához.
+- **Újraindítás után is megmarad:** a szerver minden létrehozáskor, módosításkor
+  és leállításkor elmenti a nyitott játékokat a `data/open-games.json` fájlba
+  (az `OPEN_GAMES_FILE` környezeti változóval más fájl adható meg), és
+  induláskor ugyanazokkal a beállításokkal, ugyanazon az azonosítón újra
+  megnyitja őket – üresen, szüneteltetve, amíg valaki be nem lép. A szerver
+  induláskor kiírja, melyik nyitott játékok futnak. A játékosok szintje az
+  újraindítást nem éli túl (az csak a meccs alatt él). Csak az a játék nyílik
+  meg újra, amelynek a gazdája a `data/admins.txt` szerint ma is gazda; a
+  sérült bejegyzés kimarad.
+- **Sok játékos:** 8 főnél több játékosnál a távoli (csak a kis térképen
+  látszó) játékosok is ritkábban frissülnek, mint a közeliek – így a forgalom
+  játékosonként nem nő a létszámmal arányosan.
+
 ## Játéknapló: ki mennyit játszott
 
 A szerver egy egyszerű szöveges fájlba írja, **ki mikor és mennyi ideig

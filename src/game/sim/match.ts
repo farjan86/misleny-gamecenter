@@ -7,10 +7,10 @@
 // ellen, a kilőtt tank újraéled, és az nyer, aki az idő lejártáig a legtöbb
 // tankot lövi ki. A mód a beállítások része, hogy később több is lehessen.
 
-import { BOT_LEVELS, BotManager, botTuning } from './bots';
+import { BOT_LEVELS, BotManager, botTuning, SKILL_LEVELS } from './bots';
 import { BARREL, SUPER, WORKSHOP } from './gadgets';
 import { Traffic } from './traffic';
-import { ANY_PLAYER, cleanLook, TEAM, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
+import { ANY_PLAYER, BOT_TOUGHNESS_LEVELS, botRules, cleanLook, SPAWN_ANGLE, TEAM, tankMaxHp, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
 
 export interface Area {
   minX: number;
@@ -46,6 +46,8 @@ export interface MatchSettings {
   botSkill: number;
   /** a botok agresszivitása (1–5): milyen messziről vesznek észre, meddig üldöznek, vadásznak-e a játékosokra */
   botAggression: number;
+  /** a botok szívóssága (1–5): minél szívósabb, annál erősebb a páncélja és annál nagyobbat lő */
+  botToughness: number;
   /** felvehető tárgyak szintje, ugyanígy */
   pickups: number;
   /** a civil forgalom szintje (autók, buszok, ellátó teherautók); 0 = nincs */
@@ -78,6 +80,21 @@ export const MATCH = {
 } as const;
 
 export const WEATHERS: readonly Weather[] = ['day', 'rain', 'night'];
+
+/**
+ * Amit a játékos a nyitott játékban megtart, ha kilép és rövidesen visszalép, vagy ha a
+ * játékot módosítják (új pálya): a szintje, az eredményei és a felszerelése.
+ */
+export const CARRY_KEYS = ['level', 'kills', 'deaths', 'streak', 'bestStreak', 'botKills', 'weapon', 'tripleShots', 'ricochet', 'shield', 'oil', 'mines', 'smokes', 'strikes', 'turrets', 'fuel', 'shots', 'hits', 'dealt', 'taken', 'wrecked'] as const;
+export type Carry = Pick<TankState, (typeof CARRY_KEYS)[number]>;
+
+/** A nyitott játék: korlátlan ideig fut, bárki bármikor beléphet; a gazdája adja meg, legfeljebb hányan (2–100). */
+export const DEMO = { minPlayers: 2, maxPlayers: 100 } as const;
+
+/** A nyitott játék létszáma a (nem megbízható) kérésből: egész szám a két határ között; ha hiányzik, a legnagyobb. */
+export function demoPlayers(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) ? clamp(Math.round(raw), DEMO.minPlayers, DEMO.maxPlayers) : DEMO.maxPlayers;
+}
 
 const clamp = (v: number, min: number, max: number): number => Math.max(min, Math.min(max, v));
 const int = (v: unknown, fallback: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : fallback);
@@ -126,8 +143,9 @@ export function sanitizeSettings(raw: Partial<MatchSettings> | null | undefined,
     maxPlayers: clamp(int(r.maxPlayers, 4), MATCH.players.min, MATCH.players.max),
     minutes: clamp(int(r.minutes, MATCH.minutes.normal), MATCH.minutes.min, MATCH.minutes.max),
     bots: clamp(int(r.bots, 2), MATCH.levels.min, MATCH.levels.max),
-    botSkill: clamp(int(r.botSkill, BOT_LEVELS.normal), BOT_LEVELS.min, BOT_LEVELS.max),
+    botSkill: clamp(int(r.botSkill, SKILL_LEVELS.normal), SKILL_LEVELS.min, SKILL_LEVELS.max),
     botAggression: clamp(int(r.botAggression, BOT_LEVELS.normal), BOT_LEVELS.min, BOT_LEVELS.max),
+    botToughness: clamp(int(r.botToughness, BOT_TOUGHNESS_LEVELS.normal), BOT_TOUGHNESS_LEVELS.min, BOT_TOUGHNESS_LEVELS.max),
     pickups: clamp(int(r.pickups, 3), MATCH.levels.min, MATCH.levels.max),
     traffic: clamp(int(r.traffic, 2), MATCH.levels.min, MATCH.levels.max),
     weather: WEATHERS.includes(r.weather as Weather) ? (r.weather as Weather) : 'day',
@@ -274,6 +292,8 @@ export class Match {
   /** a következő szupertárgyig hátralévő idő (mp), és a helye, ha már be van jelentve */
   private superIn: number = SUPER.every;
   private superSpot: { x: number; y: number } | null = null;
+  /** a következő belépő csapatszáma (mindenki külön csapat) */
+  private nextTeam = 0;
 
   /**
    * `terrain`: a pálya, amelyen a játéktér (bounds) és az időjárás már be van
@@ -284,19 +304,17 @@ export class Match {
     readonly settings: MatchSettings,
     entrants: readonly { id: string; name: string; look?: number }[],
     seed: number,
+    /** nyitott játék: nincs időkorlát, bárki beléphet és kiléphet, és a meccs nem ér véget magától */
+    readonly endless = false,
   ) {
     this.plan = matchPlan(settings);
-    this.timeLeft = settings.minutes * 60;
+    this.timeLeft = endless ? Infinity : settings.minutes * 60;
     // az életek száma korlátlan: a kilőtt tank néhány másodperc múlva újraéled
     this.world = new World(terrain, seed, { weather: settings.weather, lives: 0, spawnGap: this.plan.spawnGap });
     this.world.scatterWorkshops(this.plan.workshops);
-    const { area } = settings;
-    entrants.forEach((entrant, i) => {
-      // a játékosok egymástól távol, véletlen helyen születnek
-      const spot = this.world.spawnSpot() ?? { x: (area.minX + area.maxX) / 2, y: (area.minY + area.maxY) / 2 };
-      const tank = this.world.addTank(spot.x, spot.y, this.world.rnd() * Math.PI * 2, { team: PLAYER_TEAM + i, look: cleanLook(entrant.look) });
-      this.players.push({ id: entrant.id, name: entrant.name, tankId: tank.id, look: tank.look, gone: false });
-    });
+    // a játékosok egymástól távol, véletlen helyen születnek
+    for (const entrant of entrants) this.addPlayer(entrant.id, entrant.name, entrant.look);
+    this.world.botRules = botRules(settings.botToughness, settings.botSkill);
     this.bots = new BotManager(this.world, botTuning(settings.botSkill, settings.botAggression));
     this.bots.setCount(this.plan.bots, TEAM.bots, ANY_PLAYER);
     this.world.scatterPickups(this.plan.pickups);
@@ -304,6 +322,31 @@ export class Match {
     this.world.scatterBarrels(this.plan.barrels);
     this.traffic = new Traffic(this.world, this.plan.traffic);
     this.world.traffic = this.traffic;
+  }
+
+  /** Új játékos a meccsben (induláskor, illetve a nyitott játékba menet közben): egymástól távol, véletlen helyen születik. */
+  addPlayer(id: string, name: string, look?: number, carry?: Carry | null): MatchPlayer {
+    const { area } = this.settings;
+    const spot = this.world.spawnSpot() ?? { x: (area.minX + area.maxX) / 2, y: (area.minY + area.maxY) / 2 };
+    // a játékos tankja a térkép teteje felé néz
+    const tank = this.world.addTank(spot.x, spot.y, SPAWN_ANGLE, { team: PLAYER_TEAM + this.nextTeam++, look: cleanLook(look) });
+    // a megőrzött szint és felszerelés (nyitott játékba visszalépve), teljes életerővel
+    if (carry) {
+      Object.assign(tank, carry);
+      tank.hp = tankMaxHp(tank);
+    }
+    const player: MatchPlayer = { id, name, tankId: tank.id, look: tank.look, gone: false };
+    this.players.push(player);
+    return player;
+  }
+
+  /** A játékos megőrizendő állapota (szint, eredmények, felszerelés), vagy null, ha nincs tankja. */
+  carry(id: string): Carry | null {
+    const tank = this.tankOf(id);
+    if (!tank) return null;
+    const out: Record<string, unknown> = {};
+    for (const key of CARRY_KEYS) out[key] = tank[key];
+    return out as unknown as Carry;
   }
 
   player(id: string): MatchPlayer | undefined {
@@ -326,6 +369,7 @@ export class Match {
     this.bots.update(this.inputs, 1 / 60);
     this.world.step(this.inputs);
     this.stepSuper(1 / 60);
+    if (this.endless) return;
     this.timeLeft -= 1 / 60;
     if (this.timeLeft <= 0) {
       this.timeLeft = 0;
@@ -359,6 +403,12 @@ export class Match {
     const tank = this.world.tank(p.tankId);
     if (tank) this.finals.set(p.id, finalOf(tank));
     this.world.removeTank(p.tankId);
+    // nyitott játék: a kilépett játékos egyszerűen eltűnik (az állásból is), a játék megy tovább
+    if (this.endless) {
+      this.players.splice(this.players.indexOf(p), 1);
+      this.finals.delete(p.id);
+      return;
+    }
     // ha egy többjátékos meccsben már csak egy játékos maradt (vagy senki), nincs kivel játszani: vége
     const present = this.players.filter((q) => !q.gone);
     if (this.over || present.length > (this.players.length > 1 ? 1 : 0)) return;

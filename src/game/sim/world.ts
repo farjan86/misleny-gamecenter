@@ -20,7 +20,8 @@ export const SIM_DT = 1 / 60;
  * hatása nincs (méret, életerő, sebesség, sebzés ugyanaz), a szintekkel mindegyik a saját
  * formavilágában fejlődik.
  */
-export const TANK_LOOKS = 3;
+/** az alaptankok száma: 3 modern és 3 klasszikus (II. világháborús) – csak megjelenés */
+export const TANK_LOOKS = 6;
 export const cleanLook = (raw: unknown): number => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < TANK_LOOKS ? raw : 0);
 
 export const TANK = {
@@ -101,6 +102,36 @@ export const LEVEL = {
   upsetGap: 3,
   upsetGain: 2,
 } as const;
+
+/**
+ * A botok szívóssága (csúszka, 1–5): minél szívósabb, annál nagyobbat lő (damage: a
+ * sebzésének szorzója a játékosok ellen) és annál erősebb a páncélja (armor: ennyiszer
+ * nagyobb sebzést kap). A legszívósabb bot egyenrangú a játékossal.
+ */
+export const BOT_TOUGHNESS = [
+  { damage: 0.4, armor: 2.0 },
+  { damage: 0.5, armor: 1.8 },
+  { damage: 0.6, armor: 1.6 },
+  { damage: 0.8, armor: 1.25 },
+  { damage: 1.0, armor: 1.0 },
+] as const;
+export const BOT_TOUGHNESS_LEVELS = { min: 1, max: 5, normal: 3 } as const;
+/** a közepes szívósság (az alapérték) */
+export const BOT_POWER = BOT_TOUGHNESS[BOT_TOUGHNESS_LEVELS.normal - 1];
+/** ettől az ügyességi szinttől (nagyon ügyes, ultra ügyes) a bot tárgyat vesz fel és a kilövésekkel szintet lép */
+export const BOT_PERKS_SKILL = 5;
+
+/** A botokra vonatkozó szabályok egy meccsben. */
+export interface BotRules {
+  damage: number;
+  armor: number;
+  /** tárgyat vehet fel és szintet léphet */
+  perks: boolean;
+}
+export function botRules(toughness: number = BOT_TOUGHNESS_LEVELS.normal, skill = 3): BotRules {
+  const t = BOT_TOUGHNESS[Math.max(BOT_TOUGHNESS_LEVELS.min, Math.min(BOT_TOUGHNESS_LEVELS.max, Math.round(toughness))) - 1] ?? BOT_POWER;
+  return { damage: t.damage, armor: t.armor, perks: skill >= BOT_PERKS_SKILL };
+}
 
 /** Ennyi szintet lép, aki `level` szinten kilő egy `victim` szintű játékost. */
 export function killGain(level: number, victim: number): number {
@@ -187,10 +218,17 @@ export const WRECK = {
 /** A roncs akadályként akkora, amekkora a kilőtt tank volt. */
 export const wreckRadius = (wreck: { level: number }): number => WRECK.radius * tankSize(wreck);
 
+/**
+ * Az ágyúlövedék. Egyik fegyver sem lő messzebb SHOT_RANGE méternél (kb. a képernyő
+ * szélessége): a pálya túlsó végéről nem lehet eltalálni senkit.
+ */
 export const BULLET = {
   speed: 75,
-  life: 1.1,
+  life: 2.1,
 } as const;
+export const SHOT_RANGE = 160;
+/** a játékos tankja újraéledéskor és belépéskor a térkép teteje felé néz */
+export const SPAWN_ANGLE = -Math.PI / 2;
 
 /** Sebzés találatonként (a tank életereje 100). */
 export const DAMAGE = {
@@ -553,6 +591,8 @@ export class World {
   readonly barrels: BarrelState[] = [];
   /** a javítóműhelyek (a meccs alatt nem változnak) */
   readonly workshops: WorkshopState[] = [];
+  /** a botok szívóssága és hogy vehetnek-e fel tárgyat, léphetnek-e szintet (a meccs állítja be) */
+  botRules: BotRules = botRules();
   /** a forgalom irányítója: a lépés végén fut, így látja a lépés eseményeit */
   traffic: Stepper | null = null;
   /** az utolsó step() eseményei (hang, effektek) */
@@ -744,7 +784,7 @@ export class World {
       // ne kerüljön másik tárgy mellé, sem közvetlenül egy tank elé
       if (this.pickups.some((p) => Math.hypot(p.x - spot.x, p.y - spot.y) < PICKUP.minGap)) continue;
       if (this.tanks.some((t) => Math.hypot(t.x - spot.x, t.y - spot.y) < PICKUP.minGap)) continue;
-      return this.addPickup(pickKind(this.rnd), spot.x, spot.y);
+      return this.addPickup(pickKind(this.rnd, this.rules.weather === 'rain'), spot.x, spot.y);
     }
     return null;
   }
@@ -788,7 +828,8 @@ export class World {
     const spot = tank.bot ? this.botSpot(tank) : this.spawnSpot(tank);
     tank.x = spot?.x ?? tank.homeX;
     tank.y = spot?.y ?? tank.homeY;
-    tank.hullAngle = spot ? this.rnd() * Math.PI * 2 : tank.homeAngle;
+    // a játékos tankja felfelé (a térkép teteje felé) néz, a botoké véletlen irányba
+    tank.hullAngle = !tank.bot ? SPAWN_ANGLE : spot ? this.rnd() * Math.PI * 2 : tank.homeAngle;
     tank.turretAngle = tank.hullAngle;
     tank.speed = 0;
     tank.turnSpeed = 0;
@@ -1376,9 +1417,9 @@ export class World {
       this.events.push({ type: 'hit', tank: tank.id, by, x, y, absorbed: 'shield', amount: 0 });
       return;
     }
-    // a támadó szintje növeli a sebzést
+    // a támadó szintje növeli a sebzést; a bot gyengébben lő, és a páncélja is gyengébb
     const attacker = this.tank(by);
-    const dealt = amount * (attacker ? damageBoost(attacker) : 1);
+    const dealt = amount * (attacker ? damageBoost(attacker) : 1) * (attacker?.bot && !tank.bot ? this.botRules.damage : 1) * (tank.bot ? this.botRules.armor : 1);
     // a statisztikába csak a ténylegesen elvett életerő számít (a túllövés nem)
     const real = Math.min(dealt, tank.hp);
     tank.taken += real;
@@ -1417,8 +1458,8 @@ export class World {
         attacker.strikes = Math.min(STRIKE.max, attacker.strikes + 1);
         this.events.push({ type: 'streak', tank: attacker.id, streak: attacker.streak, strikes: attacker.strikes });
       }
-      // csak a játékosok tankja fejlődik, a botoké nem
-      if (!attacker.bot) {
+      // a játékosok tankja fejlődik; a botoké csak a két legügyesebb szinten
+      if (!attacker.bot || this.botRules.perks) {
         let gain = 0;
         if (tank.bot) {
           // botokból több kell egy szinthez
@@ -2039,7 +2080,8 @@ export class World {
 
   private stepPickups(dt: number): void {
     for (const tank of this.tanks) {
-      if (!tank.alive) continue;
+      // a botok (a két legügyesebb szint kivételével) nem vesznek fel tárgyat: áthajtanak rajta, és az ott marad
+      if (!tank.alive || (tank.bot && !this.botRules.perks)) continue;
       const reach = tankRadius(tank) + PICKUP.radius;
       for (let i = this.pickups.length - 1; i >= 0; i--) {
         const p = this.pickups[i];

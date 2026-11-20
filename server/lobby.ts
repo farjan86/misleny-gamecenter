@@ -32,12 +32,25 @@ import {
   type RoomStatus,
   type ServerMessage,
 } from '../src/game/net/protocol';
-import { MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings } from '../src/game/sim/match';
+import { MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings, DEMO, demoPlayers, type Carry } from '../src/game/sim/match';
 import { cleanLook, NO_INPUT, SIM_DT, type SimEvent, type TankInput, type TankState } from '../src/game/sim/world';
 
 export interface Link {
   send(text: string): void;
   close(): void;
+}
+
+/** Egy nyitott játék mentett adatai (a szerver újraindítása után ezekből nyílik meg újra). */
+export interface StoredOpenGame {
+  id: string;
+  host: string;
+  settings: MatchSettings;
+}
+
+/** A nyitott játékok tárolója: a szerveren fájl (data/open-games.json); a böngészőben (egyjátékos mód) nincs. */
+export interface OpenGameStore {
+  load(): unknown;
+  save(games: StoredOpenGame[]): void;
 }
 
 export const LIMITS = {
@@ -52,6 +65,8 @@ export const LIMITS = {
   farEvery: 4,
   /** a csak látványt adó események ennél messzebbről nem mennek ki (m) */
   eventRange: 240,
+  /** ennél több játékosnál a távoli játékosok is csak minden farEvery-edik pillanatképben frissülnek */
+  crowd: 8,
   /** a bejelentkezettek listájában legfeljebb ennyi név megy ki */
   onlineList: 80,
   /** ennyi hibás belépőkód után a kapcsolatnak várnia kell (ms) */
@@ -92,10 +107,17 @@ class Client {
   }
 }
 
+/** a nyitott játékból kilépett (vagy a módosításkor újratöltő) játékos állapota ennyi ideig marad meg (ms) */
+const PARK_MS = 120000;
+
 class Room {
   status: RoomStatus = 'waiting';
+  /** nyitott játék: azonnal indul, bárki bármikor beléphet, addig fut, amíg a gazdája le nem állítja */
+  demo = false;
+  /** a nyitott játékból kilépettek megőrzött állapota fióknév szerint (szint, felszerelés), és mikor léptek ki */
+  readonly parked = new Map<string, { carry: Carry; at: number }>();
   readonly clients: Client[] = [];
-  readonly plan: MatchPlan;
+  plan: MatchPlan;
   match: Match | null = null;
   /** a visszaszámlálás vége (ms) */
   startAt = 0;
@@ -109,7 +131,8 @@ class Room {
   constructor(
     readonly id: string,
     readonly host: Client,
-    readonly settings: MatchSettings,
+    /** a nyitott játéknál a gazdája módosíthatja */
+    public settings: MatchSettings,
     /** a privát játék belépőkódja (üres: bárki beléphet); a szobán kívülre soha nem megy ki */
     readonly code: string = '',
   ) {
@@ -117,7 +140,7 @@ class Room {
   }
 
   info(): RoomInfo {
-    return { id: this.id, host: this.host.name, players: this.clients.map((c) => c.name), status: this.status, locked: this.code !== '', settings: this.settings, plan: this.plan };
+    return { id: this.id, host: this.host.name, players: this.clients.map((c) => c.name), status: this.status, locked: this.code !== '', settings: this.settings, plan: this.plan, ...(this.demo ? { demo: true } : {}) };
   }
 }
 
@@ -137,13 +160,75 @@ export class Lobby {
   private readonly width: number;
   private readonly height: number;
 
-  /** `countdown`: a meccs indulása előtti visszaszámlálás másodpercben (helyi, egyjátékos játéknál 0). */
+  /** a szerver gazdáinak fiókneve kisbetűsen: csak ők nyithatnak (és állíthatnak le) nyitott játékot */
+  private readonly admins: ReadonlySet<string>;
+
+  /**
+   * `countdown`: a meccs indulása előtti visszaszámlálás másodpercben (helyi, egyjátékos játéknál 0).
+   * `admins`: a szerver gazdáinak fiókneve (data/admins.txt).
+   */
   constructor(
     private readonly mapData: MapData,
     private readonly countdown: number = MATCH.countdown,
+    admins: Iterable<string> = [],
+    /** a nyitott játékok tárolója: a szerver újraindítása után ezek újra megnyílnak */
+    private readonly store: OpenGameStore | null = null,
   ) {
     this.width = mapData.meta.width;
     this.height = mapData.meta.height;
+    this.admins = new Set([...admins].map((n) => n.trim().toLowerCase()).filter(Boolean));
+    this.restoreOpenGames();
+  }
+
+  /**
+   * A mentett nyitott játékok újranyitása (üresen, szüneteltetve, amíg valaki be nem lép).
+   * A sérült vagy hibás bejegyzés kimarad; csak az nyílik meg, akinek a gazdája ma is a szerver gazdája.
+   */
+  private restoreOpenGames(): void {
+    if (!this.store) return;
+    let raw: unknown;
+    try {
+      raw = this.store.load();
+    } catch {
+      return;
+    }
+    if (!Array.isArray(raw)) return;
+    for (const entry of raw.slice(0, LIMITS.rooms)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const { id, host, settings: stored } = entry as Partial<StoredOpenGame>;
+      if (typeof id !== 'string' || !/^r\d{1,9}$/.test(id) || this.rooms.has(id)) continue;
+      if (typeof host !== 'string' || !this.isAdmin(host)) continue;
+      const settings = sanitizeSettings(stored ?? null, this.width, this.height);
+      settings.maxPlayers = demoPlayers(stored?.maxPlayers);
+      const owner = new Client('host', { send: () => undefined, close: () => undefined });
+      owner.name = cleanName(host);
+      const room = new Room(id, owner, settings);
+      room.demo = true;
+      this.rooms.set(id, room);
+      this.nextRoom = Math.max(this.nextRoom, Number(id.slice(1)) + 1);
+      this.start(room, 0);
+    }
+  }
+
+  /** A nyitott játékok mentése (létrehozás, módosítás, leállítás után). */
+  private saveOpenGames(): void {
+    if (!this.store) return;
+    const games: StoredOpenGame[] = [...this.rooms.values()].filter((r) => r.demo).map((r) => ({ id: r.id, host: r.host.name, settings: r.settings }));
+    try {
+      this.store.save(games);
+    } catch (error) {
+      console.error('A nyitott játékok mentése nem sikerült:', error);
+    }
+  }
+
+  /** A futó nyitott játékok neve (a szerver induláskor kiírja). */
+  get openGames(): string[] {
+    return [...this.rooms.values()].filter((r) => r.demo).map((r) => r.settings.name);
+  }
+
+  /** A szerver gazdája-e (nyitott játékot nyithat). */
+  isAdmin(name: string): boolean {
+    return name !== '' && this.admins.has(name.trim().toLowerCase());
   }
 
   get stats(): { clients: number; rooms: number; playing: number } {
@@ -204,7 +289,13 @@ export class Lobby {
         break;
       case 'create':
         client.look = cleanLook(msg.look);
-        this.create(client, msg.settings, msg.code);
+        this.create(client, msg.settings, msg.code, msg.demo === true);
+        break;
+      case 'closeDemo':
+        this.closeDemo(client, String(msg.room));
+        break;
+      case 'modifyOpen':
+        this.modifyOpen(client, String(msg.room), msg.settings);
         break;
       case 'join':
         client.look = cleanLook(msg.look);
@@ -309,7 +400,7 @@ export class Lobby {
     for (const client of room.clients) client.send({ t: 'room', room: info, you: client.id, countdown, ...(room.code ? { code: room.code } : {}) });
   }
 
-  private create(client: Client, raw: Partial<MatchSettings>, rawCode?: unknown): void {
+  private create(client: Client, raw: Partial<MatchSettings>, rawCode?: unknown, demo = false): void {
     if (client.room) return;
     if (this.rooms.size >= LIMITS.rooms) {
       client.send({ t: 'error', message: 'Most nem hozható létre több játék, próbáld később.' });
@@ -317,6 +408,22 @@ export class Lobby {
     }
     const settings = sanitizeSettings(raw, this.width, this.height);
     if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) settings.name = `${client.name} játéka`;
+    if (demo) {
+      // nyitott játék: csak a szerver gazdája nyithatja, egyszerre egy fut; nincs belépőkód és időkorlát
+      if (!this.isAdmin(client.name)) {
+        client.send({ t: 'error', message: 'Nyitott játékot csak a szerver gazdája nyithat.' });
+        return;
+      }
+      settings.maxPlayers = demoPlayers(raw?.maxPlayers);
+      // a gazdája nem kerül bele: a nyitott játék üresen indul (amíg senki nincs bent, szünetel),
+      // ő a játékok listájánál marad, és ha akar, ugyanúgy beléphet, mint bárki más
+      const room = new Room(`r${this.nextRoom++}`, client, settings);
+      room.demo = true;
+      this.rooms.set(room.id, room);
+      this.start(room, this.now);
+      this.saveOpenGames();
+      return;
+    }
     const code = cleanCode(rawCode);
     if (code && code.length < ROOM_CODE.min) {
       client.send({ t: 'error', message: `A belépőkód legalább ${ROOM_CODE.min} karakter legyen.` });
@@ -332,6 +439,15 @@ export class Lobby {
     const room = this.rooms.get(id);
     if (!room) {
       client.send({ t: 'error', message: 'Ez a játék már nem létezik.' });
+      return;
+    }
+    if (room.demo) {
+      // a nyitott játékba menet közben is be lehet lépni, amíg van hely
+      if (room.clients.length >= room.settings.maxPlayers) {
+        client.send({ t: 'error', message: 'Ez a nyitott játék most tele van, próbáld kicsit később.' });
+        return;
+      }
+      this.joinRunning(client, room);
       return;
     }
     if (room.status === 'playing' || room.clients.length >= room.settings.maxPlayers) {
@@ -362,8 +478,8 @@ export class Lobby {
     client.last = NO_INPUT;
     client.ack = 0;
     room.clients.push(client);
-    // ha minden hely elkelt, rövid visszaszámlálás után indul a meccs
-    if (room.clients.length >= room.settings.maxPlayers) {
+    // ha minden hely elkelt, rövid visszaszámlálás után indul a meccs (a nyitott játék azonnal indul)
+    if (!room.demo && room.clients.length >= room.settings.maxPlayers) {
       room.status = 'starting';
       room.startAt = this.now + this.countdown * 1000;
       room.lastCountdown = -1;
@@ -383,8 +499,14 @@ export class Lobby {
     if (this.clients.has(client.id)) client.send({ t: 'left', reason });
 
     if (room.status === 'playing') {
+      // a nyitott játékból kilépő szintje és felszerelése egy ideig megmarad: ha visszalép, folytathatja
+      if (room.demo && room.match) {
+        const carry = room.match.carry(client.id);
+        if (carry) this.park(room, client.name, carry);
+      }
       room.match?.leave(client.id);
-      if (room.clients.length === 0) this.rooms.delete(room.id);
+      // a nyitott játék üresen is megmarad (szünetel), amíg a gazdája le nem állítja
+      if (room.clients.length === 0 && !room.demo) this.rooms.delete(room.id);
     } else if (client === room.host || room.clients.length === 0) {
       // a váróból a host lépett ki: a szoba megszűnik, a többiek visszakerülnek a listához
       for (const other of room.clients) {
@@ -407,6 +529,89 @@ export class Lobby {
     this.broadcastOnline();
   }
 
+  /** Belépés a már futó (nyitott játék) játékba: a játékos tankot kap, a többiek értesülnek róla. */
+  private joinRunning(client: Client, room: Room): void {
+    const match = room.match;
+    if (!match) return;
+    client.room = room;
+    client.queue.length = 0;
+    client.last = NO_INPUT;
+    client.ack = 0;
+    client.sent.clear();
+    room.clients.push(client);
+    // aki nemrég lépett ki (vagy a módosítás miatt töltött újra), a szintjével és a felszerelésével folytatja
+    const parked = room.parked.get(client.name);
+    room.parked.delete(client.name);
+    const carry = parked && this.now - parked.at < PARK_MS ? parked.carry : null;
+    const player = match.addPlayer(client.id, client.name, client.look, carry);
+    const info = { id: player.id, name: player.name, tank: player.tankId, look: player.look };
+    for (const other of room.clients) if (other !== client) other.send({ t: 'joined', player: info });
+    client.send({ t: 'start', room: room.info(), tank: player.tankId, players: this.playersOf(match), workshops: this.workshopsOf(match) });
+    this.broadcastRooms();
+  }
+
+  /** Kilépett játékos állapotának megőrzése a nyitott játékban (a régi bejegyzések törlődnek). */
+  private park(room: Room, name: string, carry: Carry): void {
+    for (const [key, entry] of room.parked) if (this.now - entry.at >= PARK_MS) room.parked.delete(key);
+    room.parked.set(name, { carry, at: this.now });
+  }
+
+  /**
+   * A futó nyitott játék módosítása (csak a szerver gazdája): új pálya a megadott beállításokkal
+   * (játéktér, botok, tárgyak, forgalom, időjárás…). A bent lévők szintje és felszerelése
+   * megmarad: a kliensük újratölti az oldalt, visszalép, és az új pályán éled újra. A létszám
+   * nem lehet kisebb, mint ahányan éppen bent vannak.
+   */
+  private modifyOpen(client: Client, id: string, raw: Partial<MatchSettings>): void {
+    const room = this.rooms.get(id);
+    if (!room || !room.demo) return;
+    if (!this.isAdmin(client.name)) {
+      client.send({ t: 'error', message: 'A nyitott játékot csak a szerver gazdája módosíthatja.' });
+      return;
+    }
+    const settings = sanitizeSettings(raw, this.width, this.height);
+    if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) settings.name = room.settings.name;
+    settings.maxPlayers = Math.min(DEMO.maxPlayers, Math.max(demoPlayers(raw?.maxPlayers), room.clients.length));
+    // a bent lévők állapota félre: az új pályán ezzel folytatják
+    for (const other of room.clients) {
+      const carry = room.match?.carry(other.id);
+      if (carry) this.park(room, other.name, carry);
+      other.room = null;
+      other.send({ t: 'reload', room: room.id, reason: 'A játék beállításai megváltoztak – új pálya töltődik be.' });
+    }
+    room.clients.length = 0;
+    room.settings = settings;
+    room.plan = matchPlan(settings);
+    this.start(room, this.now);
+    this.saveOpenGames();
+  }
+
+  /** A nyitott játék leállítása (csak a szerver gazdája): mindenki visszakerül a játékok listájához. */
+  private closeDemo(client: Client, id: string): void {
+    const room = this.rooms.get(id);
+    if (!room || !room.demo) return;
+    if (!this.isAdmin(client.name)) {
+      client.send({ t: 'error', message: 'A nyitott játékot csak a szerver gazdája állíthatja le.' });
+      return;
+    }
+    for (const other of room.clients) {
+      other.room = null;
+      other.send({ t: 'left', reason: 'A nyitott játékot leállították.' });
+    }
+    room.clients.length = 0;
+    this.rooms.delete(room.id);
+    this.saveOpenGames();
+    this.broadcastRooms();
+  }
+
+  private playersOf(match: Match): { id: string; name: string; tank: number; look: number }[] {
+    return match.players.filter((p) => !p.gone).map((p) => ({ id: p.id, name: p.name, tank: p.tankId, look: p.look }));
+  }
+
+  private workshopsOf(match: Match): number[][] {
+    return match.world.workshops.map((w) => [Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10]);
+  }
+
   private start(room: Room, now: number): void {
     // minden meccs saját pályapéldányt kap: a sérülései (kidőlt fák, összedőlt házak) a sajátjai
     const map = new GameMap(this.mapData);
@@ -418,14 +623,15 @@ export class Lobby {
       room.settings,
       room.clients.map((c) => ({ id: c.id, name: c.name, look: c.look })),
       seed,
+      room.demo,
     );
     room.status = 'playing';
     room.acc = 0;
     room.last = now;
     room.events = [];
     const info = room.info();
-    const players = room.match.players.map((p) => ({ id: p.id, name: p.name, tank: p.tankId, look: p.look }));
-    const workshops = room.match.world.workshops.map((w) => [Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10]);
+    const players = this.playersOf(room.match);
+    const workshops = this.workshopsOf(room.match);
     for (const client of room.clients) {
       client.queue.length = 0;
       client.last = NO_INPUT;
@@ -451,6 +657,12 @@ export class Lobby {
         continue;
       }
       if (room.status !== 'playing' || !room.match) continue;
+      // az üres nyitott játék szünetel: senki nem látja, fölösleges számolni
+      if (room.demo && room.clients.length === 0) {
+        room.last = now;
+        room.acc = 0;
+        continue;
+      }
       room.acc = Math.min(room.acc + (now - room.last), STEP_MS * 6);
       room.last = now;
       while (room.acc >= STEP_MS && !room.match.over) {
@@ -513,7 +725,7 @@ export class Lobby {
     // A pillanatkép szövege mezőnként áll össze: minden mező csak akkor kerül bele,
     // ha más, mint amit ez a kliens legutóbb kapott (a tankok mindig mennek).
     const sent = client.sent;
-    const parts: string[] = ['"t":"snap"', `"k":${world.tick}`, `"a":${client.ack}`, `"v":${view?.id ?? 0}`, `"r":${Math.ceil(match.timeLeft)}`];
+    const parts: string[] = ['"t":"snap"', `"k":${world.tick}`, `"a":${client.ack}`, `"v":${view?.id ?? 0}`, `"r":${match.endless ? -1 : Math.ceil(match.timeLeft)}`];
     const put = (key: string, value: unknown): void => {
       const text = roundJson(value);
       if (sent.get(key) === text) return;
@@ -540,11 +752,15 @@ export class Lobby {
     // a közeli tankok és minden játékos (ők a térképen mindig látszanak) minden pillanatképben;
     // a távoli botok csak a kis térképen látszanak: ritkábban frissülnek
     const far = (world.tick / SNAPSHOT_EVERY) % LIMITS.farEvery === 0;
+    // sok játékosnál (nyitott játék) a távoli játékosok is ritkábban frissülnek: ők is csak a kis térképen látszanak
+    const crowded = match.players.length > LIMITS.crowd;
     const tanks: number[][] = [];
     for (const t of world.tanks) {
       // a saját tank állapota külön megy (me): a listában nem ismétlődik
       if (t === own) continue;
-      if (!t.bot || near(t, LIMITS.nearRange) || (far && near(t, LIMITS.tankRange))) tanks.push(packTank(t));
+      if (near(t, LIMITS.nearRange)) tanks.push(packTank(t));
+      else if (!t.bot && (!crowded || far)) tanks.push(packTank(t));
+      else if (far && near(t, LIMITS.tankRange)) tanks.push(packTank(t));
     }
     parts.push(`"T":${roundJson(tanks)}`);
 

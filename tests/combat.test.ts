@@ -12,10 +12,14 @@ import { BOOST, LASER, mulberry32, OIL, PICKUP, PICKUP_KINDS, pickKind, PICKUPS,
 import { FELLABLE, Fellables } from '../src/game/sim/props';
 import {
   BOOSTER,
+  BOT_POWER,
+  botRules,
   BULLET,
   DAMAGE,
   LEVEL,
+  SHOT_RANGE,
   SIM_DT,
+  SPAWN_ANGLE,
   TANK,
   tankMaxHp,
   tankRadius,
@@ -187,7 +191,7 @@ describe('lövedékfajták', () => {
     expect(world.bullets.some((b) => b.vx < 0)).toBe(true);
   });
 
-  it('rakéta: lassan indul, felgyorsul, és messzebbre jut, mint a sima lövedék', () => {
+  it('rakéta: lassan indul, felgyorsul, és legfeljebb a lőtávolságig jut', () => {
     const world = new World(arena(4000));
     const tank = world.addTank(100, 2000, 0);
     give(world, tank, 'rocket');
@@ -195,22 +199,51 @@ describe('lövedékfajták', () => {
     const rocket = world.bullets[0];
     expect(rocket.kind).toBe('rocket');
     expect(Math.hypot(rocket.vx, rocket.vy)).toBeLessThan(BULLET.speed);
-    run(world, {}, seconds(1));
+    run(world, {}, seconds(0.7));
     expect(Math.hypot(rocket.vx, rocket.vy)).toBeCloseTo(ROCKET.maxSpeed, 1);
-    expect(rocket.x - 100).toBeGreaterThan(BULLET.speed * BULLET.life);
+    let far = 0;
+    for (let i = 0; i < seconds(1) && world.bullets.includes(rocket); i++) {
+      far = rocket.x - 100;
+      run(world, {}, 1);
+    }
+    expect(world.bullets.includes(rocket)).toBe(false);
+    expect(far).toBeGreaterThan(SHOT_RANGE - 10);
+    // a tank közepétől mérve: a cső vége néhány méterrel előrébb van
+    expect(far).toBeLessThanOrEqual(SHOT_RANGE + 5);
+  });
+
+  it('egyik fegyver sem lő a képernyőn túlra (kb. 80 m)', () => {
+    const reach = (kind: 'shell' | 'heavy' | 'rocket'): number => {
+      const world = new World(arena(4000));
+      const tank = world.addTank(100, 2000, 0);
+      if (kind !== 'shell') give(world, tank, kind);
+      run(world, { [tank.id]: { fire: true, aim: 0 } }, 1);
+      const shot = world.bullets[0];
+      let far = 0;
+      for (let i = 0; i < seconds(4) && world.bullets.includes(shot); i++) {
+        far = Math.max(far, shot.x - 100);
+        run(world, {}, 1);
+      }
+      return far;
+    };
+    for (const kind of ['shell', 'heavy', 'rocket'] as const) {
+      const far = reach(kind);
+      expect(far, kind).toBeLessThanOrEqual(SHOT_RANGE + 5);
+      expect(far, kind).toBeGreaterThan(SHOT_RANGE - 12);
+    }
+    expect(LASER.range).toBeLessThanOrEqual(SHOT_RANGE);
   });
 
   it('lézer: nincs lövedék, a sugár azonnal az első falig ér', () => {
     const terrain = arena();
-    terrain.walls.addSegment(190, 0, 190, 400);
+    terrain.walls.addSegment(160, 0, 160, 400);
     const world = new World(terrain);
     const tank = world.addTank(100, 200, 0);
     give(world, tank, 'laser');
     const events = run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
     const beam = events.find((e) => e.type === 'laser');
-    expect(beam && beam.type === 'laser' && beam.x2).toBeCloseTo(190, 3);
+    expect(beam && beam.type === 'laser' && beam.x2).toBeCloseTo(160, 3);
     expect(world.bullets).toHaveLength(0);
-    expect(LASER.range).toBeGreaterThan(BULLET.speed * BULLET.life);
   });
 });
 
@@ -412,6 +445,33 @@ describe('botok', () => {
     const { player, bot, events } = withBot(true);
     expect(events.some((e) => e.type === 'shot' && e.tank === bot.id)).toBe(false);
     expect(player.hp).toBe(TANK.maxHp);
+  });
+
+  it('a képernyőn kívülről nem lő: csak ha ő maga is rajta van a célpont képernyőjén', () => {
+    // a bot 60 m-rel a játékos fölött áll, szabad rálátással: észreveszi, de onnan nem lő
+    const shotsFrom = (dy: number, dx = 0): number => {
+      const world = new World(arena(1000));
+      const player = world.addTank(500 + dx, 500 + dy, 0, { team: TEAM.player });
+      const bot = world.addTank(500, 500, Math.PI / 2, { team: TEAM.bots, bot: true });
+      const brain = new BotBrain(world, bot.id, botTuning(5, 5));
+      const inputs = new Map<number, TankInput>();
+      let shots = 0;
+      for (let i = 0; i < seconds(2.5); i++) {
+        inputs.set(bot.id, brain.update(SIM_DT));
+        // a bot ne jusson közelebb: csak a tüzelést figyeljük
+        inputs.get(bot.id)!.throttle = 0;
+        world.step(inputs);
+        shots += world.events.filter((e) => e.type === 'shot' && e.tank === bot.id).length;
+        player.x = 500 + dx;
+        player.y = 500 + dy;
+      }
+      return shots;
+    };
+    expect(shotsFrom(60)).toBe(0);
+    expect(shotsFrom(-60)).toBe(0);
+    expect(shotsFrom(0, 95)).toBe(0);
+    expect(shotsFrom(30)).toBeGreaterThan(0);
+    expect(shotsFrom(0, 60)).toBeGreaterThan(0);
   });
 
   it('a botok egymást nem bántják', () => {
@@ -865,10 +925,92 @@ describe('szintek', () => {
     const world = new World(arena());
     const bot = world.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
     const victim = world.addTank(140, 200, Math.PI, { team: TEAM.player });
-    run(world, { [bot.id]: { fire: true, aim: 0 } }, seconds(4.5));
+    // a bot gyengébben lő: tovább tart, mire kilövi a játékost
+    run(world, { [bot.id]: { fire: true, aim: 0 } }, seconds(8));
     expect(victim.alive).toBe(false);
     expect(bot.kills).toBe(1);
     expect(bot.level).toBe(1);
+  });
+
+  it('a botok szívóssága: minél szívósabb, annál nagyobbat lő és annál erősebb a páncélja; a legszívósabb egyenrangú a játékossal', () => {
+    const exchange = (toughness: number): { taken: number; dealt: number } => {
+      const world = new World(arena());
+      world.botRules = botRules(toughness);
+      const bot = world.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+      const player = world.addTank(140, 200, Math.PI, { team: TEAM.player });
+      run(world, { [bot.id]: { fire: true, aim: 0 }, [player.id]: { fire: true, aim: Math.PI } }, 2);
+      run(world, {}, seconds(1));
+      return { taken: TANK.maxHp - player.hp, dealt: TANK.maxHp - bot.hp };
+    };
+    const levels = [1, 2, 3, 4, 5].map(exchange);
+    for (let i = 1; i < levels.length; i++) {
+      expect(levels[i].taken).toBeGreaterThan(levels[i - 1].taken);
+      expect(levels[i].dealt).toBeLessThan(levels[i - 1].dealt);
+    }
+    expect(levels[2]).toEqual({ taken: DAMAGE.shell * BOT_POWER.damage, dealt: DAMAGE.shell * BOT_POWER.armor });
+    expect(levels[4]).toEqual({ taken: DAMAGE.shell, dealt: DAMAGE.shell });
+  });
+
+  it('a nagyon és az ultra ügyes bot tárgyat vesz fel (el is megy érte) és a kilövésekkel szintet lép; az ügyesebbnél kevésbé ügyes nem', () => {
+    expect(botTuning(6).aimError).toBeLessThan(botTuning(5).aimError);
+    expect([botTuning(4).perks, botTuning(5).perks, botTuning(6).perks]).toEqual([false, true, true]);
+    // a tárgyért elmegy, ha nincs ellenfél a közelben
+    const world = new World(arena());
+    world.botRules = botRules(3, 6);
+    const bot = world.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const item = world.addPickup('heavy', 100, 150);
+    const brain = new BotBrain(world, bot.id, botTuning(6));
+    const inputs = new Map<number, TankInput>();
+    for (let i = 0; i < seconds(6) && world.pickups.includes(item); i++) {
+      inputs.set(bot.id, brain.update(SIM_DT));
+      world.step(inputs);
+    }
+    expect(world.pickups).not.toContain(item);
+    expect(bot.weapon).toBe('heavy');
+    // a kilövéssel szintet lép
+    const duel = new World(arena());
+    duel.botRules = botRules(5, 5);
+    const hunter = duel.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const victim = duel.addTank(140, 200, Math.PI, { team: TEAM.player });
+    run(duel, { [hunter.id]: { fire: true, aim: 0 } }, seconds(5));
+    expect(victim.alive).toBe(false);
+    expect(hunter.level).toBe(2);
+    // a kevésbé ügyes bot nem
+    const calm = new World(arena());
+    calm.botRules = botRules(5, 4);
+    const plain = calm.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const other = calm.addTank(140, 200, Math.PI, { team: TEAM.player });
+    run(calm, { [plain.id]: { fire: true, aim: 0 } }, seconds(5));
+    expect(other.alive).toBe(false);
+    expect(plain.level).toBe(1);
+  });
+
+  it('a bot gyengébb: kisebbet sebez, nagyobbat kap, és nem vesz fel tárgyat', () => {
+    // a bot lövése 15-öt visz le a játékos 1. szintű tankjáról (25 helyett)
+    const one = new World(arena());
+    const bot = one.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const player = one.addTank(140, 200, Math.PI, { team: TEAM.player });
+    run(one, { [bot.id]: { fire: true, aim: 0 } }, 2);
+    run(one, {}, seconds(1));
+    expect(player.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * BOT_POWER.damage, 5);
+    // a játékos lövése 40-et visz le a botról: öt találat elég (a játékos tankjához nyolc kell)
+    const two = new World(arena());
+    const shooter = two.addTank(100, 200, 0, { team: TEAM.player });
+    const target = two.addTank(140, 200, Math.PI, { team: TEAM.bots, bot: true });
+    run(two, { [shooter.id]: { fire: true, aim: 0 } }, 2);
+    run(two, {}, seconds(1));
+    expect(target.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * BOT_POWER.armor, 5);
+    expect(Math.ceil(TANK.maxHp / (DAMAGE.shell * BOT_POWER.armor))).toBe(5);
+    expect(Math.ceil(TANK.maxHp / DAMAGE.shell)).toBe(8);
+    expect(Math.ceil(TANK.maxHp / (DAMAGE.shell * BOT_POWER.damage))).toBe(14);
+    // a bot áthajt a tárgyon, az ott marad
+    const three = new World(arena());
+    const roller = three.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
+    const item = three.addPickup('heavy', 103, 200);
+    run(three, { [roller.id]: { throttle: 1 } }, seconds(1));
+    expect(roller.x).toBeGreaterThan(110);
+    expect(three.pickups).toContain(item);
+    expect(roller.weapon).toBeNull();
   });
 
   it('a szint nem nő a felső határ fölé', () => {
@@ -1078,7 +1220,7 @@ describe('a botok ügyessége és agresszivitása', () => {
     expect(calm.hunt).toBe(0);
     expect(fierce.hunt).toBeGreaterThan(1000);
     // a határokon kívüli érték a legközelebbi szintre kerül
-    expect(botTuning(99, -4)).toEqual(botTuning(5, 1));
+    expect(botTuning(99, -4)).toEqual(botTuning(6, 1));
   });
 
   it('az ügyes bot hamarabb és pontosabban talál, mint a kezdő', () => {
@@ -1116,5 +1258,19 @@ describe('a botok ügyessége és agresszivitása', () => {
     };
     expect(approach(5)).toBeGreaterThan(150); // közeledett
     expect(approach(1)).toBeLessThan(0); // a másik irányba járőrözött tovább
+  });
+});
+
+describe('újraéledés', () => {
+  it('a játékos tankja újraéledéskor a térkép teteje felé néz (a boté véletlen irányba)', () => {
+    const world = new World(arena());
+    const player = world.addTank(200, 200, 1.2, { team: TEAM.player });
+    const killer = world.addTank(240, 200, Math.PI, { team: 20 });
+    run(world, { [killer.id]: { fire: true, aim: Math.PI } }, seconds(6));
+    expect(player.deaths).toBeGreaterThan(0);
+    run(world, {}, seconds(TANK.respawnDelay + 0.5));
+    expect(player.alive).toBe(true);
+    expect(player.hullAngle).toBeCloseTo(SPAWN_ANGLE, 6);
+    expect(player.turretAngle).toBeCloseTo(SPAWN_ANGLE, 6);
   });
 });

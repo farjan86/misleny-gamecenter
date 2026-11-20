@@ -7,9 +7,9 @@ import { ROOM_CODE } from '../net/protocol';
 import { MATCH } from '../sim/match';
 import { keysText, type Action, type KeyBindings } from '../settings';
 import { BARREL, CLOAK, FLAME, MG, MINE, SMOKE, STRIKE, SUPER, WORKSHOP } from '../sim/gadgets';
-import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET, type PickupKind } from '../sim/pickups';
+import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET, type PickupKind, RAIN_ALL_TERRAIN } from '../sim/pickups';
 import { TURRET, VEHICLES, turretInterval, turretMaxHp, turretRange } from '../sim/vehicles';
-import { DAMAGE, LEVEL, REGEN, TANK } from '../sim/world';
+import { BOT_POWER, DAMAGE, LEVEL, REGEN, TANK } from '../sim/world';
 
 /** Szám magyar tizedesvesszővel, legfeljebb két tizedessel. */
 const n = (v: number): string => String(Math.round(v * 100) / 100).replace('.', ',');
@@ -45,7 +45,7 @@ export const GUIDE_PICKUPS: Record<PickupKind, Entry> = {
   },
   repair: { what: `Azonnal visszaad ${PICKUP.repairAmount} életerőt, és eltünteti a tank sérüléseit. A leggyakoribb tárgy.`, lasts: 'azonnal hat' },
   speed: { what: `Turbó: a végsebesség ${n(BOOST.speed)}-szeres, a gyorsulás ${n(BOOST.accel)}-szeres.`, lasts: `${PICKUPS.speed.duration} mp` },
-  allTerrain: { what: 'Terepjáró lánctalp: füvön, földön, sárban sem lassul a tank, és az olajon sem csúszik meg.', lasts: `${PICKUPS.allTerrain.duration} mp` },
+  allTerrain: { what: `Terepjáró lánctalp: füvön, földön, sárban sem lassul a tank, és az olajon sem csúszik meg. Esőben ${RAIN_ALL_TERRAIN}-szer több van belőle a pályán.`, lasts: `${PICKUPS.allTerrain.duration} mp` },
   shield: { what: 'Egy töltet egy találatot teljesen elnyel. A géppuska apró lövései nem fogyasztják, de át sem jutnak rajta.', lasts: `töltetenként egy találat (legfeljebb ${PICKUP.maxShield} töltet)` },
   invulnerable: { what: 'Semmi nem sebez, és az olajon sem csúszol meg.', lasts: `${PICKUPS.invulnerable.duration} mp` },
   radar: { what: 'A térképeken látszanak a felvehető tárgyak.', lasts: `${PICKUPS.radar.duration} mp` },
@@ -237,7 +237,7 @@ export function buildGuide(root: HTMLElement, keys: KeyBindings): void {
   section(
     'A tank és a szintek',
     `<ul class="guide-list">
-      <li><b>Szintek:</b> 1–${LEVEL.max}. Egy játékos kilövése egy szint; ha legalább ${LEVEL.upsetGap} szinttel erősebb volt nálad, ${LEVEL.upsetGain}. ${LEVEL.botKills} bot ér egy szintet. Ha kilőnek, ${LEVEL.deathLoss} szintet veszítesz, és a felszerelésed elvész (a lövegekből újra ${TURRET.base} jár).</li>
+      <li><b>Szintek:</b> 1–${LEVEL.max}. Egy játékos kilövése egy szint; ha legalább ${LEVEL.upsetGap} szinttel erősebb volt nálad, ${LEVEL.upsetGain}. ${LEVEL.botKills} bot ér egy szintet. A botok szívóssága a játék beállítása: közepes szinten kisebbet sebeznek (${Math.round(BOT_POWER.damage * 100)}%) és gyengébb a páncéljuk (${Math.round(BOT_POWER.armor * 100)}% sebzést kapnak), a legszívósabb bot egyenrangú a játékossal. A botok nem vesznek fel tárgyat és nem fejlődnek – kivéve a két legügyesebb szintet (nagyon ügyes, ultra ügyes). Ha kilőnek, ${LEVEL.deathLoss} szintet veszítesz, és a felszerelésed elvész (a lövegekből újra ${TURRET.base} jár).</li>
       <li><b>Kilövéssorozat:</b> minden ${STRIKE.every}. kilövés után (halál nélkül) tüzérségi csapás jár – ${esc(keysText(keys, 'strike'))}, majd kattintás a nagy térképen.</li>
       <li><b>Álcázás:</b> minden tank alapképessége (${esc(keysText(keys, 'cloak'))}): ${CLOAK.duration} mp-ig halvány sziluett vagy, a térképen nem látszol; a lövés megszünteti.</li>
       <li><b>Rombolás:</b> minden tank rombolja az épületet, amelynek nekifeszül; a nagyobb tank gyorsabban, a nehéz tankok a kisebb házakon megállás nélkül áthajtanak. A fák és oszlopok kidőlnek.</li>

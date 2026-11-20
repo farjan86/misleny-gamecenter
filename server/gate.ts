@@ -9,6 +9,13 @@ import type { StatsLog, Visit } from './stats';
 
 /** Ennyi sikertelen belépési kísérlet után a kapcsolat megszakad. */
 const MAX_FAILURES = 6;
+/** Egy címről óránként legfeljebb ennyi új fiók regisztrálható (tömeges fiókgyártás ellen; egy LAN-partinak is elég). */
+const REGISTER_PER_HOUR = 30;
+/** Egy címről ennyi sikertelen belépés után 15 percig nem lehet jelszóval belépni (jelszótalálgatás ellen). */
+const LOGIN_FAILURES_PER_ADDRESS = 30;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+/** Egy fiókra ennyi sikertelen belépés után 15 percig nem lehet jelszóval belépni (bárhonnan); a megőrzött kulcsos belépés megy. */
+const LOGIN_FAILURES_PER_ACCOUNT = 20;
 
 interface Session {
   message(text: string): void;
@@ -20,6 +27,10 @@ export class Gate {
   private readonly online = new Map<string, Link>();
   /** minden élő látogatás (a be nem lépetteké is) – a statisztika naplójához */
   private readonly present = new Set<Visit>();
+  /** címenként: az utóbbi órában regisztrált fiókok ideje, és a sikertelen belépések száma, ideje */
+  private readonly registrations = new Map<string, number[]>();
+  private readonly loginFailures = new Map<string, { count: number; at: number }>();
+  private readonly accountFailures = new Map<string, { count: number; at: number }>();
 
   constructor(
     private readonly lobby: Lobby,
@@ -39,11 +50,14 @@ export class Gate {
     this.present.clear();
   }
 
-  connect(link: Link): Session {
+  /** `address`: a kapcsolat küldőjének címe (a regisztrációs és a belépési korláthoz). */
+  connect(link: Link, address = '?'): Session {
     let inner: Session | null = null;
     let account = '';
     let token = '';
     let failures = 0;
+    /** a folyamatban lévő jelszavas belépés fiókja (a fiókonkénti korláthoz) */
+    let pendingAccount = '';
     let busy = false;
     let closed = false;
     const here: Visit = this.stats?.begin() ?? { name: '', solo: false, start: new Date(), multiSeconds: 0, soloSeconds: 0 };
@@ -55,6 +69,15 @@ export class Gate {
       if (closed) return;
       if (!result.ok) {
         send({ t: 'authError', message: result.message });
+        const entry = this.loginFailures.get(address) ?? { count: 0, at: 0 };
+        this.loginFailures.set(address, { count: entry.count + 1, at: Date.now() });
+        if (pendingAccount) {
+          const prev = this.accountFailures.get(pendingAccount) ?? { count: 0, at: 0 };
+          this.accountFailures.set(pendingAccount, { count: prev.count + 1, at: Date.now() });
+          // a táblázat ne nőhessen korlátlanul (sok különböző név kipróbálásával)
+          if (this.accountFailures.size > 10000) this.accountFailures.clear();
+        }
+        pendingAccount = '';
         if (++failures >= MAX_FAILURES) link.close();
         return;
       }
@@ -68,7 +91,7 @@ export class Gate {
       here.name = account;
       token = result.token;
       this.online.set(account, link);
-      send({ t: 'auth', name: result.name, token: result.token });
+      send({ t: 'auth', name: result.name, token: result.token, ...(this.lobby.isAdmin(result.name) ? { admin: true } : {}) });
       inner = this.lobby.connect(link);
       inner.message(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, name: result.name }));
     };
@@ -91,6 +114,32 @@ export class Gate {
           if (msg.t === 'resume') {
             accept(this.accounts.resume(msg.token));
             return;
+          }
+          const now = Date.now();
+          if (msg.t === 'register') {
+            const recent = (this.registrations.get(address) ?? []).filter((at) => now - at < 3600000);
+            if (recent.length >= REGISTER_PER_HOUR) {
+              send({ t: 'authError', message: 'Erről a címről most túl sok új fiókot hoztak létre – próbáld később.' });
+              return;
+            }
+            recent.push(now);
+            this.registrations.set(address, recent);
+          } else {
+            const failed = this.loginFailures.get(address);
+            if (failed && now - failed.at > LOGIN_LOCK_MS) this.loginFailures.delete(address);
+            else if (failed && failed.count >= LOGIN_FAILURES_PER_ADDRESS) {
+              send({ t: 'authError', message: 'Túl sok sikertelen belépés erről a címről – próbáld 15 perc múlva.' });
+              return;
+            }
+            // ugyanarra a fiókra sok helyről sem lehet sokáig találgatni
+            const who = typeof msg.name === 'string' ? msg.name.normalize('NFKC').trim().toLocaleLowerCase('hu').slice(0, 40) : '';
+            const byAccount = this.accountFailures.get(who);
+            if (byAccount && now - byAccount.at > LOGIN_LOCK_MS) this.accountFailures.delete(who);
+            else if (byAccount && byAccount.count >= LOGIN_FAILURES_PER_ACCOUNT) {
+              send({ t: 'authError', message: 'Erre a fiókra túl sok sikertelen belépés volt – próbáld 15 perc múlva.' });
+              return;
+            }
+            pendingAccount = who;
           }
           busy = true;
           const work = msg.t === 'register' ? this.accounts.register(msg.name, msg.password) : this.accounts.login(msg.name, msg.password);

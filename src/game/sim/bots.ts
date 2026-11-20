@@ -15,11 +15,17 @@
 
 import { TURRET, VEHICLES, VSTATE } from './vehicles';
 import { CLOAK } from './gadgets';
-import { angleDiff, TANK, WRECK, type RoadGuide, type TankInput, type TankState, type World } from './world';
+import { angleDiff, BOT_PERKS_SKILL, TANK, WRECK, type RoadGuide, type TankInput, type TankState, type World } from './world';
 
 export const BOT = {
   /** ilyen messziről veszi észre az ellenfelet, ha rálát (m) */
   sight: 75,
+  /**
+   * Csak akkor lő, ha ő maga a célpont képernyőjén van: a játékos legalább 160 × 90 m-t lát
+   * (quality.ts, VIEW_METERS), a bot közepe ennél néhány méterrel beljebb kell legyen, hogy a
+   * tankja egészében látsszon. Messzebbről észreveheti és üldözheti, de lőni nem fog.
+   */
+  fireBox: { x: 74, y: 40 },
   /** az észleléstől az első lövésig eltelő idő (mp) */
   reaction: 0.7,
   /** két lövés között legalább ennyi idő telik el (mp) – a bot lassabban lő, mint a játékos */
@@ -61,17 +67,24 @@ export interface BotTuning {
   chaseTime: number;
   /** ilyen messziről (m) indul el a legközelebbi ellenfél felé akkor is, ha nem látja; 0: nem vadászik */
   hunt: number;
+  /** a nagyon és az ultra ügyes bot a közeli tárgyakért is elmegy (és fel is veszi őket) */
+  perks: boolean;
 }
 
+/** az agresszivitás szintjei; az ügyességé (SKILL_LEVELS) eggyel több: a tetején az ultra ügyes */
 export const BOT_LEVELS = { min: 1, max: 5, normal: 3 } as const;
+export const SKILL_LEVELS = { min: 1, max: 6, normal: 3 } as const;
+/** a nagyon és az ultra ügyes bot ilyen messziről (m) elmegy egy tárgyért, ha éppen nincs ellenfél a látóterében */
+const PICKUP_SEEK = 70;
 
-// ügyesség 1..5: célzási hiba (rad), reakcióidő (mp), két lövés közötti idő (mp)
+// ügyesség 1..6: célzási hiba (rad), reakcióidő (mp), két lövés közötti idő (mp)
 const SKILL = [
   [0.17, 1.4, 1.9],
   [0.11, 1.0, 1.5],
   [BOT.aimError, BOT.reaction, BOT.fireInterval],
   [0.04, 0.45, 0.95],
   [0.02, 0.25, 0.75],
+  [0.008, 0.15, 0.6],
 ];
 // agresszivitás 1..5: látótáv (m), üldözés ideje (mp), tartott távolság (m), vadászat távolsága (m), járőrsebesség
 const AGGRESSION = [
@@ -82,12 +95,13 @@ const AGGRESSION = [
   [110, 20, 14, 4000, 0.9],
 ];
 
-/** A botok beállítása a két csúszka (1..5) állásából; a 3-as az alapérték. */
-export function botTuning(skill: number = BOT_LEVELS.normal, aggression: number = BOT_LEVELS.normal): BotTuning {
-  const level = (v: number): number => Math.max(BOT_LEVELS.min, Math.min(BOT_LEVELS.max, Math.round(v))) - 1;
-  const [aimError, reaction, fireInterval] = SKILL[level(skill)];
-  const [sight, chaseTime, keepDistance, hunt, patrolThrottle] = AGGRESSION[level(aggression)];
-  return { sight, reaction, fireInterval, aimError, keepDistance, patrolThrottle, chaseTime, hunt };
+/** A botok beállítása a csúszkák állásából (ügyesség 1..6, agresszivitás 1..5); a 3-as az alapérték. */
+export function botTuning(skill: number = SKILL_LEVELS.normal, aggression: number = BOT_LEVELS.normal): BotTuning {
+  const level = (v: number, max: number): number => Math.max(1, Math.min(max, Math.round(v))) - 1;
+  const s = level(skill, SKILL_LEVELS.max);
+  const [aimError, reaction, fireInterval] = SKILL[s];
+  const [sight, chaseTime, keepDistance, hunt, patrolThrottle] = AGGRESSION[level(aggression, BOT_LEVELS.max)];
+  return { sight, reaction, fireInterval, aimError, keepDistance, patrolThrottle, chaseTime, hunt, perks: s + 1 >= BOT_PERKS_SKILL };
 }
 
 type Mode = 'patrol' | 'attack' | 'chase';
@@ -196,9 +210,15 @@ export class BotBrain {
         // kiszabadulás után egy ideig a kiválasztott irányba megy, csak utána keresi újra az utat
         if (this.freeRun > 0) this.roam(tank, 0.8);
         else {
-          // az agresszív bot nem csak járőrözik: az utcákon a legközelebbi ellenfél felé tart
-          const toward = this.tune.hunt > 0 ? this.seek(tank) : null;
-          this.followRoad(tank, toward ?? this.travel, this.tune.patrolThrottle);
+          // a nagyon és az ultra ügyes bot a közeli tárgyakért is elmegy
+          const item = this.tune.perks ? this.seekPickup(tank) : null;
+          if (item && item.dist < 22) this.steerToward(tank, item.bearing, 0.85);
+          else if (item) this.followRoad(tank, item.bearing, 0.9);
+          else {
+            // az agresszív bot nem csak járőrözik: az utcákon a legközelebbi ellenfél felé tart
+            const toward = this.tune.hunt > 0 ? this.seek(tank) : null;
+            this.followRoad(tank, toward ?? this.travel, this.tune.patrolThrottle);
+          }
         }
       }
     }
@@ -206,6 +226,28 @@ export class BotBrain {
     this.avoidObstacles(tank);
     this.watchProgress(tank, dt);
     return input;
+  }
+
+  /** a kiszemelt tárgy (azonosító), és hogy mikor kerestük utoljára */
+  private itemId = -1;
+
+  /** A legközelebbi tárgy iránya és távolsága PICKUP_SEEK méteren belül (fél másodpercenként újraválasztva), vagy null. */
+  private seekPickup(tank: TankState): { bearing: number; dist: number } | null {
+    const pickups = this.world.pickups;
+    if ((this.world.tick + this.phase) % 30 === 0 || !pickups.some((p) => p.id === this.itemId)) {
+      this.itemId = -1;
+      let best: number = PICKUP_SEEK;
+      for (const p of pickups) {
+        const dist = Math.hypot(p.x - tank.x, p.y - tank.y);
+        if (dist < best) {
+          best = dist;
+          this.itemId = p.id;
+        }
+      }
+    }
+    const item = pickups.find((p) => p.id === this.itemId);
+    if (!item) return null;
+    return { bearing: Math.atan2(item.y - tank.y, item.x - tank.x), dist: Math.hypot(item.x - tank.x, item.y - tank.y) };
   }
 
   /** A legközelebbi ellenfél iránya a vadászat távolságán belül (időnként újraszámolva), vagy null. */
@@ -290,7 +332,9 @@ export class BotBrain {
 
     this.reaction = Math.max(0, this.reaction - dt);
     const aligned = Math.abs(angleDiff(input.aim, tank.turretAngle) ) < 0.07;
-    if (this.reaction === 0 && this.fireWait === 0 && aligned) {
+    // a képernyőn kívülről nem lő (a játékos nem látná, honnan jön a lövés)
+    const onScreen = Math.abs(dx) <= BOT.fireBox.x && Math.abs(dy) <= BOT.fireBox.y;
+    if (this.reaction === 0 && this.fireWait === 0 && aligned && onScreen) {
       input.fire = true;
       this.fireWait = this.tune.fireInterval;
     }

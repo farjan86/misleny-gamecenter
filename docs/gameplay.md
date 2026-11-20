@@ -49,11 +49,11 @@ bekerülhessenek.
 | C | füst a tank köré (ha van töltet) |
 | X | tüzérségi csapás oda, ahová az egér mutat (ha jár) |
 | Bal Ctrl / V | álcázás (percenként egyszer, 10 másodpercre) |
-| Enter | üzenet írása a többieknek (többjátékos meccsen) |
-| T | beszéd, amíg nyomva van (többjátékos meccsen) |
+| T vagy Enter | üzenet írása mindenkinek (többjátékos meccsen) – a mező a képernyő közepén nyílik, az üzenetek a jobb szélen jelennek meg |
+| B | beszéd, amíg nyomva van (többjátékos meccsen) |
 | Tab | eredménytábla, amíg nyomva van |
 | M | az egész város térképe utcanevekkel be/ki |
-| F | teljes képernyős mód be/ki |
+| F | teljes képernyős mód be/ki (a játék bal alsó sarkában halványan ki is van írva; teljes képernyőn eltűnik) |
 | H | információs panel be/ki |
 | Esc | menü (billentyűk, kilépés) |
 
@@ -78,14 +78,25 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
   csatlakozás egy játékhoz, saját játék létrehozása, a belépőkód (privát
   játék), a váró és az indulás, és maga a meccs. Összecsukható; a böngésző
   megjegyzi, hogy nyitva hagytad-e.
-- **Választható alaptank:** a főmenü *Tankom* gombja alatt három, teljesen
-  különböző tank közül lehet választani – *Harckocsi* (klasszikus lánctalpas),
-  *Vadász* (kerekes páncélvadász: lapos ék-test, nagyon hosszú cső) és
-  *Cirkáló* (légpárnás: csepp alakú test, ventilátorok, kerek kupola). **Csak
-  a megjelenés más**, a játékszabályokra nincs hatása. A szintekkel mindegyik
-  a saját formavilágában fejlődik (hat fokozat, saját nevekkel), a képernyő
-  meg is mutatja a teljes fejlődési sort. A többiek is azt a tankot látják,
-  amit választottál; a botok vegyesen kapnak a háromból.
+- **Választható alaptank:** a főmenü *Tankom* gombja alatt hat tank közül
+  lehet választani. Három modern: *Harckocsi* (lánctalpas), *Vadász* (kerekes
+  páncélvadász: lapos ék-test, nagyon hosszú cső) és *Cirkáló* (légpárnás:
+  csepp alakú test, ventilátorok, kerek kupola). Három klasszikus, II.
+  világháborús, korhű festéssel: *T-34* (szovjet védőzöld; T-34/76 → T-34-85 →
+  T-34-100), *Tigris* (sötétsárga alapon olívzöld–vörösbarna terepminta; Tiger I
+  → Királytigris) és *Sherman* (olívbarna, fehér csillaggal; M4 → „Easy Eight”
+  → „Jumbo” → Firefly). A modern tankokat a játék a csapat színére festi
+  (saját zöld, bot vörös, másik játékos kék); a klasszikusak megtartják a
+  festésüket, náluk a motortéren és a torony tetején lévő **légi azonosító lap**
+  mutatja a csapat színét. **Csak a megjelenés más**, a játékszabályokra nincs
+  hatása. A szintekkel mindegyik a saját formavilágában fejlődik (hat fokozat,
+  saját nevekkel), a képernyő meg is mutatja a teljes fejlődési sort. A többiek
+  is azt a tankot látják, amit választottál; a botok vegyesen kapnak a hatból.
+- **Teljes képernyő:** a meccs elején 3 másodpercig villog a felhívás, hogy
+  teljes képernyőn (F) érdemes játszani – rá is lehet kattintani –, utána
+  eltűnik; a bal alsó sarokban halványan ott marad az emlékeztető.
+- **A felületre kattintás nem lő:** a menüre, a menüpontokra, a térképre
+  kattintva a tank nem tüzel; egérrel csak a játéktéren lehet lőni.
 - **Útmutató a főmenüben:** az *Útmutató* gomb alatt minden felvehető tárgy
   ott van az ikonjával – mit csinál, meddig tart, mivel lehet használni
   (a nálad beállított billentyűvel) –, mellette a fegyverek és robbanások
@@ -291,8 +302,7 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
 ### Botok
 
 A gép vezérelte, vörös tankok száma a „Botok" csúszkától és a pálya
-méretétől függ. Két további csúszka (1–5, a 3-as a közepes) szabja meg a
-viselkedésüket:
+méretétől függ. Három további csúszka szabja meg, milyenek:
 
 | Szint | Ügyesség: célzási hiba, reakcióidő, tűzgyorsaság | Agresszivitás: látótáv, üldözés, tartott távolság |
 |---|---|---|
@@ -300,7 +310,27 @@ viselkedésüket:
 | 2 | gyenge: ±6°, 1,0 mp, 1,5 mp | óvatos: 60 m, 6 mp, 26 m |
 | 3 | közepes: ±4°, 0,7 mp, 1,2 mp | közepes: 75 m, 9 mp, 22 m |
 | 4 | ügyes: ±2°, 0,45 mp, 0,95 mp | harcias: 90 m, 13 mp, 18 m; 260 m-en belül akkor is feléd tart, ha nem lát |
-| 5 | mesterlövész: ±1°, 0,25 mp, 0,75 mp | vadászik rád: 110 m, 20 mp, 14 m; a pálya bármely pontjáról feléd tart |
+| 5 | **nagyon ügyes**: ±1°, 0,25 mp, 0,75 mp – tárgyat vesz fel, fejlődik | vadászik rád: 110 m, 20 mp, 14 m; a pálya bármely pontjáról feléd tart |
+| 6 | **ultra ügyes**: ±0,5°, 0,15 mp, 0,6 mp – tárgyat vesz fel, fejlődik | – |
+
+- **Szívósság (1–5):** minél szívósabb a bot, annál erősebb a páncélja és
+  annál nagyobbat lő. Egy ágyúlövése a játékos tankján, illetve hogy hány
+  ágyútalálatot bír ki (a játékos 1. szintű tankja nyolcat):
+
+  | Szint | Lövése | Kibír |
+  |---|---|---|
+  | 1 – törékeny | 10 | 4 találatot |
+  | 2 – gyenge | 12,5 | 5 |
+  | 3 – közepes (alapérték) | 15 | 5 |
+  | 4 – szívós | 20 | 7 |
+  | 5 – páncélos | 25 | 8 – egyenrangú a játékossal |
+
+- **Tárgyak és fejlődés:** a botok alapesetben **nem vesznek fel tárgyat**
+  (áthajtanak rajta, és az ott marad a játékosoknak), és **nem lépnek
+  szintet** – mindig 1. szintű felderítők. A **nagyon ügyes** és az **ultra
+  ügyes** bot viszont felveszi a tárgyakat (ha nincs ellenfél a látóterében,
+  70 m-en belül el is megy értük), és a kilövésekkel ugyanúgy szintet lép,
+  mint a játékos (kilövéskor szintet is veszít).
 
 Az alábbi leírás a közepes szintre vonatkozik. Egymásra nem céloznak és egymást nem sebzik; bármelyik
 játékost megtámadják. Életük korlátlan: kilövés után máshol élednek újra.
@@ -309,7 +339,10 @@ játékost megtámadják. Életük korlátlan: kilövés után máshol élednek 
   játéktér határánál megfordulnak.
 - **Támadás:** ha 75 m-en belül rálátnak egy játékosra (fal nem takarja),
   0,7 másodperc múlva tüzelni kezdenek, és lőtávolságon belülre mennek. A
-  játékosnál lassabban lőnek, és nem céloznak tökéletesen.
+  játékosnál lassabban lőnek, és nem céloznak tökéletesen. **A képernyőn
+  kívülről nem lőnek:** csak akkor tüzelnek, ha ők maguk is a játékos
+  képernyőjén vannak (a legkisebb látómező 160 × 90 m, a széle előtt pár méter
+  ráhagyással) – messzebbről csak közelednek.
 - **Üldözés:** ha szem elől tévesztik, 9 másodpercig az utolsó ismert helye
   felé tartanak.
 - **Akadályok:** tapogatókkal kerülik a falakat és a roncsokat. Ha mégsem
@@ -389,11 +422,11 @@ Minden tank **öt löveggel** indul, és újraéledéskor újra megkapja az öt�
   látszik: amit ide írsz, mindenki megkapja, aki be van lépve és nincs
   szobában. Aki később lép be, az utolsó 30 üzenetet is látja.
 - **A váróban** a csevegő a szobáé: csak a szobatársak látják.
-- **Meccs közben** az **Enter** beviteli mezőt nyit a bal alsó sarokban
-  (Enter: küldés, Esc: mégsem); gépelés közben a tank megáll, a billentyűk nem
-  irányítják. Az üzenetek a bal alsó sarokban jelennek meg, és néhány másodperc
-  múlva elhalványulnak. Csak a szobatársak kapják meg.
-- **Hang (adóvevő):** a **T** nyomva tartása alatt a mikrofonod hangját a
+- **Meccs közben** a **T** (vagy az **Enter**) a képernyő közepén nyit
+  beviteli mezőt (Enter: küldés, Esc: mégsem); gépelés közben a tank megáll, a
+  billentyűk nem irányítják. Az üzenetek a képernyő jobb szélén (a kis térkép alatt) jelennek meg
+  mindenkinél, aki a meccsben van, és néhány másodperc múlva elhalványulnak.
+- **Hang (adóvevő):** a **B** nyomva tartása alatt a mikrofonod hangját a
   szobatársak hallják; elengedve vége. Az első használatkor a böngésző
   engedélyt kér a mikrofonhoz (utána a meccs végéig nyitva tartja, de hang csak
   a gomb nyomva tartása alatt megy). A beszéd elejét és végét rövid rádiójel
@@ -429,6 +462,13 @@ mennyi idő múlva lesz újra használható.
   megerősítést kér, mielőtt bezárná a lapot. Teljes képernyőn (F) a Chrome és
   az Edge ezeket a billentyűket is átengedi a játéknak. Aki nem szeretné, a
   Beállításokban másik billentyűt adhat meg.
+
+> **Lőtáv:** egyik fegyver sem lő messzebb kb. 160 méternél (nagyjából a
+> képernyő szélessége), így a pálya túlsó végéről nem lehet eltalálni senkit.
+> A botok csak akkor lőnek, ha ők maguk is a képernyődön vannak.
+>
+> **Újraéledés:** a tankod újraéledéskor és belépéskor a térkép teteje felé
+> (felfelé) néz.
 
 ### Javítóműhely
 
@@ -495,22 +535,22 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 
 | Tárgy | Hatás | Meddig tart |
 |---|---|---|
-| Nehéz lövedék | fegyver: nagyobb robbanás és lőtáv, dupla sebzés | a következő fegyverig vagy a kilövésig |
-| Rakéta | fegyver: lassan indul, felgyorsul, kb. 200 m-re repül, területre sebez | a következő fegyverig vagy a kilövésig |
-| Lézer | fegyver: azonnal célba érő sugár 130 m-ig | a következő fegyverig vagy a kilövésig |
+| Nehéz lövedék | fegyver: nagyobb robbanás, gyorsabb lövedék, dupla sebzés | a következő fegyverig vagy a kilövésig |
+| Rakéta | fegyver: lassan indul, felgyorsul, kb. 160 m-re repül, területre sebez | a következő fegyverig vagy a kilövésig |
+| Lézer | fegyver: azonnal célba érő sugár 160 m-ig | a következő fegyverig vagy a kilövésig |
 | Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan (a rakéta és a lézer nem) | a kilövésig |
 | Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
 | Olajfolt | 3 lerakható, 7 méter sugarú folt (egy utcát teljes szélességében elzár); aki gyorsan hajt rá, 1,7 mp-ig irányíthatatlanul pörög és sodródik, és aki belehajt (akár lassan), annak **olajos lesz a lánctalpa**: a folton és utána még 4 mp-ig kipörög, mint a jégen – a végsebessége a 45%-a, a gyorsulása és a fékezése a 30%-a | 3 töltet, a folt 45 mp-ig marad |
 | Javítókészlet | azonnal visszaad 100 életerőt; a leggyakoribb tárgy (kb. minden ötödik) | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
-| Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg | 25 mp |
+| Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg; esőben négyszer több van belőle | 25 mp |
 | Pajzs | egy töltet egy találatot nyel el (legfeljebb 3) | töltet |
 | Sebezhetetlenség | semmi nem sebez, nem csúszik meg | 10 mp |
 | Radar | a térképen látszanak a felvehető tárgyak | 30 mp |
 | Löveg | lerakható (Q): magától lő a közeli ellenségre, és a tankkal együtt fejlődik | egy további löveg (legfeljebb 8 lehet a tanknál); a löveg a kilövéséig áll |
 | Akna | lerakható (R): az ellenséges tank alatt robban | 2 töltet (legfeljebb 4) |
-| Füst | lerakható (C): 13 méteres felhő, amely eltakar | 2 töltet (legfeljebb 4), a felhő 10 mp |
+| Füst | lerakható (C): 12 m sugárral indul, 7 mp alatt 60 m sugarúra terjed, eltakar, a szél sodorja | 2 töltet (legfeljebb 4), a felhő 20 mp |
 | Géppuska | a tank jobb oldalára szerelt géppuska magától lő a legközelebbi ellenségre (40 m-en belül, ha rálát): másodpercenként kb. 8 lövés, egyenként 2,5 sebzés; a fő fegyver mellett működik, álcázva hallgat. A lövedékek rövid csíkként repülnek a célig (minden harmadik fényes nyomjelző), a csőnél torkolattűz villog, oldalra hüvelyek repülnek, a becsapódásnál szikra és por | 60 mp |
 | Szupertárgy | teljes javítás, tele pajzs, háromszoros sebzés (csak a pálya közepén jelenik meg, percenként) | 20 mp |
 

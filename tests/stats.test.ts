@@ -104,3 +104,42 @@ describe('játéknapló', () => {
     gate.flush();
   });
 });
+
+describe('a kapu védelmei', () => {
+  it('egy címről óránként legfeljebb 30 fiók regisztrálható; más címről lehet tovább', async () => {
+    const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+    const gate = new Gate(new Lobby(data, 0), new Accounts(null));
+    const register = async (name: string, address: string): Promise<ServerMessage[]> => {
+      const inbox: ServerMessage[] = [];
+      const session = gate.connect({ send: (text) => inbox.push(JSON.parse(text) as ServerMessage), close: () => undefined }, address);
+      session.message(encode({ t: 'register', v: PROTOCOL_VERSION, name, password: 'jelszo-123456' }));
+      for (let i = 0; i < 300 && !inbox.some((m) => m.t === 'auth' || m.t === 'authError'); i++) await new Promise((done) => setTimeout(done, 5));
+      return inbox;
+    };
+    for (let i = 0; i < 30; i++) expect((await register(`Proba${i}`, '203.0.113.7')).some((m) => m.t === 'auth')).toBe(true);
+    const refused = await register('Proba30', '203.0.113.7');
+    expect(refused.find((m) => m.t === 'authError')).toBeDefined();
+    expect((await register('Masik1', '198.51.100.2')).some((m) => m.t === 'auth')).toBe(true);
+  }, 60000);
+});
+
+describe('fiókonkénti belépési korlát', () => {
+  it('egy fiókra 20 sikertelen belépés után 15 percig (bárhonnan) nem lehet jelszóval belépni', async () => {
+    const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+    const gate = new Gate(new Lobby(data, 0), new Accounts(null));
+    const attempt = async (t: 'register' | 'login', password: string, address: string): Promise<ServerMessage | undefined> => {
+      const inbox: ServerMessage[] = [];
+      const session = gate.connect({ send: (text) => inbox.push(JSON.parse(text) as ServerMessage), close: () => undefined }, address);
+      session.message(encode({ t, v: PROTOCOL_VERSION, name: 'Celpont', password }));
+      for (let i = 0; i < 300 && !inbox.some((m) => m.t === 'auth' || m.t === 'authError'); i++) await new Promise((done) => setTimeout(done, 5));
+      return inbox.find((m) => m.t === 'auth' || m.t === 'authError');
+    };
+    expect((await attempt('register', 'helyes-jelszo', '10.0.0.1'))?.t).toBe('auth');
+    // 20 hibás próbálkozás különböző címekről
+    for (let i = 0; i < 20; i++) expect((await attempt('login', `rossz-${i}`, `10.0.1.${i}`))?.t).toBe('authError');
+    // most már a helyes jelszóval sem megy, másik címről sem
+    const locked = await attempt('login', 'helyes-jelszo', '10.0.2.1');
+    expect(locked?.t).toBe('authError');
+    expect(locked && 'message' in locked ? locked.message : '').toMatch(/fiókra/);
+  }, 60000);
+});

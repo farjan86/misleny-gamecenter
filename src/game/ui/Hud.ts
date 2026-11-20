@@ -9,6 +9,9 @@ import { renderMap } from '../maps/raster';
 import { PICKUP_STYLE } from '../entities/pickupStyle';
 import { STRIKE, insideSmoke, type SmokeState } from '../sim/gadgets';
 import type { PickupState, TankState } from '../sim/world';
+import { isFullscreen, toggleFullscreen } from './fullscreen';
+
+const esc = (text: string): string => text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
 /** A térképkép felbontása: pixel / méter. */
 const MINI_SCALE = 0.3;
@@ -299,6 +302,13 @@ export class Hud {
 
   /** A visszaszámláló óra (perc:másodperc) és alatta az állás; az utolsó fél percben pirosan villog. */
   setClock(seconds: number, score: string): void {
+    // a nyitott játéknak nincs időkorlátja: az óra helyén a felirat
+    if (!Number.isFinite(seconds)) {
+      this.clockTime.textContent = 'NYITOTT';
+      this.clockScore.textContent = score;
+      this.clock.classList.remove('ending');
+      return;
+    }
     const s = Math.max(0, Math.ceil(seconds));
     this.clockTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     this.clockScore.textContent = score;
@@ -407,6 +417,24 @@ export class Hud {
 
   hideLoading(): void {
     el<HTMLDivElement>('loading').classList.add('hidden');
+  }
+
+  /**
+   * A meccs elején 3 másodpercig villogó felhívás, hogy teljes képernyőn érdemes játszani
+   * (rá is lehet kattintani). Utána eltűnik, és nem jön vissza – a bal alsó sarokban a
+   * halvány emlékeztető marad. Ha már teljes képernyőn van, vagy a böngésző nem engedi, nincs.
+   */
+  fullscreenTip(key: string): void {
+    const tip = el<HTMLDivElement>('hud-fullscreen-tip');
+    if (!key || !document.fullscreenEnabled || isFullscreen()) return;
+    tip.innerHTML = `<b>${esc(key)}</b> – teljes képernyő: így az igazi!`;
+    tip.classList.remove('hidden', 'gone');
+    tip.onclick = () => {
+      toggleFullscreen();
+      tip.classList.add('gone');
+    };
+    window.setTimeout(() => tip.classList.add('gone'), 3000);
+    window.setTimeout(() => tip.classList.add('hidden'), 3500);
   }
 
   toggleMap(): void {

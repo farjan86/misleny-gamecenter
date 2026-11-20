@@ -46,7 +46,7 @@ async function start(): Promise<void> {
     // meccs közben a böngésző megerősítést kér a lap bezárása előtt (a Ctrl+W ellen)
     guardLeave(true);
     // többjátékos meccsen: üzenetek a többieknek és hang gombnyomásra (a saját szerveren át)
-    if (message.players.length > 1) {
+    if (message.players.length > 1 || message.room.demo) {
       const settings = loadSettings();
       voice = new Voice((d) => link.send({ t: 'voice', d }));
       voice.setVolume(settings.volume / 100);
@@ -107,6 +107,13 @@ async function start(): Promise<void> {
         break;
       case 'ev':
         world?.receiveEvents(message.e);
+        break;
+      case 'joined':
+        world?.addPlayer(message.player);
+        break;
+      case 'reload':
+        // a nyitott játékot módosították: újratöltés, és vissza ugyanabba a játékba (a szint megmarad)
+        Menu.reloadToRoom(message.room);
         break;
       case 'chat':
         chat?.add(message.from, message.text, message.me === true);

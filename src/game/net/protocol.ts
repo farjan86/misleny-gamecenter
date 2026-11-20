@@ -11,7 +11,7 @@ import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehic
 import { TANK_LOOKS } from '../sim/world';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -28,6 +28,8 @@ export interface RoomInfo {
   locked: boolean;
   settings: MatchSettings;
   plan: MatchPlan;
+  /** nyitott játék: azonnal indul, bárki bármikor beléphet, addig fut, amíg a gazdája le nem állítja */
+  demo?: boolean;
 }
 
 /** Szöveges üzenet: az előszobában mindenkinek, szobában és meccsen a szobatársaknak megy. */
@@ -126,7 +128,12 @@ export type ClientMessage =
   | { t: 'hello'; v: number; name: string }
   /** code: ha meg van adva, a játék privát – csak ezzel a kóddal lehet belépni */
   /** look: a választott alaptank (csak megjelenés) */
-  | { t: 'create'; settings: Partial<MatchSettings>; code?: string; look?: number }
+  /** demo: korlátlan ideig futó, szabad belépésű játék (csak a szerver gazdája nyithatja) */
+  | { t: 'create'; settings: Partial<MatchSettings>; code?: string; look?: number; demo?: boolean }
+  /** a nyitott játék leállítása (csak a szerver gazdája) */
+  | { t: 'closeDemo'; room: string }
+  /** a futó nyitott játék módosítása (csak a szerver gazdája): új pálya, új beállítások */
+  | { t: 'modifyOpen'; room: string; settings: Partial<MatchSettings> }
   | { t: 'join'; room: string; code?: string; look?: number }
   | { t: 'leave' }
   /** s: a bemenet sorszáma (a szerver ezzel nyugtáz) */
@@ -184,13 +191,14 @@ export interface Snapshot {
   G?: number[][];
   /** játékosok állása: [tank, kilövések, halálok, kilépett-e] */
   S?: number[][];
-  /** a hátralévő játékidő (mp) */
+  /** a hátralévő játékidő (mp); −1: nincs időkorlát (nyitott játék) */
   r: number;
 }
 
 export type ServerMessage =
   /** sikeres belépés: a fiók neve és a belépve maradás kulcsa */
-  | { t: 'auth'; name: string; token: string }
+  /** admin: a szerver gazdája (nyitott játékot nyithat) */
+  | { t: 'auth'; name: string; token: string; admin?: boolean }
   | { t: 'authError'; message: string }
   | { t: 'welcome'; id: string; map: { width: number; height: number } }
   | { t: 'rooms'; rooms: RoomInfo[] }
@@ -202,6 +210,10 @@ export type ServerMessage =
   | { t: 'start'; room: RoomInfo; tank: number; players: PlayerInfo[]; workshops: number[][] }
   | Snapshot
   | { t: 'ev'; e: SimEvent[] }
+  /** a futó (nyitott) játékba új játékos lépett be */
+  | { t: 'joined'; player: PlayerInfo }
+  /** a nyitott játékot módosították: a kliens töltse újra az oldalt, és lépjen vissza ugyanebbe a játékba (a szintje megmarad) */
+  | { t: 'reload'; room: string; reason: string }
   | { t: 'over'; winner: string | null; standings: Standing[] }
   /** a bejelentkezett játékosok és hogy hol vannak: előszobában, váróban vagy meccsen */
   | { t: 'online'; players: OnlinePlayer[] }

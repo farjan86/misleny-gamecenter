@@ -87,11 +87,9 @@ export class ClientWorld {
   ) {
     this.workshops = workshops.map(([x, y], i) => ({ id: i + 1, x, y }));
     this.viewId = myId;
-    this.timeLeft = room.settings.minutes * 60;
-    for (const p of players) {
-      this.names.set(p.tank, p.name);
-      this.looks.set(p.tank, p.look ?? 0);
-    }
+    // a nyitott játéknak nincs időkorlátja
+    this.timeLeft = room.demo ? Infinity : room.settings.minutes * 60;
+    for (const p of players) this.addPlayer(p);
     // Az előrejelzés világa: ugyanaz a pálya, de a fák és az épületek állapotát nem
     // változtatja (azt csak a szerver eseményei módosítják).
     this.predict = new World(
@@ -109,6 +107,12 @@ export class ClientWorld {
   /** a szerver válaszideje ezredmásodpercben */
   get pingMs(): number {
     return this.net.ping;
+  }
+
+  /** Új játékos a meccsben (a nyitott játékba menet közben is beléphetnek): a neve és a választott tankja. */
+  addPlayer(p: PlayerInfo): void {
+    this.names.set(p.tank, p.name);
+    this.looks.set(p.tank, p.look ?? 0);
   }
 
   /** A tank fajtája (megjelenése). */
@@ -223,7 +227,7 @@ export class ClientWorld {
     if (snap.G) this.barrels = snap.G.map(unpackBarrel);
     if (snap.B || snap.P || snap.O || snap.W || snap.V || snap.U || snap.M || snap.K || snap.G) this.listsChanged = true;
     if (snap.S) this.standings = snap.S.map(([tank, kills, deaths, gone]) => ({ tank, name: this.nameOf(tank), kills, deaths, gone: gone === 1 }));
-    this.timeLeft = snap.r;
+    this.timeLeft = snap.r < 0 ? Infinity : snap.r;
 
     this.reconcile(this.full);
   }

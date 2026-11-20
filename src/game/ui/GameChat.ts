@@ -1,7 +1,7 @@
-// Játék közbeni üzenetek és a gombnyomásra menő hang felülete: az üzenetek a bal
-// alsó sarokban jelennek meg és néhány másodperc múlva elhalványulnak; az Enter
-// (a beállított billentyű) beviteli mezőt nyit, a beszéd gombja nyomva tartva
-// adja a hangot. Csak többjátékos meccsen van.
+// Játék közbeni üzenetek és a gombnyomásra menő hang felülete: az üzenetek a képernyő
+// jobb szélén (a kis térkép alatt) jelennek meg, és néhány másodperc múlva elhalványulnak; a T vagy az Enter
+// (a beállított billentyű) a képernyő közepén nyit beviteli mezőt, a beszéd gombja (B)
+// nyomva tartva adja a hangot. Csak többjátékos meccsen van.
 
 import type { KeyBindings } from '../settings';
 import { keysText } from '../settings';
@@ -36,8 +36,8 @@ export class GameChat {
   ) {
     this.box.classList.remove('hidden');
     this.input.maxLength = CHAT.maxLength;
-    this.input.placeholder = 'Üzenet a többieknek – Enter: küldés, Esc: mégsem';
-    this.system(`${keysText(keys, 'chat')}: üzenet írása · ${keysText(keys, 'talk')} nyomva tartva: beszéd`);
+    this.input.placeholder = 'Írd be az üzeneted – Enter: küldés mindenkinek, Esc: mégsem';
+    this.system(`${keysText(keys, 'chat')}: üzenet írása mindenkinek · ${keysText(keys, 'talk')} nyomva tartva: beszéd`);
     window.addEventListener('keydown', this.onKeyDown, true);
     window.addEventListener('keyup', this.onKeyUp, true);
     window.addEventListener('blur', this.release);
@@ -65,7 +65,7 @@ export class GameChat {
       return;
     }
     if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
-    if (this.keys.chat.includes(ev.code)) {
+    if (this.keys.chat.includes(ev.code) && !ev.repeat) {
       ev.preventDefault();
       ev.stopPropagation();
       this.open();

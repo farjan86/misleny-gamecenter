@@ -11,6 +11,7 @@
 // szimuláció innen indítja a lövedéket) minden osztálynál ugyanott van.
 
 import Phaser from 'phaser';
+import { CLASSIC_TANKS } from './classicTanks';
 
 export const TANK_TIERS = 6;
 export const TRACK_FRAMES = 3;
@@ -1007,23 +1008,41 @@ function turretC(ctx: Ctx, marks: number, tier: number): void {
   ctx.restore();
 }
 
-/** Az alaptankok: a név, egy rövid jellemzés, és az osztályok neve fokozatonként. */
-export const TANK_LOOK_NAMES = ['Harckocsi', 'Vadász', 'Cirkáló'] as const;
-export const TANK_LOOK_HINT = [
-  'Klasszikus lánctalpas harckocsi: hegyes orr, zömök torony – a végén tolólapos, négy futóműves titán.',
+/**
+ * Az alaptankok: a név, egy rövid jellemzés, és az osztályok neve fokozatonként. Az első
+ * három a játék saját, modern tankja; utána a három klasszikus, II. világháborús tank
+ * (classicTanks.ts) – ezek korhű festést kapnak, a csapatszínt csak az azonosító lapjuk mutatja.
+ */
+export const CLASSIC_FROM = 3;
+export const isClassicLook = (look: number): boolean => look >= CLASSIC_FROM;
+export const TANK_LOOK_NAMES: readonly string[] = ['Harckocsi', 'Vadász', 'Cirkáló', ...CLASSIC_TANKS.map((t) => t.name)];
+export const TANK_LOOK_HINT: readonly string[] = [
+  'Lánctalpas harckocsi: hegyes orr, zömök torony – a végén tolólapos, négy futóműves titán.',
   'Kerekes páncélvadász: hosszú, lapos ék-test, alacsony torony, nagyon hosszú cső – a végén ikersínágyú és rakéták.',
   'Légpárnás cirkáló: csepp alakú test, ventilátorok, kerek kupola vastag ágyúval – a végén forgócsöves ágyú.',
-] as const;
+  ...CLASSIC_TANKS.map((t) => t.hint),
+];
 export const LOOK_TIER_NAMES: readonly (readonly string[])[] = [
   TIER_NAMES,
   ['Portyázó', 'Vadász', 'Páncélvadász', 'Ragadozó', 'Végrehajtó', 'Fantom'],
   ['Sikló', 'Cirkáló', 'Fregatt', 'Csatahajó', 'Rettegett', 'Leviatán'],
+  ...CLASSIC_TANKS.map((t) => t.tierNames),
 ];
 
 const tiers = <T>(make: (tier: number) => T): T[] => Array.from({ length: TANK_TIERS }, (_, tier) => make(tier));
 /** A testek és a tornyok rajzai alaptankonként, osztályonként. */
-const HULL_SETS: ((ctx: Ctx, frame: number) => void)[][] = [HULLS, tiers((tier) => (ctx, frame) => hullB(ctx, frame, tier)), tiers((tier) => (ctx, frame) => hullC(ctx, frame, tier))];
-const TURRET_SETS: ((ctx: Ctx, marks: number) => void)[][] = [TURRETS, tiers((tier) => (ctx, marks) => turretB(ctx, marks, tier)), tiers((tier) => (ctx, marks) => turretC(ctx, marks, tier))];
+const HULL_SETS: ((ctx: Ctx, frame: number) => void)[][] = [
+  HULLS,
+  tiers((tier) => (ctx, frame) => hullB(ctx, frame, tier)),
+  tiers((tier) => (ctx, frame) => hullC(ctx, frame, tier)),
+  ...CLASSIC_TANKS.map((t) => tiers((tier) => (ctx: Ctx, frame: number) => t.hull(ctx, frame, tier))),
+];
+const TURRET_SETS: ((ctx: Ctx, marks: number) => void)[][] = [
+  TURRETS,
+  tiers((tier) => (ctx, marks) => turretB(ctx, marks, tier)),
+  tiers((tier) => (ctx, marks) => turretC(ctx, marks, tier)),
+  ...CLASSIC_TANKS.map((t) => tiers((tier) => (ctx: Ctx, marks: number) => t.turret(ctx, marks, tier))),
+];
 
 // --- textúrák ---------------------------------------------------------------------
 
@@ -1034,15 +1053,19 @@ function canvasTexture(scene: Phaser.Scene, key: string, w: number, h: number, d
   return tex.canvas;
 }
 
-/** A zöld árnyalatok átszínezése vörösre (botok) vagy kékre (más játékosok); az acél, az arany és a fények maradnak. */
-function recolor(ctx: Ctx, w: number, h: number, hue: 'red' | 'blue'): void {
+/**
+ * A zöld árnyalatok átszínezése vörösre (botok) vagy kékre (más játékosok); az acél, az arany
+ * és a fények maradnak. `markOnly`: a klasszikus tankoknál csak az erős, telített zöld
+ * azonosító lap vált színt, a korhű (tompa) festés megmarad.
+ */
+function recolor(ctx: Ctx, w: number, h: number, hue: 'red' | 'blue', markOnly = false): void {
   const image = ctx.getImageData(0, 0, w, h);
   const d = image.data;
   for (let i = 0; i < d.length; i += 4) {
     const r = d[i];
     const g = d[i + 1];
     const b = d[i + 2];
-    if (g > r * 1.08 && g > b) {
+    if (markOnly ? g > 120 && g - r > 70 && g - b > 45 : g > r * 1.08 && g > b) {
       if (hue === 'red') {
         d[i] = Math.min(255, g * 1.15);
         d[i + 1] = r * 0.7;
@@ -1196,8 +1219,8 @@ export function createTankTextures(scene: Phaser.Scene): void {
           HULL_SETS[look][tier](ctx, frame);
           ctx.setTransform(1, 0, 0, 1, 0, 0);
         });
-        variant(tankTex.hull('bot', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
-        variant(tankTex.hull('rival', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
+        variant(tankTex.hull('bot', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red', isClassicLook(look)));
+        variant(tankTex.hull('rival', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue', isClassicLook(look)));
         if (frame === 0) {
           variant(tankTex.wreckHull(tier, look), own, char);
           // sérülésrétegek: a rajz csak ott látszik, ahol a tank teste van
@@ -1217,8 +1240,8 @@ export function createTankTextures(scene: Phaser.Scene): void {
           TURRET_SETS[look][tier](ctx, marks);
           ctx.setTransform(1, 0, 0, 1, 0, 0);
         });
-        variant(tankTex.turret('bot', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
-        variant(tankTex.turret('rival', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
+        variant(tankTex.turret('bot', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red', isClassicLook(look)));
+        variant(tankTex.turret('rival', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue', isClassicLook(look)));
         if (marks === 0) {
           variant(tankTex.wreckTurret(tier, look), own, char);
           for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
@@ -1247,7 +1270,7 @@ export function tankSprites(tier: number, paint: TankPaint, marks = 0, look = 0)
     const ctx = canvas.getContext('2d')!;
     draw(ctx);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (paint !== 'own') recolor(ctx, w, h, paint === 'bot' ? 'red' : 'blue');
+    if (paint !== 'own') recolor(ctx, w, h, paint === 'bot' ? 'red' : 'blue', isClassicLook(look));
     return canvas;
   };
   const hull = Array.from({ length: TRACK_FRAMES }, (_, frame) =>

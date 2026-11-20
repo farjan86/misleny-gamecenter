@@ -6,10 +6,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Accounts } from '../server/accounts';
 import { Gate } from '../server/gate';
-import { LIMITS, Lobby } from '../server/lobby';
+import { LIMITS, Lobby, type OpenGameStore, type StoredOpenGame } from '../server/lobby';
 import type { MapData } from '../src/game/maps/types';
 import { CHAT, cleanChat, encode, messageReader, packInput, PROTOCOL_VERSION, VOICE, type ClientMessage, type FullSnapshot, type RoomInfo, type ServerMessage } from '../src/game/net/protocol';
-import { MATCH } from '../src/game/sim/match';
+import { DEMO, demoPlayers, MATCH } from '../src/game/sim/match';
 
 const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
 
@@ -456,7 +456,7 @@ describe('egyjátékos mód: ugyanaz a szobakezelő, visszaszámlálás nélkül
     const solo = new FakeClient(lobby, 'Gyakorló');
     solo.send({ t: 'create', settings: { ...small, maxPlayers: 1, botSkill: 42, botAggression: Number.NaN } });
     lobby.tick(10);
-    expect(solo.last('start')!.room.settings).toMatchObject({ botSkill: 5, botAggression: 3 });
+    expect(solo.last('start')!.room.settings).toMatchObject({ botSkill: 6, botAggression: 3, botToughness: 3 });
   });
 });
 
@@ -603,5 +603,213 @@ describe('üzenetek és hang', () => {
     lobby.tick(1100 + VOICE.quiet + 50);
     players[3].send({ t: 'voice', d: frame });
     expect(voices(listener).pop()?.from).toBe('Dani');
+  });
+});
+
+describe('demó játék: azonnal indul, bárki bármikor beléphet, addig fut, amíg a gazdája le nem állítja', () => {
+  const demoArea = { area: { minX: 500, minY: 500, maxX: 1300, maxY: 1300 }, bots: 1, pickups: 2, traffic: 0, minutes: 5 };
+
+  it('csak a szerver gazdája nyithatja; azonnal indul, időkorlát és belépőkód nélkül; egyszerre egy fut', () => {
+    const lobby = new Lobby(data, MATCH.countdown, ['ProWolf']);
+    const admin = new FakeClient(lobby, 'prowolf');
+    const other = new FakeClient(lobby, 'Béla');
+    lobby.tick(0);
+    // más nem nyithat demót
+    other.send({ t: 'create', settings: demoArea, demo: true });
+    expect(other.last('error')?.message).toMatch(/gazdája/);
+    expect(lobby.stats.rooms).toBe(0);
+    // a gazda (a név kis- és nagybetűtől függetlenül) igen: visszaszámlálás nélkül indul, de ő maga nem kerül bele
+    admin.send({ t: 'create', settings: { ...demoArea, maxPlayers: 2 }, code: 'titkos7', demo: true });
+    expect(admin.last('start')).toBeUndefined();
+    const room = other.rooms()[0];
+    expect(room.players).toEqual([]);
+    // ha akar, ő is beléphet a listából, mint bárki
+    admin.send({ t: 'join', room: room.id });
+    expect(admin.last('start')).toBeDefined();
+    expect(room.demo).toBe(true);
+    expect(room.locked).toBe(false);
+    expect(room.status).toBe('playing');
+    // a létszámot a gazdája adja meg (2–100)
+    expect(room.settings.maxPlayers).toBe(2);
+    expect([demoPlayers(500), demoPlayers(0), demoPlayers('x'), demoPlayers(37)]).toEqual([DEMO.maxPlayers, DEMO.minPlayers, DEMO.maxPlayers, 37]);
+    // tele van: harmadik már nem fér be
+    other.send({ t: 'join', room: room.id });
+    expect(other.last('start')).toBeDefined();
+    const third = new FakeClient(lobby, 'Cili');
+    third.send({ t: 'join', room: room.id });
+    expect(third.last('start')).toBeUndefined();
+    expect(third.last('error')?.message).toMatch(/tele/);
+    // a pillanatképben nincs hátralévő idő
+    lobby.tick(40);
+    lobby.tick(120);
+    expect(admin.snap().r).toBe(-1);
+    // több nyitott játék is futhat egyszerre
+    const admin2 = new FakeClient(lobby, 'ProWolf');
+    admin2.send({ t: 'create', settings: demoArea, demo: true });
+    expect(lobby.stats.rooms).toBe(2);
+  });
+
+  it('a futó nyitott játék módosítható (csak a gazdája): új pálya, a játékosok szintje és felszerelése megmarad; a létszám nem lehet kevesebb a bent lévőknél', () => {
+    const lobby = new Lobby(data, MATCH.countdown, ['ProWolf']);
+    const admin = new FakeClient(lobby, 'ProWolf');
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    lobby.tick(0);
+    admin.send({ t: 'create', settings: { ...demoArea, maxPlayers: 10, weather: 'day' }, demo: true });
+    const id = anna.rooms()[0].id;
+    anna.send({ t: 'join', room: id, look: 3 });
+    bela.send({ t: 'join', room: id });
+    let now = 0;
+    const run = (ms: number): void => {
+      for (let t = 0; t < ms; t += 1000 / 60) lobby.tick((now += 1000 / 60));
+    };
+    run(200);
+    // Anna közben fejlődött és fegyvert vett fel
+    const match = (lobby as unknown as { rooms: Map<string, { match: { tankOf(id: string): { level: number; weapon: string | null; kills: number; hp: number } } }> }).rooms.get(id)!.match;
+    const annaId = anna.last('welcome')!.id;
+    const tank = match.tankOf(annaId);
+    tank.level = 7;
+    tank.weapon = 'rocket';
+    tank.kills = 9;
+    // más nem módosíthatja
+    bela.send({ t: 'modifyOpen', room: id, settings: { ...demoArea, weather: 'night' } });
+    expect(bela.last('error')?.message).toMatch(/gazdája/);
+    // a gazda módosít: új terület, éjszaka, több bot – és 1 főre venné a létszámot (de ketten bent vannak)
+    const area = { minX: 1000, minY: 1200, maxX: 1600, maxY: 1800 };
+    admin.send({ t: 'modifyOpen', room: id, settings: { area, bots: 4, pickups: 1, traffic: 2, weather: 'night', maxPlayers: 1, name: 'Új pálya' } });
+    expect(anna.last('reload')?.room).toBe(id);
+    expect(bela.last('reload')?.room).toBe(id);
+    const info = admin.rooms().find((r) => r.id === id)!;
+    expect(info.settings).toMatchObject({ weather: 'night', bots: 4, name: 'Új pálya', maxPlayers: 2 });
+    expect(info.settings.area.minX).toBeGreaterThanOrEqual(900);
+    expect(info.status).toBe('playing');
+    // Anna újratöltött (új kapcsolat, ugyanaz a fiók), és visszalép: a szintje, a fegyvere és az eredménye megmaradt, teljes életerővel
+    anna.disconnect();
+    const again = new FakeClient(lobby, 'Anna');
+    again.send({ t: 'join', room: id, look: 3 });
+    const start = again.last('start')!;
+    expect(start.room.settings.weather).toBe('night');
+    const fresh = (lobby as unknown as { rooms: Map<string, { match: { tankOf(id: string): { level: number; weapon: string | null; kills: number; hp: number } } }> }).rooms.get(id)!.match.tankOf(again.last('welcome')!.id);
+    expect(fresh).toMatchObject({ level: 7, weapon: 'rocket', kills: 9 });
+    expect(fresh.hp).toBeGreaterThan(200);
+    // aki nem volt bent, az nulláról indul
+    const cili = new FakeClient(lobby, 'Cili');
+    cili.send({ t: 'join', room: id });
+    const cTank = (lobby as unknown as { rooms: Map<string, { match: { tankOf(id: string): { level: number } } }> }).rooms.get(id)!.match.tankOf(cili.last('welcome')!.id);
+    expect(cTank.level).toBe(1);
+  });
+
+  it('menet közben be lehet lépni és ki lehet lépni; a többiek értesülnek; üresen szünetel, és csak a gazda állíthatja le', () => {
+    const lobby = new Lobby(data, MATCH.countdown, ['ProWolf']);
+    const admin = new FakeClient(lobby, 'ProWolf');
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    lobby.tick(0);
+    admin.send({ t: 'create', settings: demoArea, demo: true });
+    const id = anna.rooms()[0].id;
+    admin.send({ t: 'join', room: id });
+    let now = 0;
+    const run = (ms: number): void => {
+      for (let t = 0; t < ms; t += 1000 / 60) lobby.tick((now += 1000 / 60));
+    };
+    run(500);
+    // Anna menet közben lép be: azonnal tankot kap, a gazda hírt kap róla
+    anna.send({ t: 'join', room: id, look: 4 });
+    const start = anna.last('start')!;
+    expect(start.players.map((p) => p.name).sort()).toEqual(['Anna', 'ProWolf']);
+    expect(admin.last('joined')?.player).toMatchObject({ name: 'Anna', look: 4, tank: start.tank });
+    run(300);
+    expect(anna.snap().S?.length).toBe(2);
+    // Béla is belép, majd Anna kilép: a játék megy tovább, az állásból eltűnik
+    bela.send({ t: 'join', room: id });
+    anna.send({ t: 'leave' });
+    run(300);
+    expect(admin.snap().S?.length).toBe(2);
+    expect(lobby.stats.playing).toBe(1);
+    // mindenki kilép: a demó megmarad, de szünetel (nem lép a szimuláció)
+    admin.send({ t: 'leave' });
+    bela.send({ t: 'leave' });
+    const tickBefore = bela.snap().k;
+    run(1000);
+    expect(lobby.stats.rooms).toBe(1);
+    expect(anna.rooms()[0].players).toEqual([]);
+    // újra be lehet lépni, és onnan folytatódik
+    bela.send({ t: 'join', room: id });
+    run(200);
+    expect(bela.snap().k).toBeGreaterThan(tickBefore);
+    expect(bela.snap().k - tickBefore).toBeLessThan(30);
+    // más nem állíthatja le; a gazda igen: a bent lévők visszakerülnek a listához
+    bela.send({ t: 'closeDemo', room: id });
+    expect(lobby.stats.rooms).toBe(1);
+    admin.send({ t: 'closeDemo', room: id });
+    expect(lobby.stats.rooms).toBe(0);
+    expect(bela.last('left')?.reason).toMatch(/leállították/);
+    expect(anna.rooms()).toEqual([]);
+  });
+
+});
+
+describe('a nyitott játékok megmaradnak a szerver újraindítása után', () => {
+  const area = { area: { minX: 500, minY: 500, maxX: 1100, maxY: 1100 }, bots: 2, pickups: 1, traffic: 0, minutes: 5 };
+  /** a fájl helyett memóriában tárolt mentés (a szerveren data/open-games.json) */
+  const memoryStore = (): { store: OpenGameStore; saved: () => StoredOpenGame[]; set: (v: unknown) => void } => {
+    let text = '[]';
+    return {
+      store: { load: () => JSON.parse(text), save: (games) => (text = JSON.stringify(games)) },
+      saved: () => JSON.parse(text) as StoredOpenGame[],
+      set: (v) => (text = JSON.stringify(v)),
+    };
+  };
+
+  it('létrehozás, módosítás, leállítás után mentődnek; az új szerver ugyanazokkal a beállításokkal, üresen nyitja meg őket', () => {
+    const mem = memoryStore();
+    const first = new Lobby(data, MATCH.countdown, ['ProWolf'], mem.store);
+    const admin = new FakeClient(first, 'ProWolf');
+    first.tick(0);
+    admin.send({ t: 'create', settings: { ...area, name: 'Esti csata', maxPlayers: 30, weather: 'night' }, demo: true });
+    admin.send({ t: 'create', settings: { ...area, name: 'Második' }, demo: true });
+    expect(mem.saved().map((g) => g.settings.name)).toEqual(['Esti csata', 'Második']);
+    const [one, two] = mem.saved();
+    admin.send({ t: 'modifyOpen', room: one.id, settings: { ...area, name: 'Esti csata', maxPlayers: 40, weather: 'rain' } });
+    expect(mem.saved()[0].settings).toMatchObject({ maxPlayers: 40, weather: 'rain' });
+    // újraindítás: új szobakezelő ugyanazzal a mentéssel
+    const second = new Lobby(data, MATCH.countdown, ['ProWolf'], mem.store);
+    const guest = new FakeClient(second, 'Anna');
+    second.tick(0);
+    const rooms = guest.rooms();
+    expect(rooms.map((r) => [r.id, r.settings.name, r.settings.maxPlayers, r.settings.weather, r.demo, r.status, r.players.length])).toEqual([
+      [one.id, 'Esti csata', 40, 'rain', true, 'playing', 0],
+      [two.id, 'Második', DEMO.maxPlayers, 'day', true, 'playing', 0],
+    ]);
+    // be lehet lépni, és az új játék azonosítója nem ütközik a régiekkel
+    guest.send({ t: 'join', room: one.id });
+    expect(guest.last('start')).toBeDefined();
+    const admin2 = new FakeClient(second, 'ProWolf');
+    admin2.send({ t: 'create', settings: { ...area, name: 'Harmadik' }, demo: true });
+    expect(new Set(mem.saved().map((g) => g.id)).size).toBe(3);
+    // leállítás után a mentésből is kikerül
+    admin2.send({ t: 'closeDemo', room: two.id });
+    expect(mem.saved().map((g) => g.settings.name)).toEqual(['Esti csata', 'Harmadik']);
+  });
+
+  it('a sérült vagy idegen bejegyzés kimarad: csak a mostani gazda játéka nyílik meg', () => {
+    const mem = memoryStore();
+    mem.set([
+      { id: 'r5', host: 'ProWolf', settings: { ...area, name: 'Jó', maxPlayers: 12 } },
+      { id: 'r6', host: 'Valaki', settings: { ...area, name: 'Idegen' } },
+      { id: '../x', host: 'ProWolf', settings: area },
+      { id: 'r7', host: 'ProWolf', settings: { ...area, name: '<b>Rossz</b>', maxPlayers: 9999 } },
+      null,
+      'szöveg',
+    ]);
+    const lobby = new Lobby(data, MATCH.countdown, ['ProWolf'], mem.store);
+    const guest = new FakeClient(lobby, 'Anna');
+    const rooms = guest.rooms();
+    expect(rooms.map((r) => r.id)).toEqual(['r5', 'r7']);
+    expect(rooms[1].settings.name).not.toContain('<');
+    expect(rooms[1].settings.maxPlayers).toBe(DEMO.maxPlayers);
+    // a teljesen hibás mentés sem állítja meg a szervert
+    const broken = { load: () => { throw new Error('sérült fájl'); }, save: () => undefined };
+    expect(() => new Lobby(data, MATCH.countdown, ['ProWolf'], broken)).not.toThrow();
   });
 });

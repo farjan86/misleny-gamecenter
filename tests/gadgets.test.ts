@@ -893,7 +893,8 @@ describe('különbségi pillanatkép', () => {
     const moving = game.raw[game.raw.length - 1];
     expect(moving.me).toBeDefined();
     const keys = Object.keys(moving.me!);
-    expect(keys).toContain('x');
+    // a tank felfelé néz induláskor: a függőleges helye változik
+    expect(keys).toContain('y');
     expect(keys).toContain('speed');
     for (const key of ['level', 'hp', 'weapon', 'turrets', 'kills', 'effects', 'alive']) expect(keys, key).not.toContain(key);
     expect(moving.P).toBeUndefined();
@@ -1063,8 +1064,8 @@ describe('lángszóró', () => {
 
 describe('választható alaptank (csak megjelenés)', () => {
   it('a választás a szerveren át eljut a többiekhez; a hibás érték az alaptankot adja; a roncs is ugyanaz a fajta', () => {
-    expect(TANK_LOOKS).toBe(3);
-    expect([cleanLook(2), cleanLook(3), cleanLook(-1), cleanLook(1.5), cleanLook('1'), cleanLook(undefined)]).toEqual([2, 0, 0, 0, 0, 0]);
+    expect(TANK_LOOKS).toBe(6);
+    expect([cleanLook(2), cleanLook(5), cleanLook(6), cleanLook(-1), cleanLook(1.5), cleanLook('1'), cleanLook(undefined)]).toEqual([2, 5, 0, 0, 0, 0, 0]);
     const lobby = new Lobby(data, 0);
     const connect = (name: string): { inbox: ServerMessage[]; send: (m: Parameters<typeof encode>[0]) => void } => {
       const inbox: ServerMessage[] = [];
@@ -1134,5 +1135,36 @@ describe('útmutató és játékmenet-leírás', () => {
     expect(text).toContain(`${LIMITS.codeTries} hibás próbálkozás`);
     expect(text).toContain(`${MATCH.players.min}–${MATCH.players.max}`);
     expect(text).toContain(`${MATCH.countdown} másodperces visszaszámlálás`);
+  });
+});
+
+describe('esős idő és füst', () => {
+  it('esőben négyszer annyi terepjáró lánctalp kerül a pályára; a füstfelhő 60 m sugarúra terjed', () => {
+    const count = (rain: boolean): number => {
+      const rnd = mulberry32(11);
+      let n = 0;
+      for (let i = 0; i < 20000; i++) if (pickKind(rnd, rain) === 'allTerrain') n++;
+      return n;
+    };
+    const dry = count(false);
+    const wet = count(true);
+    expect(wet / dry).toBeGreaterThan(3);
+    expect(wet / dry).toBeLessThan(4.5);
+    expect(smokeRadius(SMOKE.spread + 1)).toBeCloseTo(60, 5);
+  });
+});
+
+describe('csevegés billentyűi', () => {
+  it('a T (vagy az Enter) nyitja a csevegőt, a B a beszéd; a régi alapkiosztás magától átáll', () => {
+    expect(DEFAULT_KEYS.chat).toEqual(['KeyT', 'Enter']);
+    expect(DEFAULT_KEYS.talk).toEqual(['KeyB']);
+    // egyik billentyű sem foglalt más műveletre
+    const used = new Map<string, string>();
+    for (const [action, codes] of Object.entries(DEFAULT_KEYS)) {
+      for (const code of codes) {
+        expect(used.get(code), `${code}: ${action} és ${used.get(code)}`).toBeUndefined();
+        used.set(code, action);
+      }
+    }
   });
 });

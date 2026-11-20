@@ -24,7 +24,7 @@ import { GAME_MODE_NAME } from '../sim/match';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
 import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankRadius, tankSize, tankTier, type KillCause, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
-import { toggleFullscreen } from '../ui/fullscreen';
+import { isFullscreen, toggleFullscreen } from '../ui/fullscreen';
 import { RELEASE_KEYS } from '../ui/GameChat';
 import { CAUSE_LABEL, causeWith, deathText } from '../ui/killText';
 import { VERSION } from '../version';
@@ -92,7 +92,7 @@ const FLAME_COLORS: [number, number][] = [
 const FLAME_SPEED = 46;
 
 /** egy füstfelhő gomolyagjainak száma */
-const SMOKE_PUFFS = 16;
+const SMOKE_PUFFS = 26;
 /** Egy füstfelhő képei: a sűrű mag két rétege, a gomolyagok, a földre vetett árnyék; és a szervertől utoljára kapott hátralévő idő. */
 interface SmokeView {
   core: Phaser.GameObjects.Image[];
@@ -372,9 +372,12 @@ export class GameScene extends Phaser.Scene {
       pointer.updateWorldPoint(this.cameras.main);
       input.aim = Math.atan2(pointer.worldY - own.y * this.ppm, pointer.worldX - own.x * this.ppm);
     }
-    input.fire = this.held('fire') || pointer.leftButtonDown();
+    // az egérgomb csak akkor lő (illetve rak le), ha a játéktéren nyomták le: a menüre, a térképre,
+    // a gombokra kattintás nem; és amíg a menü nyitva van, az egér egyáltalán nem lő
+    const onField = pointer.downElement === this.game.canvas && !this.hud.menuOpen;
+    input.fire = this.held('fire') || (onField && pointer.leftButtonDown());
     input.boost = this.held('boost');
-    input.drop = this.dropLatch || pointer.rightButtonDown();
+    input.drop = this.dropLatch || (onField && pointer.rightButtonDown());
     input.deploy = this.deployLatch;
     input.mine = this.mineLatch;
     input.smoke = this.smokeLatch;
@@ -472,6 +475,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.ready && (this.ground.isReady(view) || performance.now() - this.startedAt > LOADING_TIMEOUT_MS)) {
       this.ready = true;
       this.hud.hideLoading();
+      if (this.bindings.fullscreen.length) this.hud.fullscreenTip(keysText(this.bindings, 'fullscreen'));
     }
     this.updateHud(view);
   }
@@ -513,7 +517,9 @@ export class GameScene extends Phaser.Scene {
     if (this.frame % 45 === 0) {
       const fps = Math.round(this.game.loop.actualFps);
       const ping = world.pingMs > 0 ? ` · ${world.pingMs} ms` : '';
-      const text = `v${VERSION} · ${fps} fps${ping}`;
+      // halvány tipp: melyik billentyűvel lesz teljes képernyő (teljes képernyőn nem kell)
+      const full = document.fullscreenEnabled && !isFullscreen() && this.bindings.fullscreen.length ? ` · ${keysText(this.bindings, 'fullscreen')}: teljes képernyő` : '';
+      const text = `v${VERSION} · ${fps} fps${ping}${full}`;
       if (text !== this.shownStats) {
         this.shownStats = text;
         const box = document.getElementById('version');

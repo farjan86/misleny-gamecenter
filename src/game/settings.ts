@@ -46,8 +46,8 @@ export const DEFAULT_KEYS: KeyBindings = {
   smoke: ['KeyC'],
   strike: ['KeyX'],
   cloak: ['ControlLeft', 'KeyV'],
-  chat: ['Enter'],
-  talk: ['KeyT'],
+  chat: ['KeyT', 'Enter'],
+  talk: ['KeyB'],
   scores: ['Tab'],
   map: ['KeyM'],
   fullscreen: ['KeyF'],
@@ -79,10 +79,15 @@ function sanitize(raw: Partial<Settings> | null): Settings {
     const list = given[action];
     if (Array.isArray(list)) keys[action] = list.filter((c): c is string => typeof c === 'string' && c.length > 0 && c.length < 24).slice(0, 2);
   }
+  // a régi alapkiosztás (Enter: üzenet, T: beszéd) helyett az új: T vagy Enter az üzenet, B a beszéd
+  if (JSON.stringify(given.chat) === '["Enter"]' && JSON.stringify(given.talk) === '["KeyT"]') {
+    keys.chat = [...DEFAULT_KEYS.chat];
+    keys.talk = [...DEFAULT_KEYS.talk];
+  }
   const name = typeof raw?.name === 'string' ? raw.name.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 18) : '';
   const token = typeof raw?.token === 'string' && raw.token.length < 200 ? raw.token : '';
   const volume = typeof raw?.volume === 'number' && Number.isFinite(raw.volume) ? Math.max(0, Math.min(100, Math.round(raw.volume))) : DEFAULT_VOLUME;
-  const look = typeof raw?.look === 'number' && Number.isInteger(raw.look) && raw.look >= 0 && raw.look < 3 ? raw.look : 0;
+  const look = typeof raw?.look === 'number' && Number.isInteger(raw.look) && raw.look >= 0 && raw.look < 6 ? raw.look : 0;
   return { name, token, keys, volume, look, lastMatch: raw?.lastMatch && typeof raw.lastMatch === 'object' ? raw.lastMatch : null };
 }
 

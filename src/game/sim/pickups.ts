@@ -123,7 +123,8 @@ export const BOOST = {
   rapidCooldown: 0.4,
   tripleSpread: 0.14,
   heavySpeed: 1.15,
-  heavyLife: 1.4,
+  /** a gyorsabb lövedék rövidebb ideig él: a lőtávja így is legfeljebb SHOT_RANGE (world.ts) */
+  heavyLife: 0.88,
   ricochetBounces: 2,
 } as const;
 
@@ -132,14 +133,15 @@ export const ROCKET = {
   startSpeed: 35,
   accel: 150,
   maxSpeed: 120,
-  life: 2.0,
+  /** kb. 160 m-t tesz meg (SHOT_RANGE, world.ts) */
+  life: 1.53,
   /** a tűzgyorsaság szorzója: a rakéta lassabban tölt */
   cooldown: 1.5,
 } as const;
 
 export const LASER = {
   /** lőtáv méterben */
-  range: 130,
+  range: 160,
   cooldown: 0.75,
 } as const;
 
@@ -178,11 +180,15 @@ export function mulberry32(seed: number): () => number {
 
 const TOTAL_WEIGHT = PICKUP_KINDS.reduce((sum, kind) => sum + PICKUPS[kind].weight, 0);
 
-/** Véletlen tárgytípus a súlyok szerint. */
-export function pickKind(rnd: () => number): PickupKind {
-  let roll = rnd() * TOTAL_WEIGHT;
+/** esőben a terepjáró lánctalpból (a sáros zöld területen is gyorsan halad vele a tank) ennyiszer több kerül a pályára */
+export const RAIN_ALL_TERRAIN = 4;
+
+/** Véletlen tárgytípus a súlyok szerint; esőben több a terepjáró lánctalp. */
+export function pickKind(rnd: () => number, rain = false): PickupKind {
+  const weight = (kind: PickupKind): number => PICKUPS[kind].weight * (rain && kind === 'allTerrain' ? RAIN_ALL_TERRAIN : 1);
+  let roll = rnd() * (rain ? TOTAL_WEIGHT + PICKUPS.allTerrain.weight * (RAIN_ALL_TERRAIN - 1) : TOTAL_WEIGHT);
   for (const kind of PICKUP_KINDS) {
-    roll -= PICKUPS[kind].weight;
+    roll -= weight(kind);
     if (roll < 0) return kind;
   }
   return PICKUP_KINDS[0];

@@ -33,12 +33,12 @@ export interface MineState {
 
 /** Füst: néhány másodpercre eltakar egy területet; a botok és az ágyúk nem látnak be. */
 export const SMOKE = {
-  /** a szétterjedt felhő sugara (m) */
-  radius: 30,
+  /** a szétterjedt felhő sugara (m): egy egész utcarészletet beborít */
+  radius: 60,
   /** a felhő ekkora résszel indul, és `spread` másodperc alatt terjed szét a teljes méretére */
-  startRatio: 0.3,
-  spread: 4.5,
-  life: 16,
+  startRatio: 0.2,
+  spread: 7,
+  life: 20,
   /** a szél sodrása (m/s): a felhő lassan elvonul onnan, ahol kieresztették */
   windX: 0.6,
   windY: -0.25,
