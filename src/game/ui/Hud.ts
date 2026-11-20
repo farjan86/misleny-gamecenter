@@ -119,7 +119,7 @@ export interface HudFrame {
 }
 
 export interface MapMark {
-  kind: 'revenge' | 'super' | 'superSoon' | 'strike';
+  kind: 'revenge' | 'super' | 'superSoon' | 'strike' | 'workshop';
   x: number;
   y: number;
 }
@@ -148,6 +148,10 @@ export class Hud {
   private miniAngle = NaN;
   private miniDirty = true;
   private readonly toastBox = el<HTMLDivElement>('hud-toast');
+  private readonly menuButton = el<HTMLDivElement>('hud-menu-button');
+  private readonly menuList = el<HTMLDivElement>('hud-menu-list');
+  private readonly menuConfirm = el<HTMLDivElement>('hud-menu-confirm');
+  private leave: () => void = () => undefined;
   private readonly feedBox = el<HTMLDivElement>('hud-feed');
   private mapClick: ((x: number, y: number) => void) | null = null;
   private aiming = false;
@@ -190,7 +194,15 @@ export class Hud {
 
     this.streets = streetLabels(map);
     el<HTMLDivElement>('hud').classList.remove('hidden');
-    el<HTMLDivElement>('hud-info-button').onclick = () => this.toggleInfo();
+    // lenyitható menü: billentyűk és információ, kilépés (megerősítéssel)
+    this.menuButton.onclick = () => this.toggleMenu();
+    el<HTMLSpanElement>('hud-menu-keys').onclick = () => {
+      this.toggleMenu(false);
+      if (!this.infoOpen) this.toggleInfo();
+    };
+    el<HTMLSpanElement>('hud-menu-leave').onclick = () => this.menuConfirm.classList.remove('hidden');
+    el<HTMLSpanElement>('hud-menu-no').onclick = () => this.menuConfirm.classList.add('hidden');
+    el<HTMLSpanElement>('hud-menu-yes').onclick = () => this.leave();
     el<HTMLSpanElement>('hud-info-close').onclick = () => this.toggleInfo();
     // nagy térképen (ha van kérhető csapás) a kattintás helye a pályán
     this.mini.addEventListener('click', (ev) => {
@@ -328,9 +340,21 @@ export class Hud {
     );
   }
 
-  /** A „Kilépés a meccsből" gomb. */
+  /** A kilépés gombjai: a menüben (megerősítéssel) és az információs panelen. */
   onLeave(callback: () => void): void {
+    this.leave = callback;
     el<HTMLSpanElement>('hud-info-leave').onclick = callback;
+  }
+
+  get menuOpen(): boolean {
+    return !this.menuList.classList.contains('hidden');
+  }
+
+  /** A bal felső menü le- és felnyitása (`open` nélkül: váltás). Felnyitáskor a megerősítő kérdés eltűnik. */
+  toggleMenu(open = !this.menuOpen): void {
+    this.menuList.classList.toggle('hidden', !open);
+    this.menuButton.classList.toggle('open', open);
+    this.menuConfirm.classList.add('hidden');
   }
 
   get infoOpen(): boolean {
@@ -476,7 +500,16 @@ export class Hud {
     for (const mark of f.marks) {
       const mx = mark.x * s;
       const my = mark.y * s;
-      if (mark.kind === 'strike') {
+      if (mark.kind === 'workshop') {
+        // javítóműhely: zöld négyzet fehér kereszttel
+        ctx.fillStyle = '#101418';
+        ctx.fillRect(mx - 8, my - 8, 16, 16);
+        ctx.fillStyle = '#2ea050';
+        ctx.fillRect(mx - 6.5, my - 6.5, 13, 13);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(mx - 1.5, my - 5, 3, 10);
+        ctx.fillRect(mx - 5, my - 1.5, 10, 3);
+      } else if (mark.kind === 'strike') {
         ctx.strokeStyle = blink ? '#ff3a2a' : '#ffd84a';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -505,7 +538,8 @@ export class Hud {
     // ellenséges tankok: piros pont (ami füstben van, az a térképen sem látszik)
     const hidden = (t: TankState): boolean => f.smokes.some((k) => Math.hypot(t.x - k.x, t.y - k.y) < SMOKE.radius);
     for (const t of f.tanks) {
-      if (!t.alive || t.id === f.focusId || (f.smokes.length > 0 && hidden(t))) continue;
+      // az álcázott tank a térképen sem látszik
+      if (!t.alive || t.id === f.focusId || t.cloak > 0 || (f.smokes.length > 0 && hidden(t))) continue;
       ctx.fillStyle = '#101418';
       ctx.fillRect(t.x * s - 4, t.y * s - 4, 8, 8);
       // a botok pirosak, a többi játékos narancssárga (nagyobb ponttal)

@@ -107,5 +107,58 @@ export const SUPER = {
   power: 3,
 } as const;
 
+/**
+ * Álcázás: minden tank alapképessége, tárgy nem kell hozzá. Nem láthatatlanság:
+ * a tank halvány, vibráló sziluett lesz – aki figyel, észreveszi (a lánctalpa
+ * nyoma is megmarad) –, de nincs fölötte életerősáv és név, és a térképen sem
+ * látszik. A botok és a telepített ágyúk csak közelről veszik észre.
+ */
+export const CLOAK = {
+  /** ennyi ideig tart (mp); a lövés azonnal megszünteti */
+  duration: 10,
+  /** a bekapcsolástól ennyi idő múlva használható újra (mp) */
+  cooldown: 60,
+  /** a botok és a telepített ágyúk csak ennyire közelről veszik észre az álcázott tankot (m) */
+  botSight: 20,
+} as const;
+
+/**
+ * Javítóműhely: néhány áll a pályán, véletlen helyen. Nyitott csarnok – be lehet
+ * hajtani, fala nincs –, és amelyik tank benne áll, annak az életereje
+ * folyamatosan töltődik, akár teljesen.
+ */
+export const WORKSHOP = {
+  /** a csarnok alapja (m): a legnagyobb tank (kb. 8 m átmérő) is kényelmesen elfér */
+  width: 17,
+  height: 14,
+  /** a tank közepe ezen a körön belül számít bent lévőnek (m) */
+  radius: 6.5,
+  /** másodpercenként a legnagyobb életerő ekkora részét adja vissza (kb. 12 mp alatt tölt fel teljesen) */
+  rate: 0.08,
+  /** darab négyzetkilométerenként, a két határ között; két műhely legalább ennyire van egymástól (m) */
+  perKm2: 4,
+  min: 1,
+  max: 12,
+  gap: 90,
+} as const;
+
+export interface WorkshopState {
+  id: number;
+  x: number;
+  y: number;
+}
+
+/** Kiegészítő géppuska (tárgy): a tank oldalán ül, és magától lő a legközelebbi ellenségre. */
+export const MG = {
+  /** lőtáv (m) és két lövés közötti idő (mp) */
+  range: 40,
+  interval: 0.13,
+  /** sebzés lövésenként (a tank szintje növeli) */
+  damage: 2.5,
+  /** a géppuska ennyivel ül a tank közepétől jobbra (a tank méretének arányában, m), és ilyen hosszú a csöve */
+  side: 1.65,
+  barrel: 2.1,
+} as const;
+
 /** A robbanás fajtája (a hangjához és a látványához). */
 export type BoomKind = 'mine' | 'barrel' | 'shell';

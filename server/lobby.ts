@@ -6,10 +6,13 @@
 import { GameMap } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
 import {
+  CHAT,
+  cleanChat,
   cleanCode,
   encode,
   packBarrel,
   packBullet,
+  packMe,
   packMine,
   packOil,
   packPickup,
@@ -20,13 +23,14 @@ import {
   packWreck,
   PROTOCOL_VERSION,
   ROOM_CODE,
+  roundJson,
   SNAPSHOT_EVERY,
   unpackInput,
+  VOICE,
   type ClientMessage,
   type RoomInfo,
   type RoomStatus,
   type ServerMessage,
-  type Snapshot,
 } from '../src/game/net/protocol';
 import { MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings } from '../src/game/sim/match';
 import { NO_INPUT, SIM_DT, type SimEvent, type TankInput, type TankState } from '../src/game/sim/world';
@@ -44,8 +48,12 @@ export const LIMITS = {
   /** a pillanatképbe ekkora körzetből kerülnek be a tankok, illetve a többi elem (m) */
   tankRange: 380,
   nearRange: 185,
+  /** a közeli körzeten kívüli botok (ők csak a kis térképen látszanak) csak minden ennyiedik pillanatképben frissülnek */
+  farEvery: 4,
   /** a csak látványt adó események ennél messzebbről nem mennek ki (m) */
   eventRange: 240,
+  /** a bejelentkezettek listájában legfeljebb ennyi név megy ki */
+  onlineList: 80,
   /** ennyi hibás belépőkód után a kapcsolatnak várnia kell (ms) */
   codeTries: 5,
   codeWait: 30000,
@@ -60,6 +68,14 @@ class Client {
   readonly queue: { s: number; input: TankInput }[] = [];
   last: TankInput = NO_INPUT;
   ack = 0;
+  /** amit a kliens a pillanatképekből legutóbb megkapott, mezőnként (JSON-szövegként): csak a változás megy ki */
+  readonly sent = new Map<string, string>();
+  /** az utóbbi üzenetek időpontjai (az elárasztás ellen) */
+  readonly chatTimes: number[] = [];
+  /** a hangdarabok számlálója az aktuális másodpercben, és az utolsó továbbadott darab ideje */
+  voiceSecond = 0;
+  voiceCount = 0;
+  voiceAt = -Infinity;
   /** a hibás belépőkódok száma és az utolsó időpontja (a találgatás lassítására) */
   badCodes = 0;
   badCodeAt = 0;
@@ -104,7 +120,7 @@ class Room {
 }
 
 /** A csak látványt adó események: ezek csak a közelben lévőknek mennek ki. */
-const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'ram', 'structure', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown', 'mine', 'smoke', 'strike', 'boom', 'streak']);
+const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'ram', 'structure', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown', 'mine', 'smoke', 'strike', 'boom', 'streak', 'cloak', 'mg']);
 
 function eventPosition(ev: SimEvent): { x: number; y: number } | null {
   if (ev.type === 'laser') return { x: ev.x1, y: ev.y1 };
@@ -166,6 +182,8 @@ export class Lobby {
       client.ready = true;
       client.send({ t: 'welcome', id: client.id, map: { width: this.width, height: this.height } });
       client.send({ t: 'rooms', rooms: this.roomList() });
+      if (this.history.length) client.send({ t: 'chatHistory', lines: this.history });
+      this.broadcastOnline();
       return;
     }
     if (!client.ready) return;
@@ -182,6 +200,12 @@ export class Lobby {
       case 'leave':
         this.leave(client, 'Kiléptél a játékból.');
         break;
+      case 'chat':
+        this.chat(client, msg.text);
+        break;
+      case 'voice':
+        this.voice(client, msg.d);
+        break;
       case 'input': {
         const input = unpackInput(msg.i);
         if (!input || !client.room || client.room.status !== 'playing') break;
@@ -193,6 +217,53 @@ export class Lobby {
     }
   }
 
+  /** az előszoba utolsó üzenetei: aki belép, megkapja */
+  private readonly history: { from: string; text: string }[] = [];
+
+  /** Szöveges üzenet: az előszobában mindenki megkapja, aki a listát nézi; szobában és meccsen a szobatársak. */
+  private chat(client: Client, raw: unknown): void {
+    const text = cleanChat(raw);
+    if (!text) return;
+    // elárasztás ellen: rövid időn belül csak néhány üzenet megy át
+    const times = client.chatTimes;
+    while (times.length && this.now - times[0] > CHAT.window) times.shift();
+    if (times.length >= CHAT.burst) {
+      client.send({ t: 'error', message: 'Túl gyorsan írsz – várj pár másodpercet.' });
+      return;
+    }
+    times.push(this.now);
+    const room = client.room;
+    const scope = room ? 'room' : 'lobby';
+    const targets = room ? room.clients : [...this.clients.values()].filter((c) => c.ready && !c.room);
+    for (const target of targets) target.send({ t: 'chat', from: client.name, text, scope, ...(target === client ? { me: true } : {}) });
+    if (!room) {
+      this.history.push({ from: client.name, text });
+      if (this.history.length > CHAT.history) this.history.shift();
+    }
+  }
+
+  /** Hangdarab továbbadása a szobatársaknak (a küldőnek nem megy vissza). */
+  private voice(client: Client, raw: unknown): void {
+    const room = client.room;
+    if (!room || typeof raw !== 'string' || raw.length === 0 || raw.length > VOICE.maxChars || !/^[A-Za-z0-9+/]+=*$/.test(raw)) return;
+    // darabszám-korlát másodpercenként
+    const second = Math.floor(this.now / 1000);
+    if (second !== client.voiceSecond) {
+      client.voiceSecond = second;
+      client.voiceCount = 0;
+    }
+    if (++client.voiceCount > VOICE.maxPerSecond) return;
+    // egyszerre csak néhányan beszélhetnek: aki később kezdi, annak a hangja addig nem megy át
+    if (this.now - client.voiceAt > VOICE.quiet) {
+      let speaking = 0;
+      for (const other of room.clients) if (other !== client && this.now - other.voiceAt <= VOICE.quiet) speaking++;
+      if (speaking >= VOICE.speakers) return;
+    }
+    client.voiceAt = this.now;
+    const text = encode({ t: 'voice', from: client.name, d: raw });
+    for (const other of room.clients) if (other !== client) other.link.send(text);
+  }
+
   private roomList(): RoomInfo[] {
     return [...this.rooms.values()].map((room) => room.info());
   }
@@ -201,6 +272,21 @@ export class Lobby {
   private broadcastRooms(): void {
     const text = encode({ t: 'rooms', rooms: this.roomList() });
     for (const client of this.clients.values()) if (client.ready && !client.room) client.link.send(text);
+    // ilyenkor az is változhatott, hogy ki hol van
+    this.broadcastOnline();
+  }
+
+  /**
+   * A bejelentkezett játékosok listája (név és hogy hol van) mindenkinek, aki a
+   * menükben van: az előszobában és a várókban. A meccsen lévők nem kapják (ott nem látszik).
+   */
+  private broadcastOnline(): void {
+    const players = [...this.clients.values()]
+      .filter((c) => c.ready)
+      .slice(0, LIMITS.onlineList)
+      .map((c) => ({ name: c.name, where: !c.room ? ('lobby' as const) : c.room.status === 'playing' ? ('game' as const) : ('room' as const) }));
+    const text = encode({ t: 'online', players });
+    for (const client of this.clients.values()) if (client.ready && client.room?.status !== 'playing') client.link.send(text);
   }
 
   private sendRoom(room: Room, now: number): void {
@@ -305,6 +391,7 @@ export class Lobby {
   private disconnect(client: Client): void {
     this.clients.delete(client.id);
     this.leave(client, '');
+    this.broadcastOnline();
   }
 
   private start(room: Room, now: number): void {
@@ -325,11 +412,14 @@ export class Lobby {
     room.events = [];
     const info = room.info();
     const players = room.match.players.map((p) => ({ id: p.id, name: p.name, tank: p.tankId }));
+    const workshops = room.match.world.workshops.map((w) => [Math.round(w.x * 10) / 10, Math.round(w.y * 10) / 10]);
     for (const client of room.clients) {
       client.queue.length = 0;
       client.last = NO_INPUT;
       client.ack = 0;
-      client.send({ t: 'start', room: info, tank: room.match.player(client.id)?.tankId ?? 0, players });
+      // új meccs: a kliens még semmit nem kapott meg, az első pillanatkép teljes
+      client.sent.clear();
+      client.send({ t: 'start', room: info, tank: room.match.player(client.id)?.tankId ?? 0, players, workshops });
     }
     this.broadcastRooms();
   }
@@ -407,32 +497,63 @@ export class Lobby {
     });
     if (events.length) client.send({ t: 'ev', e: events });
 
+    // A pillanatkép szövege mezőnként áll össze: minden mező csak akkor kerül bele,
+    // ha más, mint amit ez a kliens legutóbb kapott (a tankok mindig mennek).
+    const sent = client.sent;
+    const parts: string[] = ['"t":"snap"', `"k":${world.tick}`, `"a":${client.ack}`, `"v":${view?.id ?? 0}`, `"r":${Math.ceil(match.timeLeft)}`];
+    const put = (key: string, value: unknown): void => {
+      const text = roundJson(value);
+      if (sent.get(key) === text) return;
+      sent.set(key, text);
+      parts.push(`"${key}":${text}`);
+    };
+
+    // a saját tank: csak a megváltozott mezők
+    if (!own) put('me', null);
+    else {
+      sent.delete('me');
+      const state = packMe(own) as Record<string, unknown>;
+      let delta = '';
+      for (const key in state) {
+        const text = roundJson(state[key]);
+        const id = `me.${key}`;
+        if (sent.get(id) === text) continue;
+        sent.set(id, text);
+        delta += `${delta ? ',' : ''}"${key}":${text}`;
+      }
+      if (delta) parts.push(`"me":{${delta}}`);
+    }
+
+    // a közeli tankok és minden játékos (ők a térképen mindig látszanak) minden pillanatképben;
+    // a távoli botok csak a kis térképen látszanak: ritkábban frissülnek
+    const far = (world.tick / SNAPSHOT_EVERY) % LIMITS.farEvery === 0;
+    const tanks: number[][] = [];
+    for (const t of world.tanks) {
+      // a saját tank állapota külön megy (me): a listában nem ismétlődik
+      if (t === own) continue;
+      if (!t.bot || near(t, LIMITS.nearRange) || (far && near(t, LIMITS.tankRange))) tanks.push(packTank(t));
+    }
+    parts.push(`"T":${roundJson(tanks)}`);
+
     const radar = own !== null && own.effects.radar > 0;
-    const snap: Snapshot = {
-      t: 'snap',
-      k: world.tick,
-      a: client.ack,
-      me: own,
-      v: view?.id ?? 0,
-      // a közeli tankok, és minden játékos (ők a térképen mindig látszanak)
-      T: world.tanks.filter((t) => !t.bot || near(t, LIMITS.tankRange)).map(packTank),
-      B: world.bullets.filter((b) => near(b, LIMITS.nearRange)).map(packBullet),
-      // a szupertárgy mindenkinek látszik a térképen, bármilyen messze van
-      P: world.pickups.filter((p) => p.kind === 'super' || near(p, radar ? LIMITS.tankRange : LIMITS.nearRange)).map(packPickup),
-      O: world.oils.filter((o) => near(o, LIMITS.nearRange)).map(packOil),
-      W: world.wrecks.filter((w) => near(w, LIMITS.nearRange)).map(packWreck),
-      V: world.vehicles.filter((v) => near(v, LIMITS.nearRange)).map(packVehicle),
-      U: world.turrets.filter((t) => near(t, LIMITS.nearRange)).map(packTurret),
-      M: world.mines.filter((m) => near(m, LIMITS.nearRange)).map(packMine),
-      K: world.smokes.filter((s) => near(s, LIMITS.nearRange)).map(packSmoke),
-      G: world.barrels.filter((b) => near(b, LIMITS.nearRange)).map(packBarrel),
-      S: match.players.map((p) => {
+    put('B', world.bullets.filter((b) => near(b, LIMITS.nearRange)).map(packBullet));
+    // a szupertárgy mindenkinek látszik a térképen, bármilyen messze van
+    put('P', world.pickups.filter((p) => p.kind === 'super' || near(p, radar ? LIMITS.tankRange : LIMITS.nearRange)).map(packPickup));
+    put('O', world.oils.filter((o) => near(o, LIMITS.nearRange)).map(packOil));
+    put('W', world.wrecks.filter((w) => near(w, LIMITS.nearRange)).map(packWreck));
+    put('V', world.vehicles.filter((v) => near(v, LIMITS.nearRange)).map(packVehicle));
+    put('U', world.turrets.filter((t) => near(t, LIMITS.nearRange)).map(packTurret));
+    put('M', world.mines.filter((m) => near(m, LIMITS.nearRange)).map(packMine));
+    put('K', world.smokes.filter((s) => near(s, LIMITS.nearRange)).map(packSmoke));
+    put('G', world.barrels.filter((b) => near(b, LIMITS.nearRange)).map(packBarrel));
+    put(
+      'S',
+      match.players.map((p) => {
         const tank = world.tank(p.tankId);
         return [p.tankId, tank ? tank.kills : 0, tank ? tank.deaths : 0, p.gone ? 1 : 0];
       }),
-      r: Math.ceil(match.timeLeft),
-    };
-    client.send(snap);
+    );
+    client.link.send(`{${parts.join(',')}}`);
   }
 
   private finish(room: Room): void {

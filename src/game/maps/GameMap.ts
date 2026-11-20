@@ -477,6 +477,41 @@ export class GameMap implements Terrain {
   }
 
   /**
+   * Véletlen hely egy javítóműhelynek: egy út közelében, de nem az úttesten,
+   * ahol `radius` sugarú körben nincs fal (épület, kerítés), a játéktéren belül.
+   * null, ha a kisorsolt hely nem jó.
+   */
+  workshopSpot(rnd: () => number, radius: number): { x: number; y: number } | null {
+    const area = this.bounds ?? { minX: 0, minY: 0, maxX: this.width, maxY: this.height };
+    let x: number;
+    let y: number;
+    const road = this.pickupSpot(rnd);
+    if (road && rnd() < 0.85) {
+      // egy út mellé, attól néhány méterre
+      const angle = rnd() * Math.PI * 2;
+      const dist = radius + 4 + rnd() * 14;
+      x = road.x + Math.cos(angle) * dist;
+      y = road.y + Math.sin(angle) * dist;
+    } else {
+      x = area.minX + rnd() * (area.maxX - area.minX);
+      y = area.minY + rnd() * (area.maxY - area.minY);
+    }
+    const margin = radius + 2;
+    if (x < area.minX + margin || y < area.minY + margin || x > area.maxX - margin || y > area.maxY - margin) return null;
+    if (this.walls.resolveCircle(x, y, radius).hit) return null;
+    // sem a közepe, sem a sarkai nem eshetnek úttestre vagy épületbe
+    // (5 × 5 pontos rács a csarnok alapján) – és fa lombja alá sem, mert az eltakarná
+    const grid = [-0.72, -0.36, 0, 0.36, 0.72];
+    for (const [ox, oy] of grid.flatMap((gx) => grid.map((gy) => [gx, gy]))) {
+      const px = x + ox * radius;
+      const py = y + oy * radius;
+      if (this.speedFactor(px, py) >= 1 || this.underCanopy(px, py)) return null;
+      for (const n of this.buildingIndex.query(px, py, px, py)) if (pointInPolygon(px, py, this.data.buildings[n].pts)) return null;
+    }
+    return { x, y };
+  }
+
+  /**
    * Véletlen hely egy ház fala mellett, a játéktéren belül (gázpalacknak,
    * üzemanyaghordónak): a fal külső oldalán, nem úttesten. null, ha a kisorsolt
    * hely nem használható.

@@ -19,13 +19,20 @@ import { RoadLabelLayer } from '../maps/RoadLabelLayer';
 import type { ClientWorld } from '../net/ClientWorld';
 import { BASE_PPM } from '../quality';
 import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
-import { BARREL, SMOKE, STRIKE } from '../sim/gadgets';
+import { BARREL, CLOAK, SMOKE, STRIKE, WORKSHOP } from '../sim/gadgets';
+import { GAME_MODE_NAME } from '../sim/match';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
 import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankSize, tankTier, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { toggleFullscreen } from '../ui/fullscreen';
+import { RELEASE_KEYS } from '../ui/GameChat';
+import { VERSION } from '../version';
 import { Hud, type HudFrame, type LoadoutItem, type MapMark } from '../ui/Hud';
 
+/** A billentyűvel használható tárgyak és a hozzájuk tartozó művelet (a tank sávja a billentyűt is kiírja). */
+const USE_KEY: Partial<Record<PickupKind, Action>> = { oil: 'oil', turret: 'deploy', mine: 'mine', smoke: 'smoke' };
+/** Késő pillanatképnél a többi tank mozgása legfeljebb ennyivel fut túl az utolsó ismert helyén (1 = nem fut túl). */
+const NET_OVERSHOOT = 1.35;
 /** Aki kilőtt, az újraéledés után ennyi ideig jelölve látszik (mp). */
 const REVENGE_SECONDS = 25;
 /** Ha a térkép ennyi idő alatt sem készül el, a töltőképernyő akkor is eltűnik. */
@@ -93,6 +100,12 @@ export class GameScene extends Phaser.Scene {
   /** felröppenő sebzésszámok és a találat irányát jelző ívek (újrahasznált objektumok) */
   private readonly numberPool: Phaser.GameObjects.Text[] = [];
   private readonly arcPool: Phaser.GameObjects.Image[] = [];
+  private readonly tracerPool: Phaser.GameObjects.Image[] = [];
+  /** a géppuskatalálatok jelzésének ritkítása (ne szóljon és ne villogjon másodpercenként nyolcszor) */
+  private lastPing = 0;
+  private lastLightArc = 0;
+  /** a kilövés üzenetéhez fűzött megjegyzés a szintvesztésről */
+  private lossNote = '';
   /** bosszú: aki kilőtt – az újraéledés után egy ideig jelölve látszik (live: már újraéledtem) */
   private revenge: { id: number; until: number; live: boolean } | null = null;
   private revengeArrow: Phaser.GameObjects.Image | null = null;
@@ -112,7 +125,7 @@ export class GameScene extends Phaser.Scene {
   private readonly beamPool: Phaser.GameObjects.Image[] = [];
   private readonly smokePool: Phaser.GameObjects.Image[] = [];
   // képkockánként újrahasznált objektumok (ne keletkezzen fölösleges szemét)
-  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false, mine: false, smoke: false, strike: null };
+  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false, mine: false, smoke: false, strike: null, cloak: false };
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
@@ -129,11 +142,16 @@ export class GameScene extends Phaser.Scene {
   private mineLatch = false;
   private smokeLatch = false;
   private strikeLatch: { x: number; y: number } | null = null;
+  private cloakLatch = false;
   /** a saját szintlépés szövege: a kilövés üzenetéhez fűzve jelenik meg (a két esemény együtt érkezik) */
   private levelNote = '';
   /** az előző képkocka állapota a hangokhoz: gyorsított-e a tank, kevés volt-e az életereje, hány másodpercet mutatott az óra */
   private wasBoosting = false;
   private wasLow = false;
+  /** a saját tank éppen műhelyben áll-e (a belépés üzenetéhez), és a javítás hangjának ütemezése */
+  private inShop = false;
+  private lastWrench = 0;
+  private readonly shopLights: Phaser.GameObjects.Image[] = [];
   private lastSecond = -1;
   private ready = false;
   private startedAt = 0;
@@ -143,6 +161,7 @@ export class GameScene extends Phaser.Scene {
   /** a legutóbb kiírt hátralévő idő (mp) és állás – csak változáskor frissül a kijelző */
   private shownClock = -1;
   private shownScore = '';
+  private shownStats = '';
   private readonly listeners: [EventTarget, string, EventListener][] = [];
   /** a tárgyak ikonjai képként (adat-URL), a felső sáv számára */
   private readonly iconUrls = new Map<PickupKind, string>();
@@ -189,11 +208,24 @@ export class GameScene extends Phaser.Scene {
       if (this.requestStrike(x, y)) this.hud.toggleMap();
     });
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
+    this.buildWorkshops();
 
     // A billentyűket közvetlenül a böngésző eseményeiből követjük, a beállított kiosztás szerint.
     this.listen(window, 'keydown', ((ev: KeyboardEvent) => {
-      if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      // gépelés közben (üzenet írása) a billentyűk a beviteli mezőé
+      if (ev.target instanceof HTMLInputElement) return;
+      if (ev.altKey || ev.metaKey) return;
+      // Esc: a menü (billentyűk, kilépés); ha más panel van nyitva, előbb azt zárja be
+      if (ev.code === 'Escape' && !ev.repeat) {
+        if (this.hud.infoOpen) this.hud.toggleInfo();
+        else if (this.hud.mapOpen) this.hud.toggleMap();
+        else this.hud.toggleMenu();
+        return;
+      }
       const action = this.actionOf(ev.code);
+      // Ctrl-lal együtt csak a játék saját billentyűit kezeljük (a Ctrl maga is lehet az);
+      // a többi a böngészőé marad (pl. Ctrl+F5: újratöltés)
+      if (ev.ctrlKey && !action) return;
       if (action) ev.preventDefault();
       this.down.add(ev.code);
       if (ev.repeat) return;
@@ -206,6 +238,7 @@ export class GameScene extends Phaser.Scene {
       else if (action === 'mine') this.mineLatch = true;
       else if (action === 'smoke') this.smokeLatch = true;
       else if (action === 'strike') this.requestStrike();
+      else if (action === 'cloak') this.requestCloak();
       else if (action === 'scores') this.hud.holdScores(true);
     }) as EventListener);
     this.listen(window, 'keyup', ((ev: KeyboardEvent) => {
@@ -217,6 +250,8 @@ export class GameScene extends Phaser.Scene {
       this.down.clear();
       this.hud.holdScores(false);
     });
+    // üzenetírás kezdetekor a lenyomva tartott gombok elengednek, hogy a tank ne menjen tovább magától
+    this.listen(window, RELEASE_KEYS, () => this.down.clear());
     this.input.on('pointerdown', () => this.sfx.unlock());
     this.input.on('pointermove', () => {
       this.pointerMoved = true;
@@ -293,6 +328,7 @@ export class GameScene extends Phaser.Scene {
     input.mine = this.mineLatch;
     input.smoke = this.smokeLatch;
     input.strike = this.strikeLatch;
+    input.cloak = this.cloakLatch;
     return input;
   }
 
@@ -329,10 +365,13 @@ export class GameScene extends Phaser.Scene {
       this.mineLatch = false;
       this.smokeLatch = false;
       this.strikeLatch = null;
+      this.cloakLatch = false;
       this.accumulator -= SIM_DT;
     }
 
-    const netAlpha = Math.max(0, Math.min(1, (now - world.snapAt) / world.snapInterval));
+    // ha a következő pillanatkép késik (hálózati egyenetlenség), a többi tank rövid ideig a korábbi
+    // irányában halad tovább, ahelyett hogy megállna és aztán ugrana
+    const netAlpha = Math.max(0, Math.min(NET_OVERSHOOT, (now - world.snapAt) / world.snapInterval));
     this.syncTanks(this.accumulator / SIM_DT, netAlpha, seconds, this.view);
     this.syncBullets((now - world.snapAt) / 1000);
     if (world.listsChanged) this.syncOils();
@@ -346,6 +385,7 @@ export class GameScene extends Phaser.Scene {
     const boosting = !!own && own.alive && own.boosting;
     if (boosting && !this.wasBoosting) this.sfx.boost();
     this.wasBoosting = boosting;
+    this.updateWorkshop(own, seconds);
     const low = !!own && own.alive && own.hp / tankMaxHp(own) <= 0.25;
     if (low && !this.wasLow) this.sfx.lowHp();
     this.wasLow = low;
@@ -412,6 +452,20 @@ export class GameScene extends Phaser.Scene {
     if (own) this.tankViews.get(own.id)?.setOwnStatus(own.heat / BOOSTER.duration, own.overheated, -1);
 
     if (this.frame % 6 === 0) this.hud.setLoadout(this.loadoutOf(own));
+    // a sarokban a verzió mellett a képkockaszám és a szerver válaszideje: ebből látszik, ha a gép vagy a hálózat lassú
+    if (this.frame % 45 === 0) {
+      const fps = Math.round(this.game.loop.actualFps);
+      const ping = world.pingMs > 0 ? ` · ${world.pingMs} ms` : '';
+      const text = `v${VERSION} · ${fps} fps${ping}`;
+      if (text !== this.shownStats) {
+        this.shownStats = text;
+        const box = document.getElementById('version');
+        if (box) {
+          box.textContent = text;
+          box.classList.toggle('slow', fps < 45 || world.pingMs > 150);
+        }
+      }
+    }
 
     // visszaszámláló óra és az állás
     const score = this.scoreText();
@@ -484,11 +538,17 @@ export class GameScene extends Phaser.Scene {
     const items = this.loadout;
     items.length = 0;
     if (!own) return items;
+    // az álcázás állapota mindig látszik: éppen tart, készen áll, vagy mennyi idő múlva használható
+    const cloak = own.cloak > 0 ? `${Math.ceil(own.cloak)} mp` : own.cloakReady > 0 ? `${Math.ceil(own.cloakReady)} mp múlva` : 'kész';
     // a sáv elején mindig a tank szintje áll (ikon nélkül)
-    items.push({ icon: '', label: `★ ${own.level}. szint · ${TIER_NAMES[tankTier(own.level)]}`, count: own.level >= LEVEL.max ? 'max' : '' });
+    items.push({ icon: '', label: `★ ${own.level}. szint · ${TIER_NAMES[tankTier(own.level)]}`, count: own.level >= LEVEL.max ? 'max' : own.botKills > 0 ? `bot ${own.botKills}/${LEVEL.botKills}` : '' });
     if (!own.alive) return items;
+    items.push({ icon: '', label: `◈ Álcázás (${keysText(this.bindings, 'cloak')})`, count: cloak });
     const add = (kind: PickupKind, count = ''): void => {
-      items.push({ icon: this.iconUrl(kind), label: PICKUP_STYLE[kind].label, count });
+      // amit billentyűvel lehet használni, annál a (beállított) billentyű is ott áll zárójelben
+      const action = USE_KEY[kind];
+      const key = action ? ` (${keysText(this.bindings, action)})` : '';
+      items.push({ icon: this.iconUrl(kind), label: PICKUP_STYLE[kind].label + key, count });
     };
     if (own.weapon) add(own.weapon);
     if (own.ricochet) add('ricochet');
@@ -498,7 +558,7 @@ export class GameScene extends Phaser.Scene {
     if (own.turrets > 0) add('turret', `×${own.turrets}`);
     if (own.mines > 0) add('mine', `×${own.mines}`);
     if (own.smokes > 0) add('smoke', `×${own.smokes}`);
-    if (own.strikes > 0) items.push({ icon: '', label: `✦ Tüzérség (${keysText(this.bindings, 'strike')})`, count: `×${own.strikes}` });
+    if (own.strikes > 0) items.push({ icon: '', label: `✦ Tüzérségi csapás (${keysText(this.bindings, 'strike')})`, count: `×${own.strikes}` });
     for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) add(kind, `${Math.ceil(own.effects[kind])} mp`);
     return items;
   }
@@ -540,7 +600,7 @@ export class GameScene extends Phaser.Scene {
       `<h3>Irányítás</h3>${rows(controls)}` +
       `<h3>A tankod</h3>${rows(state)}` +
       `<h3>Játékosok – ${escapeHtml(s.name)}</h3>${rows(players)}` +
-      `<p class="small">Időjárás: ${WEATHER_LABEL[s.weather]} · játékidő: ${s.minutes} perc · botok: ${this.world.room.plan.bots} · járművek: ${this.world.room.plan.traffic} · válaszidő: ${this.world.pingMs} ms<br />` +
+      `<p class="small">Játékmód: ${GAME_MODE_NAME[s.mode]} · időjárás: ${WEATHER_LABEL[s.weather]} · játékidő: ${s.minutes} perc · botok: ${this.world.room.plan.bots} · járművek: ${this.world.room.plan.traffic} · válaszidő: ${this.world.pingMs} ms<br />` +
       `Térképadat: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a> (ODbL)${extra}</p>`
     );
   }
@@ -627,6 +687,19 @@ export class GameScene extends Phaser.Scene {
         }
         break;
       case 'hit':
+        if (ev.light) {
+          // géppuska: apró, sorozatos találat – visszafogott jelzés, szám és rázkódás nélkül
+          if (mine && this.time.now - this.lastPing > 140) {
+            this.lastPing = this.time.now;
+            this.sfx.ping();
+          }
+          if (mine && this.time.now - this.lastLightArc > 900) {
+            this.lastLightArc = this.time.now;
+            const gunner = world.tank(ev.by);
+            if (gunner) this.hitFrom(gunner.x, gunner.y);
+          }
+          break;
+        }
         // felröppenő sebzésszám: piros, ha engem ért; sárga, ha én okoztam; különben fehér
         if (ev.amount > 0) this.damageNumber(ev.x, ev.y, ev.amount, mine ? '#ff5a4a' : ev.by === myId ? '#ffd84a' : '#f0f0f0');
         if (mine) {
@@ -654,7 +727,8 @@ export class GameScene extends Phaser.Scene {
         if (mine) {
           this.sfx.death();
           this.cameras.main.shake(400, 0.009);
-          this.hud.toast('Kilőttek! Mindjárt újraéledsz…');
+          this.hud.toast(`Kilőttek! ${this.lossNote || 'Mindjárt újraéledsz…'}`);
+          this.lossNote = '';
         } else if (ev.by === myId) {
           const name = world.nameOf(ev.tank);
           this.hud.toast((avenged ? 'Bosszú! ' : '') + (name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
@@ -704,16 +778,34 @@ export class GameScene extends Phaser.Scene {
       case 'levelup': {
         // osztályváltáskor a tank új típus lesz: ezt mindenki látja, aki a közelben van
         const tier = tankTier(ev.level);
-        const promoted = LEVEL.tiers[tier] === ev.level;
+        // egyszerre több szintet is léphet (erősebb ellenfél kilövéséért): típusváltás, ha átlépett egy határt
+        const promoted = tier > tankTier(ev.level - ev.gain);
+        const plus = ev.gain > 1 ? ` (+${ev.gain} szint az erősebb ellenfélért)` : '';
         const tank = world.tank(ev.tank);
         if (promoted && tank && this.loudness(tank.x, tank.y) > 0) this.flare(tank.x * ppm, tank.y * ppm, tankSize(tank));
         if (mine) {
           if (promoted) this.sfx.fanfare();
           else this.sfx.levelUp();
           // a szintlépést kiváltó kilövés eseménye közvetlenül ezután jön: az üzenete ezzel a szöveggel egészül ki
-          this.levelNote = promoted ? `${ev.level}. szint – új tank: ${TIER_NAMES[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`;
+          this.levelNote = (promoted ? `${ev.level}. szint – új tank: ${TIER_NAMES[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`) + plus;
           this.hud.toast(this.levelNote);
         }
+        break;
+      }
+      case 'leveldown':
+        // a kilövés eseménye közvetlenül ezután jön: az üzenete ezzel egészül ki
+        if (mine) {
+          this.lossNote = `${ev.lost} szintet vesztettél: ${ev.level}. szint.`;
+          this.sfx.levelDown();
+        }
+        break;
+      case 'mg': {
+        // a kiegészítő géppuska lövése: nyomjelző, apró torkolattűz, a fegyver a cél felé fordul
+        const angle = Math.atan2(ev.y2 - ev.y1, ev.x2 - ev.x1);
+        this.tankViews.get(ev.tank)?.mgFire(angle, this.time.now / 1000);
+        this.tracer(ev.x1, ev.y1, ev.x2, ev.y2);
+        const volume = mine ? 0.8 : this.loudness(ev.x1, ev.y1) * 0.6;
+        if (volume > 0) this.sfx.mg(volume);
         break;
       }
       case 'blast': {
@@ -744,7 +836,7 @@ export class GameScene extends Phaser.Scene {
       case 'deploy':
         if (mine) {
           this.sfx.deploy();
-          this.hud.toast('Ágyú telepítve – lő minden ellenségre a közelében');
+          this.hud.toast('Löveg telepítve – lő minden ellenségre a közelében');
         }
         break;
       case 'mine':
@@ -798,6 +890,12 @@ export class GameScene extends Phaser.Scene {
           // a kilövés üzenete után jelenik meg, hogy ne írja felül
           const text = `${ev.streak} kilövés egyhuzamban – tüzérségi csapás jár! ${keysText(this.bindings, 'strike')}: a célkeresztre, vagy kattints a nagy térképen`;
           this.time.delayedCall(1700, () => this.hud.toast(text));
+        }
+        break;
+      case 'cloak':
+        if (mine) {
+          this.sfx.cloak(ev.on);
+          if (ev.on) this.hud.toast(`Álcázás ${CLOAK.duration} másodpercig – a lövés leleplez!`);
         }
         break;
       case 'superSoon':
@@ -861,6 +959,46 @@ export class GameScene extends Phaser.Scene {
     this.structureBars.delete(index);
   }
 
+  /** A javítóműhelyek: padló a tankok alatt, áttetsző tetőváz fölöttük, villogó jelzőfény és felirat. */
+  private buildWorkshops(): void {
+    const ppm = this.ppm;
+    const scale = this.spriteScale;
+    for (const shop of this.world.workshops) {
+      const x = shop.x * ppm;
+      const y = shop.y * ppm;
+      this.add.image(x, y, GTEX.shopFloor).setScale(scale).setDepth(1.6);
+      // a tető a tankok és a lombok fölött van, de az életerősávok alatt
+      this.add.image(x, y, GTEX.shopRoof).setScale(scale).setDepth(16.4);
+      this.shopLights.push(this.add.image(x, y - (WORKSHOP.height / 2) * ppm + 13 * scale, GTEX.light).setScale(scale * 0.55).setTint(0x60ff90).setBlendMode(Phaser.BlendModes.ADD).setDepth(16.6));
+      this.add
+        .text(x, y - (WORKSHOP.height / 2) * ppm - 4 * scale, 'JAVÍTÓMŰHELY', { fontFamily: 'Consolas, "Lucida Console", monospace', fontStyle: 'bold', fontSize: `${Math.round(15 * scale)}px`, color: '#ffffff', backgroundColor: '#2ea050', padding: { x: 6, y: 2 } })
+        .setOrigin(0.5, 1)
+        .setDepth(17);
+    }
+  }
+
+  /** A műhely jelzőfénye lüktet; ha a saját tank benne áll és sérült, javítás közben szikrázik és kattog. */
+  private updateWorkshop(own: TankState | undefined, seconds: number): void {
+    const shops = this.world.workshops;
+    if (shops.length === 0) return;
+    const pulse = 0.55 + 0.45 * Math.sin(seconds * 4);
+    for (const light of this.shopLights) light.setAlpha(pulse);
+    const inside = !!own && own.alive && shops.some((s) => Math.hypot(own.x - s.x, own.y - s.y) <= WORKSHOP.radius);
+    if (inside && !this.inShop) this.hud.toast('Javítóműhely – amíg bent állsz, a tankod javul');
+    this.inShop = inside;
+    if (!own || !inside || own.hp >= tankMaxHp(own)) return;
+    if (seconds - this.lastWrench > 0.55) {
+      this.lastWrench = seconds;
+      this.sfx.wrench();
+      // szikrák a tank körül
+      const size = tankSize(own) * this.ppm;
+      for (let i = 0; i < 3; i++) {
+        const a = seconds * 3 + i * 2.1;
+        this.puff(own.x * this.ppm + Math.cos(a) * 2.2 * size, own.y * this.ppm + Math.sin(a) * 2.2 * size, 0x9dffb8, 0.4, 260);
+      }
+    }
+  }
+
   /**
    * Tüzérségi csapás kérése: a megadott helyre, különben oda, ahová az egér mutat.
    * Igazat ad, ha a kérés elment.
@@ -881,6 +1019,18 @@ export class GameScene extends Phaser.Scene {
     this.strikeLatch = { x, y };
     this.sfx.radio();
     return true;
+  }
+
+  /** Álcázás kérése; ha még nem használható, megmondja, mennyi idő múlva lesz az. */
+  private requestCloak(): void {
+    const own = this.world.own;
+    if (!own || !own.alive) return;
+    if (own.cloak > 0) return;
+    if (own.cloakReady > 0) {
+      this.hud.toast(`Az álcázás ${Math.ceil(own.cloakReady)} másodperc múlva használható újra`);
+      return;
+    }
+    this.cloakLatch = true;
   }
 
   /** Új sor a kilövési értesítőbe: ki kit lőtt ki (a saját nevem kiemelve). */
@@ -932,6 +1082,39 @@ export class GameScene extends Phaser.Scene {
         this.numberPool.push(text);
       },
     });
+  }
+
+  /** A géppuska nyomjelzője: rövid, sárga csík a csőtől a célig, apró szikrával a becsapódásnál. */
+  private tracer(x1: number, y1: number, x2: number, y2: number): void {
+    const ppm = this.ppm;
+    const v = this.view;
+    if (Math.max(x1, x2) * ppm < v.x || Math.min(x1, x2) * ppm > v.right || Math.max(y1, y2) * ppm < v.y || Math.min(y1, y2) * ppm > v.bottom) return;
+    const length = Math.hypot(x2 - x1, y2 - y1) * ppm;
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const line = this.tracerPool.pop() ?? this.add.image(0, 0, GTEX.px).setOrigin(0, 0.5).setDepth(12.5).setTint(0xffe890);
+    line
+      .setPosition(x1 * ppm, y1 * ppm)
+      .setRotation(angle)
+      .setDisplaySize(length, 2.6 * this.spriteScale)
+      .setAlpha(0.9)
+      .setVisible(true);
+    this.tweens.add({
+      targets: line,
+      alpha: 0,
+      duration: 110,
+      onComplete: () => {
+        line.setVisible(false);
+        this.tracerPool.push(line);
+      },
+    });
+    // torkolattűz a csőnél
+    const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setDepth(12);
+    flash.setScale(this.spriteScale * 0.42).setPosition(x1 * ppm, y1 * ppm).setRotation(angle).setVisible(true);
+    this.time.delayedCall(45, () => {
+      flash.setVisible(false);
+      this.flashPool.push(flash);
+    });
+    if ((this.frame & 1) === 0) this.puff(x2 * ppm, y2 * ppm, 0xffd890, 0.35, 160);
   }
 
   /** Piros ív a saját tank körül abban az irányban, ahonnan a találat jött. */
@@ -988,6 +1171,8 @@ export class GameScene extends Phaser.Scene {
     const now = this.time.now / 1000;
     const marks = this.marks;
     marks.length = 0;
+    // a javítóműhelyek mindig látszanak a térképen
+    for (const shop of world.workshops) marks.push({ kind: 'workshop', x: shop.x, y: shop.y });
     for (let i = this.strikeMarks.length - 1; i >= 0; i--) {
       if (this.strikeMarks[i].until < now) this.strikeMarks.splice(i, 1);
       else marks.push({ kind: 'strike', x: this.strikeMarks[i].x, y: this.strikeMarks[i].y });
@@ -1008,7 +1193,7 @@ export class GameScene extends Phaser.Scene {
     const revenge = this.revenge;
     const target = revenge && revenge.live ? world.tank(revenge.id) : undefined;
     if (revenge && revenge.live && now > revenge.until) this.revenge = null;
-    if (this.revenge && target && target.alive && !world.smokes.some((k) => Math.hypot(target.x - k.x, target.y - k.y) < SMOKE.radius)) {
+    if (this.revenge && target && target.alive && !(target.cloak > 0) && !world.smokes.some((k) => Math.hypot(target.x - k.x, target.y - k.y) < SMOKE.radius)) {
       marks.push({ kind: 'revenge', x: target.x, y: target.y });
       this.revengeArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff3a2a).setScale(this.spriteScale);
       this.pointAt(this.revengeArrow, target.x, target.y, view);
@@ -1243,6 +1428,8 @@ export class GameScene extends Phaser.Scene {
       const px = tank.x * this.ppm;
       const py = tank.y * this.ppm;
       if (px < view.x || px > view.right || py < view.y || py > view.bottom) continue;
+      // az álcázott ellenfél nem füstöl és nem ver port (a lánctalpa nyoma megmarad)
+      if (tank.cloak > 0 && tank.id !== this.world.myId) continue;
       // a sérült tank füstöl: félig sérülten szürkén, súlyosan sérülten sűrű, fekete füsttel (állva is)
       const stage = this.tankViews.get(tank.id)?.stage ?? 0;
       if (stage >= 2 && (stage === 3 || (this.frame / 5) % 2 === 0)) {
@@ -1446,6 +1633,8 @@ export class GameScene extends Phaser.Scene {
       kills: p.kills ?? 0,
       deaths: p.deaths ?? 0,
       streak: p.streak ?? 0,
+      cloak: p.cloak ?? 0,
+      cloakReady: p.cloakReady ?? 0,
       strikes: p.strikes ?? 0,
       mineCharges: p.mines ?? 0,
       smokeCharges: p.smokes ?? 0,

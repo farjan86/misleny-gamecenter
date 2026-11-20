@@ -6,14 +6,14 @@ import { describe, expect, it } from 'vitest';
 import { Lobby } from '../server/lobby';
 import { GameMap, nearestOnPolyline } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
-import { encode, packInput, packTurret, packVehicle, PROTOCOL_VERSION, unpackInput, unpackTurret, unpackVehicle, type ServerMessage, type Snapshot } from '../src/game/net/protocol';
+import { encode, packInput, packTurret, packVehicle, PROTOCOL_VERSION, unpackInput, unpackTurret, unpackVehicle, messageReader, type FullSnapshot, type ServerMessage } from '../src/game/net/protocol';
 import { BotBrain } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { MATCH, matchPlan, sanitizeSettings } from '../src/game/sim/match';
 import { CARGO_KINDS, PICKUP } from '../src/game/sim/pickups';
 import { RoadNet, type NetRoad } from '../src/game/sim/roadnet';
 import { Traffic, TRAFFIC, trafficMix } from '../src/game/sim/traffic';
-import { TURRET, VEHICLE, VEHICLES, VSTATE } from '../src/game/sim/vehicles';
+import { TURRET, turretInterval, turretMaxHp, turretRange, VEHICLE, VEHICLES, VSTATE } from '../src/game/sim/vehicles';
 import { CRUSH, DAMAGE, SIM_DT, TANK, World, type SimEvent, type TankInput, type Terrain } from '../src/game/sim/world';
 
 const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
@@ -422,17 +422,23 @@ describe('telepíthető ágyú', () => {
   it('a felvett tárgy töltetet ad; a lerakott ágyú a tank mögé kerül, és a töltet elfogy', () => {
     const world = new World(field());
     const tank = world.addTank(100, 200, 0);
+    // minden tank öt löveggel indul; a tárgy egy továbbit ad (legfeljebb nyolc lehet nála)
+    expect(tank.turrets).toBe(TURRET.base);
+    expect(TURRET.base).toBe(5);
     world.addPickup('turret', 100, 200);
     run(world, {}, 1);
-    expect(tank.turrets).toBe(1);
+    expect(tank.turrets).toBe(TURRET.base + 1);
     run(world, { [tank.id]: { deploy: true } }, 1);
-    expect(tank.turrets).toBe(0);
+    expect(tank.turrets).toBe(TURRET.base);
+    // a botok nem kapnak löveget
+    expect(world.addTank(300, 300, 0, { bot: true }).turrets).toBe(0);
     expect(world.turrets).toHaveLength(1);
     const turret = world.turrets[0];
     expect(turret).toMatchObject({ owner: tank.id, team: tank.team, hp: TURRET.hp });
     expect(turret.x).toBeLessThan(tank.x - TANK.radius - TURRET.radius);
     expect(turret.y).toBeCloseTo(200, 5);
     // töltet nélkül nem rak le többet
+    tank.turrets = 0;
     run(world, { [tank.id]: { deploy: true } }, seconds(2));
     expect(world.turrets).toHaveLength(1);
   });
@@ -450,7 +456,7 @@ describe('telepíthető ágyú', () => {
     expect(owner.hp).toBe(TANK.maxHp);
     expect(distant.hp).toBe(TANK.maxHp);
     // a kilövés a lerakójának számít
-    run(world, {}, seconds(4));
+    run(world, {}, seconds(8));
     expect(enemy.alive).toBe(false);
     expect(owner.kills).toBe(1);
   });
@@ -489,23 +495,74 @@ describe('telepíthető ágyú', () => {
     expect(events.find((e) => e.type === 'turretDown')).toMatchObject({ owner: owner.id });
   });
 
-  it('egy játékosnak legfeljebb két ágyúja állhat; a kiesett játékos ágyúi eltűnnek', () => {
+  it('egy játékosnak egyszerre legfeljebb nyolc lövege állhat; a kiesett játékos lövegei eltűnnek', () => {
     const world = new World(field(), 1, { lives: 1 });
     const owner = world.addTank(100, 200, 0, { team: 10 });
     const first = deploy(world, owner.id);
-    owner.x = 200;
-    run(world, {}, seconds(1));
-    deploy(world, owner.id);
-    owner.x = 300;
-    run(world, {}, seconds(1));
-    deploy(world, owner.id);
+    for (let i = 0; i < TURRET.maxPerOwner; i++) {
+      owner.x = 60 + ((i * 35) % 300);
+      owner.y = 120 + Math.floor(i / 8) * 40;
+      run(world, {}, seconds(1));
+      deploy(world, owner.id);
+    }
     expect(world.turrets).toHaveLength(TURRET.maxPerOwner);
+    // a legrégebbi adta át a helyét
     expect(world.turrets).not.toContain(first);
 
     // a kilőtt tank töltetei elvesznek; ha kiesik, az ágyúi is eltűnnek
     owner.out = true;
     run(world, {}, 2);
     expect(world.turrets).toHaveLength(0);
+  });
+
+  it('a löveg a gazdája szintjét követi: szívósabb, messzebbre lát, gyorsabban és nagyobbat lő', () => {
+    // a 20. szintű tank lövege sokkal erősebb a kezdőénél
+    expect(turretMaxHp(1)).toBe(TURRET.hp);
+    expect(turretMaxHp(20)).toBeGreaterThan(TURRET.hp * 4);
+    expect(turretRange(20)).toBeGreaterThan(turretRange(1) * 1.4);
+    expect(turretInterval(20)).toBeLessThan(turretInterval(1) / 2);
+    const world = new World(field());
+    const owner = world.addTank(100, 200, 0, { team: 10 });
+    owner.level = 4;
+    const turret = deploy(world, owner.id);
+    expect(turret).toMatchObject({ level: 4, hp: turretMaxHp(4) });
+    owner.x = 380;
+    owner.y = 380;
+    // a gazda szintet lép: a löveg is, és a többlet életerőt megkapja
+    turret.hp -= 50;
+    owner.level = 10;
+    run(world, {}, 2);
+    expect(turret.level).toBe(10);
+    expect(turret.hp).toBe(turretMaxHp(4) - 50 + (turretMaxHp(10) - turretMaxHp(4)));
+    // a gazda szintet veszít (kilőtték): a löveg felső határa is csökken
+    turret.hp = turretMaxHp(10);
+    owner.level = 8;
+    run(world, {}, 2);
+    expect(turret.level).toBe(8);
+    expect(turret.hp).toBe(turretMaxHp(8));
+    // a magasabb szintű löveg messzebbre lő, gyorsabban és nagyobbat sebez
+    const shots = (level: number): { count: number; hp: number } => {
+      const w = new World(field());
+      const o = w.addTank(100, 200, 0, { team: 10 });
+      o.level = level;
+      const t = deploy(w, o.id);
+      o.x = 380;
+      o.y = 380;
+      const enemy = w.addTank(t.x - 65, t.y, 0, { team: 11 });
+      enemy.level = 20; // sok életerő: a mérés alatt nem lövik ki
+      enemy.hp = 600;
+      const events = run(w, {}, seconds(6));
+      return { count: events.filter((e) => e.type === 'shot').length, hp: 600 - enemy.hp };
+    };
+    const low = shots(1);
+    const high = shots(20);
+    // 65 méterre az 1. szintű löveg nem lát el, a 20. szintű igen
+    expect(low.count).toBe(0);
+    expect(65).toBeGreaterThan(turretRange(1));
+    expect(65).toBeLessThan(turretRange(20));
+    expect(high.count).toBeGreaterThanOrEqual(10);
+    // egy lövése a gazda szintje szerint sebez (20. szinten több mint kétszeres)
+    expect(high.hp / high.count).toBeGreaterThan(DAMAGE.shell * 2);
   });
 
   it('akadály a tankoknak; a magas szintű ellenséges tank széttapossa', () => {
@@ -564,16 +621,17 @@ describe('beállítás és hálózat', () => {
     const v = world.addVehicle('bus', 2, 12.5, 30.25, 1.5);
     v.state = VSTATE.burning;
     expect(unpackVehicle(packVehicle(v))).toMatchObject({ id: v.id, kind: 'bus', look: 2, x: 12.5, y: 30.25, angle: 1.5, state: VSTATE.burning });
-    const turret = { id: 7, owner: 3, team: 12, x: 5, y: 6, angle: 0.5, hp: 80, cooldown: 0.3, target: 4 };
-    expect(unpackTurret(packTurret(turret))).toMatchObject({ id: 7, owner: 3, team: 12, x: 5, y: 6, angle: 0.5, hp: 80 });
+    const turret = { id: 7, owner: 3, team: 12, x: 5, y: 6, angle: 0.5, hp: 80, level: 9, cooldown: 0.3, target: 4 };
+    expect(unpackTurret(packTurret(turret))).toMatchObject({ id: 7, owner: 3, team: 12, x: 5, y: 6, angle: 0.5, hp: 80, level: 9 });
     expect(unpackInput(packInput({ ...idle, deploy: true }))?.deploy).toBe(true);
     expect(unpackInput(packInput(idle))?.deploy).toBe(false);
   });
 
   it('a szerveren a meccsben közlekednek a járművek, és a közeliek bekerülnek a pillanatképbe', () => {
     const lobby = new Lobby(data, 0);
-    const inbox: ServerMessage[] = [];
-    const session = lobby.connect({ send: (text) => inbox.push(JSON.parse(text) as ServerMessage), close: () => undefined });
+    const inbox: (ServerMessage | FullSnapshot)[] = [];
+    const read = messageReader();
+    const session = lobby.connect({ send: (text) => inbox.push(read(text)), close: () => undefined });
     session.message(encode({ t: 'hello', v: PROTOCOL_VERSION, name: 'Sofőr' }));
     session.message(encode({ t: 'create', settings: { area: { minX: 500, minY: 1500, maxX: 1250, maxY: 2250 }, maxPlayers: 1, bots: 0, pickups: 0, traffic: 5 } }));
     let now = 10;
@@ -585,8 +643,8 @@ describe('beállítás és hálózat', () => {
       now += 1000 / 60;
       lobby.tick(now);
     }
-    for (const m of inbox) if (m.t === 'snap') seen = Math.max(seen, (m as Snapshot).V.length);
-    const last = inbox.filter((m): m is Snapshot => m.t === 'snap').pop()!;
+    for (const m of inbox) if (m.t === 'snap') seen = Math.max(seen, (m as FullSnapshot).V.length);
+    const last = inbox.filter((m): m is FullSnapshot => m.t === 'snap').pop()!;
     expect(last.U).toEqual([]);
     expect(seen).toBeGreaterThan(0);
   });

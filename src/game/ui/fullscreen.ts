@@ -12,7 +12,15 @@ export function toggleFullscreen(): void {
     void document.exitFullscreen();
     return;
   }
-  document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch((err: unknown) => {
-    console.warn('A teljes képernyős mód nem kapcsolható be:', err);
-  });
+  document.documentElement
+    .requestFullscreen({ navigationUI: 'hide' })
+    .then(() => {
+      // teljes képernyőn a böngésző átengedi a játéknak a gyorsbillentyűit is (pl. Ctrl+W nem zárja be a lapot);
+      // nem minden böngésző tudja, és a teljes képernyő elhagyásakor magától megszűnik
+      const keyboard = (navigator as Navigator & { keyboard?: { lock?: () => Promise<void> } }).keyboard;
+      keyboard?.lock?.().catch(() => undefined);
+    })
+    .catch((err: unknown) => {
+      console.warn('A teljes képernyős mód nem kapcsolható be:', err);
+    });
 }

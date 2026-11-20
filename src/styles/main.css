@@ -80,6 +80,12 @@ body {
   pointer-events: none;
 }
 
+/* lassú a gép vagy a hálózat: a kijelzés narancsra vált */
+#version.slow {
+  color: #ffb040;
+  opacity: 0.95;
+}
+
 #hud {
   position: fixed;
   inset: 0;
@@ -112,30 +118,76 @@ body {
   image-rendering: pixelated;
 }
 
-#hud-info-button {
+/* lenyitható menü a bal felső sarokban */
+#hud-menu-button {
   position: absolute;
   top: 10px;
   left: 10px;
-  width: 22px;
-  text-align: center;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: bold;
-  font-style: italic;
+  line-height: 26px;
+  padding: 2px 10px;
+  white-space: nowrap;
   cursor: pointer;
   pointer-events: auto;
 }
 
-#hud-info-button:hover {
+#hud-menu-button:hover,
+#hud-menu-button.open {
   background: #ffd84a;
   color: #101418;
 }
 
+#hud-menu-list {
+  /* a pályán lévő feliratok és a tank sávja fölött */
+  z-index: 6;
+  position: absolute;
+  top: 50px;
+  left: 10px;
+  background: rgba(16, 20, 28, 0.97);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  pointer-events: auto;
+}
+
+#hud-menu-list.hidden,
+#hud-menu-confirm.hidden {
+  display: none;
+}
+
+#hud-menu-list .btn {
+  text-align: center;
+}
+
+#hud-menu-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(244, 240, 224, 0.4);
+  font-weight: bold;
+  color: #ffd84a;
+}
+
+#hud-menu-confirm div {
+  flex-basis: 100%;
+}
+
+#hud-menu-confirm .btn {
+  flex: 1;
+}
+
 #hud-loadout {
   position: absolute;
-  top: 10px;
-  left: 54px;
+  /* a bal szélen, egymás alatt: így nem lóg bele a felül középen lévő órába */
+  top: 52px;
+  left: 10px;
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
 }
 
 .loadout-item {
@@ -322,6 +374,96 @@ body {
   50% {
     opacity: 0.45;
   }
+}
+
+/* üzenetek és hang a bal alsó sarokban */
+#hud-chat {
+  position: absolute;
+  left: 10px;
+  bottom: 30px;
+  width: min(460px, 44vw);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+#hud-chat.hidden,
+#hud-voice.hidden,
+#hud-chat-input.hidden {
+  display: none;
+}
+
+#hud-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-line {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 8px;
+  background: rgba(16, 20, 28, 0.78);
+  border-left: 3px solid #9ad0ff;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  transition: opacity 0.8s;
+}
+
+.chat-line b {
+  color: #9ad0ff;
+}
+
+.chat-line.me {
+  border-left-color: #ffd84a;
+}
+
+.chat-line.me b {
+  color: #ffd84a;
+}
+
+.chat-line.system {
+  border-left-color: rgba(244, 240, 224, 0.5);
+  opacity: 0.8;
+  font-style: italic;
+}
+
+/* a régi üzenetek elhalványulnak; gépelés közben újra látszanak */
+.chat-line.old {
+  opacity: 0;
+}
+
+#hud-chat.typing .chat-line.old {
+  opacity: 0.75;
+}
+
+#hud-voice {
+  align-self: flex-start;
+  padding: 2px 9px;
+  background: rgba(16, 20, 28, 0.85);
+  border: 1px solid #7ae06a;
+  color: #7ae06a;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+#hud-voice.talking {
+  border-color: #ff5a4a;
+  color: #ffb0a8;
+}
+
+#hud-chat-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 9px;
+  background: rgba(12, 15, 20, 0.95);
+  border: 2px solid #ffd84a;
+  color: #f4f0e0;
+  font: inherit;
+  font-size: 15px;
+  pointer-events: auto;
+  user-select: text;
+  outline: none;
 }
 
 /* kilövési értesítő a térkép alatt */
@@ -542,6 +684,29 @@ body {
   font-size: 13px;
 }
 
+.field select {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 3px;
+  padding: 6px 8px;
+  background: #0c0f14;
+  border: 2px solid #f4f0e0;
+  color: #f4f0e0;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.field select:focus {
+  outline: none;
+  border-color: #ffd84a;
+}
+
+#mode-note {
+  margin: 2px 0 10px;
+}
+
 .field input {
   display: block;
   box-sizing: border-box;
@@ -727,4 +892,513 @@ body {
   background: #b02030;
   border: 2px solid #ffd84a;
   font-weight: bold;
+}
+
+/* =========================================================================================
+   A menük megjelenése. Az alábbi szabályok a fenti alapokat írják felül: háttér a város
+   térképéből, címblokk, animált fejléc, igényesebb panelek, gombok, mezők és a csevegő.
+   ========================================================================================= */
+
+#menu {
+  background: radial-gradient(ellipse at 50% 30%, #1d2a22 0%, #101418 70%);
+  align-items: flex-start;
+  padding: 3vh 0;
+  box-sizing: border-box;
+}
+
+/* a háttér: a pálya térképe elmosva, sötétítve, lassan úszva */
+#menu-bg {
+  position: fixed;
+  left: -12%;
+  top: -12%;
+  width: 124%;
+  height: 124%;
+  object-fit: cover;
+  filter: blur(3px) saturate(0.85) brightness(0.42);
+  opacity: 0;
+  transition: opacity 1.2s;
+  animation: menu-drift 120s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+#menu-bg.ready {
+  opacity: 1;
+}
+
+@keyframes menu-drift {
+  from {
+    transform: scale(1.5) translate(-7%, -9%);
+  }
+  to {
+    transform: scale(1.5) translate(7%, 9%);
+  }
+}
+
+/* sötétítés a szélek felé, hogy a panel kiemelkedjen */
+#menu::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 45%, rgba(10, 13, 17, 0.15) 0%, rgba(10, 13, 17, 0.82) 85%);
+  pointer-events: none;
+}
+
+#menu.overlay #menu-bg,
+#menu.overlay::before {
+  display: none;
+}
+
+#menu.overlay {
+  background: rgba(10, 12, 16, 0.72);
+  align-items: center;
+}
+
+.screen {
+  position: relative;
+  margin: auto;
+  padding: 24px 30px 22px;
+  background: linear-gradient(180deg, rgba(24, 30, 40, 0.96), rgba(14, 18, 25, 0.97));
+  border: 1px solid rgba(244, 240, 224, 0.55);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.65),
+    inset 0 0 0 1px rgba(255, 216, 74, 0.08);
+}
+
+/* figyelmeztető csíkozás a panelek tetején */
+.screen::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: -8px;
+  height: 8px;
+  background: repeating-linear-gradient(-45deg, #ffd84a 0 12px, #15181d 12px 24px);
+  border-radius: 4px 4px 0 0;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.screen.wide {
+  width: min(980px, 96vw);
+}
+
+.screen h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: #ffd84a;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 216, 74, 0.3);
+}
+
+.screen h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  text-align: left;
+  color: #9ad0ff;
+}
+
+/* --- címblokk és fejléc ------------------------------------------------------------- */
+.title-block {
+  margin: -4px 0 12px;
+}
+
+.title-block h1 {
+  margin: 0;
+  font-size: clamp(34px, 5.4vw, 60px);
+  line-height: 1;
+  letter-spacing: 10px;
+  color: #f4f0e0;
+  text-shadow:
+    0 3px 0 #0a0c10,
+    0 0 26px rgba(255, 216, 74, 0.25);
+}
+
+.title-block h1 span {
+  color: #ffd84a;
+}
+
+.title-block .tagline {
+  margin: 8px 0 0;
+  font-size: 13px;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.title-block .hazard {
+  display: none;
+}
+
+#hero {
+  display: block;
+  width: 100%;
+  height: 168px;
+  border-top: 2px solid #0a0c10;
+  border-bottom: 2px solid #0a0c10;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  background: #4b4e56;
+}
+
+#server-status {
+  min-height: 18px;
+  margin: 8px 0 4px;
+  color: #ffb070;
+}
+
+.main-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: 26px;
+  align-items: start;
+  text-align: left;
+  margin-top: 6px;
+}
+
+.main-left .buttons {
+  justify-content: flex-start;
+}
+
+.main-left .buttons.column {
+  align-items: stretch;
+}
+
+.main-left .buttons.column .btn {
+  width: auto;
+  text-align: center;
+}
+
+.main-left .big-note {
+  margin: 0 0 4px;
+  text-align: left;
+}
+
+.features {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.features li {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 3px solid #ffd84a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.features li b {
+  color: #ffd84a;
+}
+
+.features.hidden {
+  display: none;
+}
+
+.credit {
+  margin-top: 18px;
+  text-align: center;
+}
+
+/* --- gombok, mezők -------------------------------------------------------------------- */
+.btn {
+  border: 1px solid rgba(244, 240, 224, 0.75);
+  border-radius: 3px;
+  background: linear-gradient(180deg, #343b49, #232832);
+  letter-spacing: 0.5px;
+  box-shadow:
+    0 3px 0 #0a0c10,
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition:
+    background 0.12s,
+    color 0.12s,
+    transform 0.06s,
+    box-shadow 0.06s;
+}
+
+.btn:hover {
+  background: linear-gradient(180deg, #ffe06a, #f2c230);
+  color: #101418;
+  border-color: #ffe9a0;
+}
+
+.btn:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 1px 0 #0a0c10,
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* a képernyő fő művelete */
+.btn.primary {
+  background: linear-gradient(180deg, #5a9a48, #3c7434);
+  border-color: #a8e090;
+}
+
+.btn.primary:hover {
+  background: linear-gradient(180deg, #ffe06a, #f2c230);
+}
+
+.btn.danger:hover {
+  background: linear-gradient(180deg, #f06050, #c8382c);
+  border-color: #ffb0a8;
+  color: #fff;
+}
+
+.field {
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  opacity: 0.95;
+}
+
+.field input,
+.field select {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: rgba(8, 10, 14, 0.85);
+  border: 1px solid rgba(244, 240, 224, 0.55);
+  border-radius: 3px;
+  letter-spacing: 0;
+  text-transform: none;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: #ffd84a;
+  box-shadow: 0 0 0 3px rgba(255, 216, 74, 0.18);
+}
+
+.note {
+  line-height: 1.5;
+}
+
+.slider input {
+  height: 18px;
+}
+
+.keycap {
+  border: 1px solid rgba(244, 240, 224, 0.6);
+  border-radius: 3px;
+  background: linear-gradient(180deg, #232832, #151920);
+  box-shadow: 0 2px 0 #0a0c10;
+}
+
+#key-table {
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+/* --- játékok listája, váró, eredmény ---------------------------------------------------- */
+.room {
+  border: 1px solid rgba(244, 240, 224, 0.25);
+  border-left: 3px solid #7ae06a;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  transition: background 0.12s;
+}
+
+.room:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.player-row {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(244, 240, 224, 0.16);
+}
+
+.player-row.me {
+  background: rgba(255, 216, 74, 0.1);
+  border-left: 3px solid #ffd84a;
+}
+
+#area-map {
+  border: 1px solid rgba(244, 240, 224, 0.6);
+  border-radius: 3px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+#menu-error {
+  border-radius: 3px;
+  z-index: 3;
+}
+
+/* --- csevegő ---------------------------------------------------------------------------- */
+#chat {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  border: 1px solid rgba(154, 208, 255, 0.4);
+  border-radius: 3px;
+  background: rgba(8, 10, 14, 0.6);
+}
+
+#chat.hidden {
+  display: none;
+}
+
+.chat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(154, 208, 255, 0.3);
+  background: rgba(154, 208, 255, 0.08);
+}
+
+#chat-title {
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #9ad0ff;
+}
+
+#chat-hint {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+/* a bejelentkezett játékosok: névcímkék, a helyük szerint színezve */
+#chat-online {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(154, 208, 255, 0.2);
+  font-size: 12px;
+  max-height: 58px;
+  overflow-y: auto;
+}
+
+#chat-online .count {
+  opacity: 0.7;
+  margin-right: 2px;
+}
+
+.online {
+  padding: 1px 7px;
+  border: 1px solid rgba(122, 224, 106, 0.6);
+  border-radius: 9px;
+  color: #a8f09a;
+  white-space: nowrap;
+}
+
+.online.me {
+  border-color: #ffd84a;
+  color: #ffd84a;
+}
+
+.online.room {
+  border-color: rgba(154, 208, 255, 0.6);
+  color: #9ad0ff;
+}
+
+.online.game {
+  border-color: rgba(240, 160, 64, 0.6);
+  color: #f0a040;
+}
+
+#chat-log {
+  height: 200px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+/* üres csevegő: rövid útmutató */
+#chat-log:empty::before {
+  content: 'Még senki nem írt. Köszönj be!';
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.chat-msg {
+  overflow-wrap: anywhere;
+}
+
+.chat-msg b {
+  color: #9ad0ff;
+}
+
+.chat-msg.me b {
+  color: #ffd84a;
+}
+
+.chat-msg.scope-room {
+  color: #d8f0c8;
+}
+
+/* a váróban csak a szoba üzenetei látszanak, máshol csak az előszobáé */
+#screen-room .chat-msg.scope-lobby,
+#screen-main .chat-msg.scope-room,
+#screen-lobby .chat-msg.scope-room {
+  display: none;
+}
+
+#chat-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  background: rgba(8, 10, 14, 0.9);
+  border: none;
+  border-top: 1px solid rgba(154, 208, 255, 0.3);
+  border-radius: 0 0 3px 3px;
+  color: #f4f0e0;
+  font: inherit;
+  font-size: 14px;
+  user-select: text;
+  outline: none;
+}
+
+#chat-input:focus {
+  box-shadow: inset 0 0 0 2px rgba(255, 216, 74, 0.5);
+}
+
+/* a játékok listájánál és a váróban alacsonyabb a csevegő */
+#screen-lobby #chat-log,
+#screen-room #chat-log {
+  height: 120px;
+}
+
+#screen-lobby .chat-slot,
+#screen-room .chat-slot {
+  margin-top: 12px;
+}
+
+/* görgetősávok a menükben */
+#menu ::-webkit-scrollbar {
+  width: 10px;
+}
+
+#menu ::-webkit-scrollbar-thumb {
+  background: rgba(244, 240, 224, 0.3);
+  border-radius: 5px;
+}
+
+#menu ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* keskeny ablakban a főképernyő két hasábja egymás alá kerül */
+@media (max-width: 760px) {
+  .main-cols {
+    grid-template-columns: 1fr;
+  }
+
 }

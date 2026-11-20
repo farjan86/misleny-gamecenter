@@ -184,7 +184,7 @@ describe('életek és kiesés', () => {
     const shooter = world.addTank(100, 200, 0, { team: 10 });
     const target = world.addTank(140, 200, Math.PI, { team: 11 });
     expect(target.lives).toBe(2);
-    let events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    let events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(target.alive).toBe(false);
     expect(target.lives).toBe(1);
     expect(target.out).toBe(false);
@@ -193,7 +193,7 @@ describe('életek és kiesés', () => {
     expect(target.alive).toBe(true);
     target.x = 140;
     target.y = 200;
-    events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(3));
+    events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(5));
     expect(target.out).toBe(true);
     expect(events.some((e) => e.type === 'eliminated' && e.tank === target.id && e.by === shooter.id)).toBe(true);
     run(world, {}, seconds(TANK.respawnDelay + 2));

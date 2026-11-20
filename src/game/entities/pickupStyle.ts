@@ -241,8 +241,8 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
     },
   },
   turret: {
-    label: 'Telepíthető ágyú',
-    hint: 'Q: lerakás a tank mögé – magától lő a közeli ellenségre',
+    label: 'Löveg',
+    hint: 'Q: lerakás a tank mögé – magától lő a közeli ellenségre, és a tankoddal együtt fejlődik',
     color: '#4a6a3a',
     icon: (ctx) => {
       // háromlábú talp, rajta rövid csövű ágyú
@@ -296,6 +296,20 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       }
+    },
+  },
+  gun: {
+    label: 'Géppuska',
+    hint: '30 másodpercig a tank oldalán ülő géppuska magától lő a közeli ellenségre',
+    color: '#3f5a66',
+    icon: (ctx) => {
+      // géppuska oldalról: tok, hosszú cső, lőszeres doboz, három lövedék
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(10, 20, 14, 8);
+      ctx.fillRect(24, 22, 16, 3.5);
+      ctx.fillRect(13, 28, 6, 7);
+      ctx.fillStyle = '#ffd84a';
+      for (let i = 0; i < 3; i++) ctx.fillRect(27 + i * 5, 13, 3, 6);
     },
   },
   super: {

@@ -798,3 +798,31 @@ export function createTankTextures(scene: Phaser.Scene): void {
     }
   }
 }
+
+/**
+ * A tank rajza önálló vásznakra, a játékjelenettől függetlenül (a menü
+ * díszítéséhez): a test három lánctalp-képkockája és a torony.
+ */
+export function tankSprites(tier: number, paint: TankPaint, marks = 0): { hull: HTMLCanvasElement[]; turret: HTMLCanvasElement } {
+  const make = (w: number, h: number, draw: (ctx: Ctx) => void): HTMLCanvasElement => {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    draw(ctx);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (paint !== 'own') recolor(ctx, w, h, paint === 'bot' ? 'red' : 'blue');
+    return canvas;
+  };
+  const hull = Array.from({ length: TRACK_FRAMES }, (_, frame) =>
+    make(HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
+      ctx.translate((HULL_SIZE.w - BODY.w) / 2, (HULL_SIZE.h - BODY.h) / 2);
+      HULLS[tier](ctx, frame);
+    }),
+  );
+  const turret = make(TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
+    ctx.translate(TURRET_PIVOT.x, TURRET_PIVOT.y);
+    TURRETS[tier](ctx, marks);
+  });
+  return { hull, turret };
+}

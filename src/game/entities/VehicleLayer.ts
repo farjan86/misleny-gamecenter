@@ -4,8 +4,8 @@
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
-import { TURRET, VEHICLES, VSTATE, type TurretState, type VehicleState } from '../sim/vehicles';
-import { angleDiff } from '../sim/world';
+import { turretMaxHp, VEHICLES, VSTATE, type TurretState, type VehicleState } from '../sim/vehicles';
+import { angleDiff, tankSize, tankTier } from '../sim/world';
 import { GTEX } from './gameTextures';
 import { tankTex, TURRET_PIVOT, TURRET_SIZE } from './tankTextures';
 import { createVehicleTextures, vehicleTexture, VTEX } from './vehicleTextures';
@@ -42,6 +42,9 @@ interface GunView {
   target: TurretState;
   fromA: number;
   a: number;
+  /** a saját lövegünk-e, és melyik szinthez tartozó rajz látszik éppen */
+  own: boolean;
+  level: number;
 }
 
 export type VehicleFx = (kind: 'smoke' | 'spray', px: number, py: number) => void;
@@ -137,6 +140,8 @@ export class VehicleLayer {
           target: t,
           fromA: t.angle,
           a: t.angle,
+          own,
+          level: 0,
         };
         this.guns.set(t.id, view);
       } else view.fromA = view.a;
@@ -215,7 +220,14 @@ export class VehicleLayer {
       const t = gun.target;
       gun.a = gun.fromA + angleDiff(t.angle, gun.fromA) * alpha;
       gun.barrel.setRotation(gun.a);
-      gun.barFill.setDisplaySize(Math.max(1, 36 * scale * Math.max(0, t.hp / TURRET.hp)), 4 * scale);
+      // a löveg a gazdája szintjét követi: a csöve a tank típusáé, és a tankkal együtt nő
+      if (t.level !== gun.level) {
+        gun.level = t.level;
+        const size = scale * (0.86 + 0.5 * (tankSize(t) - 1));
+        gun.barrel.setTexture(tankTex.turret(gun.own ? 'own' : 'rival', tankTier(t.level))).setScale(size);
+        gun.base.setScale(scale * (1 + 0.45 * (tankSize(t) - 1)));
+      }
+      gun.barFill.setDisplaySize(Math.max(1, 36 * scale * Math.max(0, Math.min(1, t.hp / turretMaxHp(t.level)))), 4 * scale);
     }
   }
 

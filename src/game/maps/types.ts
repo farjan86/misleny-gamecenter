@@ -7,6 +7,10 @@ export interface MapMeta {
   attribution: string;
   /** a kiegészítő adatforrás megjelölése, ha van */
   extraAttribution: string | null;
+  /** kézzel (vázlatrajz alapján) felvett házak száma, és hány kiegészítő alaprajzot váltottak ki */
+  handBuildings?: { buildings: number; replacedFootprints: number } | null;
+  /** generált (kitalált) házak: mely utcákban, hány ház és melléképület */
+  generatedHouses?: { streets: string[]; houses: number; outbuildings: number } | null;
   license: string;
   licenseUrl: string;
   osmBaseTimestamp: string | null;
@@ -73,8 +77,12 @@ export interface BuildingFeature {
   pts: number[];
   holes?: number[][];
   townhall?: boolean;
-  /** 'ms': nem az OSM-ből, hanem a Microsoft gépi felismerésű alaprajzaiból származik */
-  src?: 'ms';
+  /**
+   * 'ms': nem az OSM-ből, hanem a Microsoft gépi felismerésű alaprajzaiból származik;
+   * 'gen': kitalált, a program által generált ház (nem valós alaprajz) – lásd a pálya metaadatát;
+   * 'hand': kézzel, vázlatrajz alapján felvett ház (assets/maps/landmarks/*.houses.json)
+   */
+  src?: 'ms' | 'gen' | 'hand';
 }
 
 export interface Poi {

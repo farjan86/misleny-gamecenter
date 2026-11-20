@@ -18,6 +18,7 @@ const rawPath = path.join(root, 'assets', 'maps', 'osm', 'misleny-kozpont.raw.js
 const metaPath = path.join(root, 'assets', 'maps', 'osm', 'misleny-kozpont.meta.json');
 const landmarksPath = path.join(root, 'assets', 'maps', 'landmarks', 'misleny-kozpont.landmarks.json');
 const msPath = path.join(root, 'assets', 'maps', 'osm', 'misleny-kozpont.msbuildings.json');
+const housesPath = path.join(root, 'assets', 'maps', 'landmarks', 'misleny-kozpont.houses.json');
 const msMetaPath = path.join(root, 'assets', 'maps', 'osm', 'misleny-kozpont.msbuildings.meta.json');
 const outDir = path.join(root, 'assets', 'maps', 'processed');
 const outPath = path.join(outDir, 'misleny-kozpont.json');
@@ -451,6 +452,11 @@ roads.sort((a, b) => ROAD_ORDER.indexOf(a.kind) - ROAD_ORDER.indexOf(b.kind));
 
 // --- az épületek rácsindexe ---------------------------------------------------------
 
+const toPairsOf = (f) => {
+  const out = [];
+  for (let i = 0; i < f.length; i += 2) out.push([f[i], f[i + 1]]);
+  return out;
+};
 const B_CELL = 25;
 const bGrid = new Map();
 buildings.forEach((b, i) => {
@@ -554,6 +560,61 @@ try {
   warn('Nincs kiegészítő épületadat (npm run map:buildings) – csak az OSM-ben szereplő épületek kerülnek a pályára.');
 }
 
+// --- kézzel felvett házak ---------------------------------------------------------------
+// Ahol az OSM-ben nincs épület, a kiegészítő adatban pedig csak töredék (új
+// beépítésű utcák), ott a házakat egy külön fájl adja meg: a pálya készítőjétől
+// kapott vázlatrajz alapján, az utcákhoz igazítva készültek. Nem OSM-adat, a
+// forrásuk 'hand'. Az OSM-épület elsőbbséget élvez (ahol van, a rajzolt kimarad);
+// a kiegészítő adat töredékeit viszont a rajzolt ház váltja ki.
+
+let handBuildings = 0;
+let handReplaced = 0;
+/** A kézzel felvett terület befoglaló téglalapja [minX, minY, maxX, maxY] – itt nincs generálás. */
+let handCovers = null;
+try {
+  const hand = JSON.parse(await readFile(housesPath, 'utf8'));
+  handCovers = hand.covers.map((v, i) => v + (i % 2 === 0 ? thX : thY));
+  const ringDistFlat = (x, y, f) => {
+    if (pipFlat(x, y, f)) return 0;
+    let best = Infinity;
+    for (let k = 0, n = f.length / 2, j = n - 1; k < n; j = k++) best = Math.min(best, segDist(x, y, f[j * 2], f[j * 2 + 1], f[k * 2], f[k * 2 + 1]));
+    return best;
+  };
+  const drop = new Set();
+  const added = [];
+  for (const h of hand.buildings) {
+    const pts = h.pts.map((v, i) => r2(v + (i % 2 === 0 ? thX : thY)));
+    const ring = toPairsOf(pts);
+    const [cx, cy] = centre(ring);
+    // OSM-épület van a helyén?
+    const probes = [[cx, cy], ...ring];
+    if (probes.some(([x, y]) => {
+      const hit = nearestBuilding(x, y, 6);
+      return hit.building && !hit.building.src && hit.dist < 2;
+    })) continue;
+    // a kiegészítő adat közeli töredékei kimaradnak
+    buildings.forEach((b, i) => {
+      if (b.src !== 'ms' || drop.has(i)) return;
+      const [bx, by] = centre(toPairsOf(b.pts));
+      if (Math.abs(bx - cx) > 60 || Math.abs(by - cy) > 60) return;
+      if (ringDistFlat(bx, by, pts) < hand.replaceWithin) drop.add(i);
+    });
+    added.push({ id: 9_700_000_000 + h.id, kind: h.kind, area: r1(Math.abs(ringArea(ring))), pts, src: 'hand' });
+  }
+  if (drop.size || added.length) {
+    const keep = buildings.filter((_, i) => !drop.has(i));
+    buildings.length = 0;
+    buildings.push(...keep, ...added);
+    bGrid.clear();
+    buildings.forEach((_, i) => indexBuilding(i));
+    handBuildings = added.length;
+    handReplaced = drop.size;
+    msBuildingCount -= drop.size;
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+
 // --- a hivatal épületének azonosítása ---------------------------------------
 
 const thNear = nearestBuilding(thX, thY, 30);
@@ -636,6 +697,107 @@ function nearRoad(x, y, reachOf) {
 const onRoadBand = (x, y, margin) => nearRoad(x, y, (road) => halfBand(road) + margin);
 /** Igaz, ha a pont valamelyik út burkolatára esik (a füves sáv nem számít). */
 const onAsphalt = (x, y, margin) => nearRoad(x, y, (road) => road.width / 2 + margin);
+
+// --- generált házak a megadott utcák mentén ----------------------------------------
+// Ahol a valóságban (új) házak állnak, de sem az OSM-ben, sem a kiegészítő
+// épületadatban nincsenek benne, az utca üres maradna. Ezekre az utcákra a
+// program KITALÁLT házakat tesz: telkenként egyet az út két oldalán, kerttel,
+// néhol melléképülettel. Nem valós alaprajzok – a forrásuk 'gen', a számuk a
+// statisztikában szerepel, és a pálya metaadata megnevezi az utcákat. Csak
+// szabad helyre kerülnek: meglévő épülethez, úthoz, vízhez, erdőhöz nem érnek.
+// Csak az utca burkolt (lakóutca) szakaszára, a földútra nem; és ott sem, ahol
+// a házakat kézzel vettük fel (ott az üres telek is szándékos).
+
+const GENERATED_STREETS = ['Kiskozári utca'];
+const GEN_BLOCKED = new Set(['water', 'pool', 'forest', 'cemetery', 'pitch', 'playground', 'parking', 'square', 'industrial']);
+let generatedHouses = 0;
+let generatedSheds = 0;
+{
+  const rnd = mulberry32(20261120);
+  const between = (min, max) => min + rnd() * (max - min);
+  const blockedArea = (x, y) => areas.some((a) => GEN_BLOCKED.has(a.kind) && a.rings.some((ring) => pipFlat(x, y, ring)));
+  const nearStream = (x, y) => streams.some((st) => lineDist(x, y, st.pts) < (st.width ?? 2) / 2 + 4);
+  /** Szabad-e az alaprajz: a pályán belül van, és nem ér úthoz, épülethez, vízhez. */
+  const free = (ring) => {
+    const [cx, cy] = centre(ring);
+    const probes = [[cx, cy], ...ring, ...ring.map((p, i) => [(p[0] + ring[(i + 1) % ring.length][0]) / 2, (p[1] + ring[(i + 1) % ring.length][1]) / 2])];
+    for (const [x, y] of probes) {
+      if (x < 10 || y < 10 || x > WIDTH - 10 || y > HEIGHT - 10) return false;
+      if (nearRoad(x, y, (road) => road.width / 2 + 3.5)) return false;
+      if (nearestBuilding(x, y, 10).dist < 4.5) return false;
+      if (blockedArea(x, y) || nearStream(x, y)) return false;
+    }
+    return true;
+  };
+  const addBuilding = (ring, kind) => {
+    buildings.push({ id: 9_500_000_000 + generatedHouses + generatedSheds, kind, area: r1(Math.abs(ringArea(ring))), pts: flat(ring), src: 'gen' });
+    indexBuilding(buildings.length - 1);
+  };
+  for (const road of roads.filter((r) => GENERATED_STREETS.includes(r.name) && STREET.has(r.kind))) {
+    const f = road.pts;
+    for (const side of [1, -1]) {
+      // a telkek az út mentén sorakoznak; az első kicsit beljebb kezdődik
+      let lotStart = between(4, 12);
+      let walked = 0;
+      for (let i = 0; i + 3 < f.length; i += 2) {
+        const dx = f[i + 2] - f[i];
+        const dy = f[i + 3] - f[i + 1];
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const tx = dx / len;
+        const ty = dy / len;
+        // az út normálisa a választott oldal felé
+        const nx = -ty * side;
+        const ny = tx * side;
+        while (lotStart - walked < len) {
+          const lot = between(22, 29);
+          const mid = lotStart + lot / 2 - walked;
+          lotStart += lot;
+          if (mid < 0 || mid > len) continue;
+          const px = f[i] + tx * mid;
+          const py = f[i + 1] + ty * mid;
+          if (handCovers && px > handCovers[0] && px < handCovers[2] && py > handCovers[1] && py < handCovers[3]) continue;
+          // a ház: széles oldalával az utcára néz, az úttesttől néhány méterre
+          const w = Math.min(lot - 7, between(9.5, 14.5));
+          const d = between(8, 11.5);
+          const setback = road.width / 2 + between(6, 10);
+          const at = (u, v) => [px + tx * u + nx * (setback + v), py + ty * u + ny * (setback + v)];
+          let ring;
+          if (rnd() < 0.38) {
+            // L alakú ház: hátul egy szárny az egyik végén
+            const ww = between(4.5, 6.5);
+            const wd = between(4, 7);
+            const flip = rnd() < 0.5 ? 1 : -1;
+            if (flip < 0) ring = [at(-w / 2, 0), at(w / 2, 0), at(w / 2, d + wd), at(w / 2 - ww, d + wd), at(w / 2 - ww, d), at(-w / 2, d)];
+            else ring = [at(-w / 2, 0), at(w / 2, 0), at(w / 2, d), at(-w / 2 + ww, d), at(-w / 2 + ww, d + wd), at(-w / 2, d + wd)];
+          } else {
+            ring = [at(-w / 2, 0), at(w / 2, 0), at(w / 2, d), at(-w / 2, d)];
+          }
+          if (!free(ring)) continue;
+          // a kert: a telek az úttól a ház mögé nyúlik
+          const depth = d + between(16, 24);
+          const yard = [at(-lot / 2 + 1, -setback + road.width / 2 + 3.2), at(lot / 2 - 1, -setback + road.width / 2 + 3.2), at(lot / 2 - 1, depth), at(-lot / 2 + 1, depth)];
+          areas.push({ id: 9_600_000_000 + generatedHouses, kind: 'garden', rings: [flat(yard)] });
+          addBuilding(ring, 'house');
+          generatedHouses++;
+          // melléképület (garázs, fészer) a kert végében
+          if (rnd() < 0.45) {
+            const sw = between(4, 6.5);
+            const sd = between(4.5, 7);
+            const su = (rnd() < 0.5 ? -1 : 1) * (lot / 2 - sw / 2 - 2.5);
+            const sv = d + between(6, 10);
+            const shed = [at(su - sw / 2, sv), at(su + sw / 2, sv), at(su + sw / 2, sv + sd), at(su - sw / 2, sv + sd)];
+            if (free(shed)) {
+              addBuilding(shed, 'garage');
+              generatedSheds++;
+            }
+          }
+        }
+        walked += len;
+      }
+    }
+  }
+}
 
 // --- az utakra belógó épületek igazítása -----------------------------------------
 // A közutak úttestje (és mellette ROAD_CLEARANCE) szabad marad: ahol egy épület
@@ -1139,6 +1301,10 @@ const stats = {
   narrowedRoads,
   trimmedBuildings,
   removedBuildings,
+  handBuildings,
+  handReplaced,
+  generatedHouses,
+  generatedSheds,
   generatedTrees: decorTrees.length / 4,
   generatedBushes: decorBushes.length / 3,
   generatedPoles: decorPoles.length / 2,
@@ -1151,6 +1317,10 @@ const out = {
     // a kiegészítő épületalaprajzok forrása (null, ha nincs ilyen adat a pályán)
     extraAttribution: msBuildingCount ? 'Épületek egy része: Microsoft Building Footprints (ODbL)' : null,
     extraSource: msMeta ? { name: msMeta.source, url: msMeta.url, license: msMeta.license, fetchedAt: msMeta.fetchedAt } : null,
+    // kézzel (vázlatrajz alapján) felvett házak: nem OSM-adat, néhány méter pontosságúak
+    handBuildings: handBuildings ? { buildings: handBuildings, replacedFootprints: handReplaced } : null,
+    // kitalált (generált) házak: ezekben az utcákban a házak nem valós alaprajzok
+    generatedHouses: generatedHouses ? { streets: GENERATED_STREETS, houses: generatedHouses, outbuildings: generatedSheds } : null,
     license: 'ODbL 1.0',
     licenseUrl: 'https://www.openstreetmap.org/copyright',
     osmBaseTimestamp: fetchMeta.osmBaseTimestamp ?? raw.osm3s?.timestamp_osm_base ?? null,
@@ -1207,6 +1377,7 @@ console.log(`  terület: ${stats.areas}`, stats.areaKinds);
 console.log(`  patak: ${stats.streams}, kerítés: ${stats.barriers}, fa (OSM): ${stats.trees}, POI: ${stats.pois}`);
 console.log(`  hivatal épülete: ${out.townhall.building ?? 'NINCS'} (${thMatch}, ${thNear.dist.toFixed(1)} m)`);
 console.log(`  zebra: ${crossings.length}, szűkített útdarab: ${narrowedRoads}, útszélhez igazított épület: ${trimmedBuildings}, kihagyott: ${removedBuildings}, útról letolt tereptárgy: ${movedProps}`);
+console.log(`  kézzel felvett ház: ${handBuildings} (kiváltott töredék: ${handReplaced}), generált ház: ${generatedHouses} + ${generatedSheds} melléképület`);
 console.log(`  generált: ${decorTrees.length / 4} fa, ${decorBushes.length / 3} bokor, ${decorPoles.length / 2} villanyoszlop`);
 console.log(`  utcanevek: ${stats.streetNames.length}`);
 console.log(`  figyelmeztetések: ${warnings.length}`);

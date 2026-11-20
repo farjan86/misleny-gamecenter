@@ -27,7 +27,9 @@ ezen az egy szerverprogramon belül – a játékosoknak semmit nem kell telepí
    játékteret. A legkisebb játéktér két cella széles (kb. 165 × 165 m, nagyjából
    egy képernyőnyi): kétfős párbajhoz, hogy ne kelljen egymást keresgélni. Egy
    kattintás a térképen a legkisebb méretet jelöli ki. Ezután megadhat egy
-   **belépőkódot** (lásd lent), és csúszkákkal beállítja:
+   **belépőkódot** (lásd lent), kiválasztja a **játékmódot** (egyelőre egy van,
+   a Death Match; a lista a `GAME_MODES`-ból épül, új mód magától megjelenik
+   benne), és csúszkákkal beállítja:
    - a játékosok számát (1–8),
    - a játékidőt (5–30 perc, 5 perces lépésekben),
    - a botok és a felvehető tárgyak mennyiségét (0–5 szint) – a tényleges
@@ -193,9 +195,34 @@ A `http://localhost:8787/status` cím megmutatja, hányan vannak fent, hány szo
   (kidőlt fa, összedőlt ház, kilövés) eseményként mindenkihez
   eljutnak; a csak látványt adó események (lövés, becsapódás) csak a közelben
   lévőkhöz.
-- **Adatforgalom:** mérés szerint 8 játékossal és 100 bottal játékosonként
-  kb. 50 KB/s; egy szimulációs lépés a pillanatképekkel együtt kb. 1,5 ms a
-  szerveren, a legsűrűbb forgalommal (60 jármű) kb. 2 ms – a keret 16,7 ms.
+- **Különbségi pillanatkép:** a szerver minden kliensnek csak azt küldi el,
+  ami az előző, neki küldött pillanatkép óta megváltozott. A kapcsolat
+  megbízható és sorrendtartó (WebSocket), ezért a kliens a hiányzó mezőket az
+  előző állapotából tudja (`mergeSnapshot`). Mindig megy: a lépésszám, a
+  nyugta és a többi tank. Csak változáskor megy: a saját tank egyes mezői (a
+  mozgás pontosan, a visszaszámlálók fél másodperces lépésekben, a szerver belső
+  időzítői egyáltalán nem), és a ritkán változó listák (tárgyak, foltok, roncsok,
+  aknák, palackok, lövegek, állás). A saját tank a tankok listájában nem
+  ismétlődik; a képernyőn kívüli, csak a kis térképen látszó botok minden
+  negyedik pillanatképben frissülnek.
+- **Adatforgalom:** mérés szerint egy szokásos négyfős meccsen (botokkal,
+  tárgyakkal, forgalommal) játékosonként **kb. 8 KB/s** megy ki a szerverről –
+  a különbségi küldés előtt 27 KB/s volt. Nyolc játékossal és 100 bottal kb.
+  22 KB/s játékosonként (előtte 61). Egy szimulációs lépés a pillanatképekkel
+  együtt négy játékosnál kb. 0,2 ms, nyolc játékosnál 100 bottal és 60
+  járművel 2–3 ms – a keret 16,7 ms.
+- **Kisimított mozgás:** a kliens a többi tankot a két utolsó pillanatkép
+  között mozgatja; ha a következő késik, a tank rövid ideig (a lépés 35%-áig) a
+  korábbi irányában halad tovább, ahelyett hogy megállna és aztán ugrana.
+- **Ha valakinél akad a játék:** a bal alsó sarokban a képkockaszám és a
+  válaszidő megmutatja, hogy a gépe vagy a hálózata lassú-e. Fontos: a böngésző
+  a **háttérben lévő** (nem látszó, vagy másik ablak mögötti) lap képkockáit
+  visszafogja – ha egy gépen két ablakban próbálod ki a játékot, a háttérben
+  lévő akadni fog, és a többiek is úgy látják, mintha az a játékos megállt volna.
+- **A hang forgalma:** egy beszélő hangja hallgatónként kb. 17 KB/s feltöltés
+  a szerverről (a base64 kódolással együtt). Nyolcfős szobában egy beszélőnél
+  ez kb. 120 KB/s, a megengedett három egyidejű beszélőnél kb. 360 KB/s.
+  Beszélőnként másodpercenként legfeljebb 30 darab megy át.
 - **Korlátok:** legfeljebb 400 kapcsolat és 60 szoba. Folyamatban lévő meccsbe
   nem lehet belépni, és megszakadt kapcsolat után nem lehet visszatérni a
   meccsbe (a játékos kilépettnek számít, az addigi eredménye megmarad).
@@ -213,10 +240,13 @@ töltse újra az oldalt.
 | kliens → szerver | `input` | sorszám és a bemenet (gáz, forgatás, célzás, tűz, olaj, gyorsító, ágyú telepítése, akna, füst, a tüzérségi csapás célpontja) |
 | szerver → kliens | `auth`, `authError` | a belépés eredménye |
 | szerver → kliens | `rooms`, `room`, `left` | a szobalista, a váró állapota (visszaszámlálással), kilépés |
+| szerver → kliens | `online` | a bejelentkezett játékosok és hogy hol vannak (előszoba, váró, meccs); a menükben lévők kapják, változáskor |
 | szerver → kliens | `start` | a meccs beállításai, a saját tank azonosítója, a játékosok |
-| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank teljes állapota, a közeli elemek (tankok, lövedékek, tárgyak, járművek, ágyúk, aknák, füst, gázpalackok), a játékosok állása, a hátralévő játékidő |
+| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank megváltozott mezői, a közeli elemek (tankok, lövedékek, tárgyak, járművek, ágyúk, aknák, füst, gázpalackok), a játékosok állása, a hátralévő játékidő |
 | szerver → kliens | `ev` | a szimuláció eseményei |
 | szerver → kliens | `over` | a győztes és az eredménytábla |
+| mindkét irány | `chat` | szöveges üzenet: szobán kívül az előszobának, szobában és meccsen a szobatársaknak; belépéskor `chatHistory` az előszoba utolsó üzeneteivel |
+| mindkét irány | `voice` | hangdarab (50 ms, 12 kHz, 8 bites μ-law, base64-ben): a szerver a szobatársaknak adja tovább |
 
 A szerver minden bejövő adatot ellenőriz: a szoba beállításait a megengedett
 határok közé szorítja, a bemenet értékeit levágja, a nevet a fiókból veszi.

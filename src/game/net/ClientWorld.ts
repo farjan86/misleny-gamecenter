@@ -10,11 +10,11 @@
 //     képkocka alatt, simán tűnik el.
 
 import type { GameMap } from '../maps/GameMap';
-import type { BarrelState, MineState, SmokeState } from '../sim/gadgets';
+import type { BarrelState, MineState, SmokeState, WorkshopState } from '../sim/gadgets';
 import type { TurretState, VehicleState } from '../sim/vehicles';
 import { SIM_DT, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
 import type { GameLink } from './LocalGame';
-import { blankTank, packInput, unpackBarrel, unpackBullet, unpackMine, unpackOil, unpackPickup, unpackSmoke, unpackTank, unpackTurret, unpackVehicle, unpackWreck, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
+import { blankTank, packInput, unpackBarrel, unpackBullet, unpackMine, unpackOil, unpackPickup, unpackSmoke, unpackTank, unpackTurret, unpackVehicle, unpackWreck, mergeSnapshot, type FullSnapshot, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
 
 export interface PlayerStanding {
   tank: number;
@@ -28,6 +28,8 @@ export interface PlayerStanding {
 /** Ennél nagyobb eltérésnél (m) a tank a helyére ugrik, nem csúszik oda (pl. újraéledés). */
 const SNAP_DISTANCE = 8;
 const MAX_PENDING = 180;
+/** Ennyi lépésig marad meg egy tank, amelyről nem jött újabb hír (a távoli botok ritkábban frissülnek). */
+const GONE_AFTER = 45;
 
 export class ClientWorld {
   readonly tanks: TankState[] = [];
@@ -40,6 +42,7 @@ export class ClientWorld {
   mines: MineState[] = [];
   smokes: SmokeState[] = [];
   barrels: BarrelState[] = [];
+  readonly workshops: readonly WorkshopState[];
   /** a legutóbbi kiolvasás óta érkezett események */
   events: SimEvent[] = [];
   tick = 0;
@@ -59,6 +62,9 @@ export class ClientWorld {
   listsChanged = true;
 
   private readonly byId = new Map<number, TankState>();
+  /** az összefésült teljes állapot, és hogy melyik tankról mikor jött utoljára hír (lépésszám) */
+  private full: FullSnapshot | null = null;
+  private readonly seenAt = new Map<number, number>();
   private readonly predict: World;
   private readonly ptank: TankState;
   private readonly pending: { s: number; input: TankInput }[] = [];
@@ -74,7 +80,10 @@ export class ClientWorld {
     readonly room: RoomInfo,
     readonly myId: number,
     players: readonly PlayerInfo[],
+    /** a javítóműhelyek helye (a meccs alatt nem változnak) */
+    workshops: readonly number[][] = [],
   ) {
+    this.workshops = workshops.map(([x, y], i) => ({ id: i + 1, x, y }));
     this.viewId = myId;
     this.timeLeft = room.settings.minutes * 60;
     for (const p of players) this.names.set(p.tank, p.name);
@@ -115,8 +124,8 @@ export class ClientWorld {
   input(input: TankInput): void {
     const copy: TankInput = { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: input.fire, drop: input.drop, boost: input.boost, deploy: input.deploy };
     const s = ++this.seq;
-    // az aknát, a füstöt és a tüzérségi csapást csak a szerver hajtja végre: az előrejelzésbe nem kerülnek be
-    this.net.send({ t: 'input', s, i: packInput({ ...copy, mine: input.mine, smoke: input.smoke, strike: input.strike }) });
+    // az aknát, a füstöt, a tüzérségi csapást és az álcázást csak a szerver hajtja végre: az előrejelzésbe nem kerülnek be
+    this.net.send({ t: 'input', s, i: packInput({ ...copy, mine: input.mine, smoke: input.smoke, strike: input.strike, cloak: input.cloak }) });
     if (!this.predicting) return;
     this.pending.push({ s, input: copy });
     if (this.pending.length > MAX_PENDING) this.pending.splice(0, this.pending.length - MAX_PENDING);
@@ -164,6 +173,8 @@ export class ClientWorld {
     this.fresh = true;
     this.tick = snap.k;
     this.viewId = snap.v;
+    // a pillanatkép különbségi: az előző teljes állapottal összefésülve áll elő a mostani
+    this.full = mergeSnapshot(this.full, snap, this.myId);
 
     // tankok: a meglévő objektumok frissülnek (a megjelenítők ezekre hivatkoznak), az eltűntek törlődnek
     const seen = new Set<number>();
@@ -178,31 +189,36 @@ export class ClientWorld {
       }
       if (id !== this.myId) unpackTank(packed, tank);
     }
-    if (snap.me) seen.add(this.myId);
+    if (this.full.me) seen.add(this.myId);
+    // a távoli botok ritkábban frissülnek: egy tank csak akkor tűnik el, ha egy ideje nem jött róla hír
+    for (const id of seen) this.seenAt.set(id, snap.k);
     for (let i = this.tanks.length - 1; i >= 0; i--) {
-      if (seen.has(this.tanks[i].id)) continue;
-      this.byId.delete(this.tanks[i].id);
+      const id = this.tanks[i].id;
+      if (snap.k - (this.seenAt.get(id) ?? -Infinity) <= GONE_AFTER) continue;
+      this.byId.delete(id);
+      this.seenAt.delete(id);
       this.tanks.splice(i, 1);
     }
 
-    this.bullets = snap.B.map(unpackBullet);
-    this.pickups = snap.P.map(unpackPickup);
-    this.oils = snap.O.map(unpackOil);
-    this.wrecks = snap.W.map(unpackWreck);
-    this.vehicles = snap.V.map(unpackVehicle);
-    this.turrets = snap.U.map(unpackTurret);
-    this.mines = snap.M.map(unpackMine);
-    this.smokes = snap.K.map(unpackSmoke);
-    this.barrels = snap.G.map(unpackBarrel);
-    this.listsChanged = true;
-    this.standings = snap.S.map(([tank, kills, deaths, gone]) => ({ tank, name: this.nameOf(tank), kills, deaths, gone: gone === 1 }));
+    // a listák közül csak az frissül, amelyik a pillanatképben benne van (vagyis megváltozott)
+    if (snap.B) this.bullets = snap.B.map(unpackBullet);
+    if (snap.P) this.pickups = snap.P.map(unpackPickup);
+    if (snap.O) this.oils = snap.O.map(unpackOil);
+    if (snap.W) this.wrecks = snap.W.map(unpackWreck);
+    if (snap.V) this.vehicles = snap.V.map(unpackVehicle);
+    if (snap.U) this.turrets = snap.U.map(unpackTurret);
+    if (snap.M) this.mines = snap.M.map(unpackMine);
+    if (snap.K) this.smokes = snap.K.map(unpackSmoke);
+    if (snap.G) this.barrels = snap.G.map(unpackBarrel);
+    if (snap.B || snap.P || snap.O || snap.W || snap.V || snap.U || snap.M || snap.K || snap.G) this.listsChanged = true;
+    if (snap.S) this.standings = snap.S.map(([tank, kills, deaths, gone]) => ({ tank, name: this.nameOf(tank), kills, deaths, gone: gone === 1 }));
     this.timeLeft = snap.r;
 
-    this.reconcile(snap);
+    this.reconcile(this.full);
   }
 
   /** A saját tank igazítása a szerver állapotához, majd a még nem nyugtázott bemenetek újrajátszása. */
-  private reconcile(snap: Snapshot): void {
+  private reconcile(snap: FullSnapshot): void {
     const me = snap.me;
     this.me = me;
     if (!me) {

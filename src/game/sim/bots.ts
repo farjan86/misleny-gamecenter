@@ -14,6 +14,7 @@
 // A civil járműveket kikerülik; az ellenséges telepített ágyúkat megtámadják.
 
 import { TURRET, VEHICLES, VSTATE } from './vehicles';
+import { CLOAK } from './gadgets';
 import { angleDiff, TANK, WRECK, type RoadGuide, type TankInput, type TankState, type World } from './world';
 
 export const BOT = {
@@ -234,6 +235,7 @@ export class BotBrain {
       if (dist >= bestDist) continue;
       if (this.world.terrain.walls.raycast(tank.x, tank.y, other.x, other.y)) continue; // fal takarja
       if (dist > 9 && this.world.inSmoke(other.x, other.y)) continue; // füst takarja
+      if (other.cloak > 0 && dist > CLOAK.botSight) continue; // álcázva van: csak közelről veszi észre
       best = other;
       bestDist = dist;
     }

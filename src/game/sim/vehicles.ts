@@ -91,22 +91,38 @@ export interface VehicleState {
   by: number;
 }
 
-/** Telepíthető ágyú: a lerakója csapatában van, és magától lő a közeli ellenséges tankokra. */
+/**
+ * Telepíthető löveg (tüzérség): a lerakója csapatában van, és magától lő a közeli
+ * ellenséges tankokra. Minden tank kap néhányat alapból, tárggyal több szerezhető.
+ * A löveg a gazdája szintjét követi: magasabb szinten szívósabb, messzebbre lát,
+ * gyorsabban tüzel, és nagyobbat sebez (a lövedéke a gazda szintje szerint sebez).
+ */
 export const TURRET = {
   radius: 1.3,
-  hp: 120,
-  /** ilyen messzire lát és lő (m), ha nincs fal az útban */
+  /** minden (ember vezérelte) tank ennyi löveggel indul, és újraéledve is ennyit kap */
+  base: 5,
+  /** az 1. szintű löveg életereje, és ennyivel több szintenként */
+  hp: 160,
+  hpPerLevel: 32,
+  /** ilyen messzire lát és lő (m), ha nincs fal az útban; szintenként ennyivel messzebbre */
   range: 55,
-  /** két lövés között eltelő idő (mp) */
+  rangePerLevel: 1.5,
+  /** két lövés között eltelő idő (mp) az 1. szinten; szintenként ennyi százalékkal gyorsabb a tüzelés */
   fireInterval: 1.0,
+  ratePerLevel: 0.06,
   /** a cső forgási sebessége (rad/s) */
   turnRate: 3.2,
   barrelLength: 3.1,
-  /** egy játékosnak egyszerre ennyi ágyúja állhat; az újabb lerakásakor a legrégebbi eltűnik */
-  maxPerOwner: 2,
+  /** egy játékosnak egyszerre ennyi lövege állhat; az újabb lerakásakor a legrégebbi eltűnik */
+  maxPerOwner: 8,
   /** ennyi lépésenként keres új célpontot */
   scanEvery: 6,
 } as const;
+
+/** A löveg legnagyobb életereje, lőtávja és tüzelési szünete a gazdája szintje szerint. */
+export const turretMaxHp = (level: number): number => TURRET.hp + TURRET.hpPerLevel * (level - 1);
+export const turretRange = (level: number): number => TURRET.range + TURRET.rangePerLevel * (level - 1);
+export const turretInterval = (level: number): number => TURRET.fireInterval / (1 + TURRET.ratePerLevel * (level - 1));
 
 export interface TurretState {
   id: number;
@@ -117,6 +133,8 @@ export interface TurretState {
   y: number;
   angle: number;
   hp: number;
+  /** a gazda szintje, amelyhez a löveg éppen igazodik */
+  level: number;
   cooldown: number;
   /** a kiszemelt tank azonosítója (−1: nincs) */
   target: number;

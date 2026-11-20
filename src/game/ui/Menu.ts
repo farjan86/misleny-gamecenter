@@ -5,10 +5,12 @@
 import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import type { NetClient, NetStatus } from '../net/NetClient';
-import { cleanCode, ROOM_CODE, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
+import { CHAT, cleanCode, ROOM_CODE, type OnlinePlayer, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
 import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
 import { Sfx } from '../systems/audio';
-import { areaOfCells, gridSize, MATCH, matchPlan, sanitizeSettings, WEATHERS, type MatchSettings } from '../sim/match';
+import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, WEATHERS, type GameMode, type MatchSettings } from '../sim/match';
+import { guardLeave } from './leaveGuard';
+import { MenuArt } from './MenuArt';
 
 type Screen = 'main' | 'settings' | 'lobby' | 'create' | 'room' | 'results';
 const SCREENS: Screen[] = ['main', 'settings', 'lobby', 'create', 'room', 'results'];
@@ -36,7 +38,7 @@ function roomDetails(room: RoomInfo): string {
   const bots = room.plan.bots ? `kb. ${room.plan.bots} bot` : 'bot nélkül';
   // a területet a határokból számoljuk (a hálózaton átjövő érték két tizedesre kerekített)
   const size = ((s.area.maxX - s.area.minX) * (s.area.maxY - s.area.minY)) / 1e6;
-  return `${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${s.minutes} perc · ${bots}`;
+  return `${GAME_MODE_NAME[s.mode] ?? s.mode} · ${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${s.minutes} perc · ${bots}`;
 }
 
 export class Menu {
@@ -53,6 +55,10 @@ export class Menu {
   private dragging = false;
   private areaBase: HTMLCanvasElement | null = null;
   private currentRoom: RoomInfo | null = null;
+  /** a háttér és a főképernyő animált fejléce */
+  private readonly art: MenuArt;
+  private readonly chatBox = el<HTMLDivElement>('chat');
+  private readonly chatLog = el<HTMLDivElement>('chat-log');
   /** az a privát szoba, amelyhez éppen a belépőkódot kérjük */
   private codeRoom: string | null = null;
   /** az „Új játék” képernyő egyjátékos módban van-e (szerver nélkül indul) */
@@ -69,7 +75,10 @@ export class Menu {
   ) {
     this.grid = gridSize(map.width, map.height);
     if (map.data.meta.extraAttribution) el<HTMLSpanElement>('extra-attribution').textContent = ` · ${map.data.meta.extraAttribution}`;
+    this.art = new MenuArt(map);
+    this.art.setActive(true);
     this.bindMain();
+    this.bindChat();
     this.bindSettings();
     this.bindLobby();
     this.bindCreate();
@@ -91,6 +100,8 @@ export class Menu {
     } catch {
       /* nem baj, ha nem megy: a főképernyő nyílik meg */
     }
+    // ez a játék saját újratöltése: ne kérdezzen rá a böngésző
+    guardLeave(false);
     window.location.reload();
   }
 
@@ -105,10 +116,81 @@ export class Menu {
     for (const name of SCREENS) el(`screen-${name}`).classList.toggle('hidden', name !== screen);
     if (screen === 'create') this.openCreate();
     if (screen === 'settings') this.renderKeys();
+    this.art.setActive(screen === 'main');
+    this.placeChat();
   }
 
   hide(): void {
     this.root.classList.add('hidden');
+    this.art.setActive(false);
+  }
+
+  // --- csevegő ---------------------------------------------------------------------
+
+  private bindChat(): void {
+    const input = el<HTMLInputElement>('chat-input');
+    input.maxLength = CHAT.maxLength;
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      const text = input.value.trim();
+      if (text) this.net.send({ t: 'chat', text });
+      input.value = '';
+    });
+  }
+
+  /**
+   * A csevegő mindig az éppen látható képernyőre kerül (főképernyő, játékok
+   * listája, váró), ha a játékos be van lépve. A váróban a szobatársakkal,
+   * máshol az előszobában lévőkkel lehet beszélni.
+   */
+  private placeChat(): void {
+    const slot = el(`screen-${this.screen}`).querySelector('.chat-slot');
+    const visible = this.net.authed && slot !== null;
+    this.chatBox.classList.toggle('hidden', !visible);
+    el('main-features').classList.toggle('hidden', this.net.authed);
+    if (!visible || !slot) return;
+    if (this.chatBox.parentElement !== slot) {
+      slot.appendChild(this.chatBox);
+      this.chatLog.scrollTop = this.chatLog.scrollHeight;
+    }
+    const inRoom = this.screen === 'room';
+    el('chat-title').textContent = inRoom ? 'A szoba csevegője' : 'Előszoba';
+    el('chat-hint').textContent = inRoom ? 'csak a szobatársak látják' : 'mindenki látja, aki nincs meccsben';
+  }
+
+  /** A bejelentkezett játékosok névcímkéi a csevegő tetején: zöld az előszobában, kék a váróban, narancs a meccsen lévő. */
+  private renderOnline(players: readonly OnlinePlayer[]): void {
+    const box = el('chat-online');
+    const where = { lobby: 'az előszobában', room: 'egy váróban', game: 'meccsen' } as const;
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `Bejelentkezve (${players.length}):`;
+    // a saját név elöl, utána a többiek névsorban
+    const sorted = [...players].sort((a, b) => Number(b.name === this.net.name) - Number(a.name === this.net.name) || a.name.localeCompare(b.name, 'hu'));
+    box.replaceChildren(
+      count,
+      ...sorted.map((p) => {
+        const tag = document.createElement('span');
+        const me = p.name === this.net.name;
+        tag.className = `online ${p.where}${me ? ' me' : ''}`;
+        tag.textContent = p.where === 'game' ? `${p.name} · meccsen` : p.where === 'room' ? `${p.name} · váróban` : p.name;
+        tag.title = me ? 'Ez te vagy' : `${p.name} ${where[p.where]} van`;
+        return tag;
+      }),
+    );
+  }
+
+  private chatLine(from: string, text: string, cls: string): void {
+    const stick = this.chatLog.scrollTop + this.chatLog.clientHeight >= this.chatLog.scrollHeight - 30;
+    const line = document.createElement('div');
+    line.className = `chat-msg ${cls}`.trim();
+    const name = document.createElement('b');
+    name.textContent = `${from}: `;
+    line.append(name, text);
+    this.chatLog.appendChild(line);
+    while (this.chatLog.children.length > 120) this.chatLog.firstElementChild?.remove();
+    // ha a végén állt a lista, az új üzenettel együtt görög tovább
+    if (stick) this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }
 
   error(text: string): void {
@@ -144,6 +226,8 @@ export class Menu {
     el('auth-box').classList.toggle('hidden', loggedIn);
     el('user-box').classList.toggle('hidden', !loggedIn);
     if (loggedIn) el('user-greeting').textContent = `Szia, ${this.net.name}!`;
+    else this.chatLog.replaceChildren();
+    this.placeChat();
   }
 
   private bindMain(): void {
@@ -213,6 +297,17 @@ export class Menu {
         break;
       case 'rooms':
         this.renderRooms(message.rooms);
+        break;
+      case 'chat':
+        this.chatLine(message.from, message.text, [message.me ? 'me' : '', `scope-${message.scope}`].join(' ').trim());
+        break;
+      case 'online':
+        this.renderOnline(message.players);
+        break;
+      case 'chatHistory':
+        // az előszoba utolsó üzenetei (belépéskor)
+        this.chatLog.replaceChildren();
+        for (const line of message.lines) this.chatLine(line.from, line.text, `scope-lobby${line.from === this.net.name ? ' me' : ''}`);
         break;
       case 'room':
         this.currentRoom = message.room;
@@ -399,6 +494,17 @@ export class Menu {
       this.net.send({ t: 'create', settings, ...(code.trim() ? { code } : {}) });
     };
     for (const name of this.sliders) el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => this.updateCreate());
+    // játékmód: a választható módok listája (ha új mód készül, magától megjelenik itt)
+    const mode = el<HTMLSelectElement>('create-mode');
+    mode.replaceChildren(
+      ...GAME_MODES.map((m) => {
+        const option = document.createElement('option');
+        option.value = m;
+        option.textContent = GAME_MODE_NAME[m];
+        return option;
+      }),
+    );
+    mode.addEventListener('change', () => this.updateCreate());
 
     const canvas = el<HTMLCanvasElement>('area-map');
     const cellAt = (ev: MouseEvent): { c: number; r: number } => {
@@ -476,6 +582,7 @@ export class Menu {
         // kb. 750 × 750 méter a hivatal körül
         this.sel = { c0: Math.max(0, c - 4), r0: Math.max(0, r - 4), c1: Math.min(this.grid.cols - 1, c + 4), r1: Math.min(this.grid.rows - 1, r + 4) };
       }
+      el<HTMLSelectElement>('create-mode').value = last.mode;
       el<HTMLInputElement>('sl-players').value = String(last.maxPlayers);
       el<HTMLInputElement>('sl-minutes').value = String(last.minutes);
       el<HTMLInputElement>('sl-bots').value = String(last.bots);
@@ -501,6 +608,7 @@ export class Menu {
     return sanitizeSettings(
       {
         name: el<HTMLInputElement>('create-name').value,
+        mode: el<HTMLSelectElement>('create-mode').value as GameMode,
         area: areaOfCells(this.map.width, this.map.height, s.c0, s.r0, s.c1, s.r1),
         maxPlayers: this.single ? 1 : value('players'),
         minutes: value('minutes'),
@@ -520,6 +628,7 @@ export class Menu {
   private updateCreate(): void {
     const settings = this.readCreate();
     const plan = matchPlan(settings);
+    el('mode-note').textContent = GAME_MODE_HINT[settings.mode];
     el('val-players').textContent = `${settings.maxPlayers} fő`;
     el('val-minutes').textContent = `${settings.minutes} perc`;
     el('val-bots').textContent = settings.bots ? `${LEVEL_NAME[settings.bots]} – kb. ${plan.bots} bot` : 'nincs';

@@ -2,6 +2,7 @@
 // tárgyikonok, rakéta, olajfolt, pajzsgyűrű, füst. A createTextures() után hívandó.
 
 import Phaser from 'phaser';
+import { WORKSHOP } from '../sim/gadgets';
 import { PICKUP_KINDS } from '../sim/pickups';
 import { PICKUP_STYLE, pickupTexture } from './pickupStyle';
 
@@ -32,6 +33,11 @@ export const GTEX = {
   /** jobbra mutató nyíl (a bosszú és a szupertárgy irányához), és a találat irányát jelző ív */
   arrow: 'fx-arrow',
   hitArc: 'fx-hit-arc',
+  /** javítóműhely: a csarnok padlója (a tankok alatt) és a váza a tetővel (a tankok fölött, áttetszően) */
+  shopFloor: 'fx-shop-floor',
+  shopRoof: 'fx-shop-roof',
+  /** a tank oldalára szerelt kiegészítő géppuska (jobbra néz; a forgáspontja a tokja) */
+  mg: 'fx-mg',
   /** 2×2-es fehér négyzet: életerősávokhoz és lézersugárhoz nyújtva használjuk */
   px: 'px',
 } as const;
@@ -287,6 +293,160 @@ export function createGameTextures(scene: Phaser.Scene): void {
     g.addColorStop(1, 'rgba(160,160,160,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 28, 28);
+  });
+
+  // --- javítóműhely: 17 × 14 méteres nyitott csarnok (12 pixel / méter) ---------------------
+  {
+    const w = WORKSHOP.width * 12;
+    const h = WORKSHOP.height * 12;
+    // padló: betonlap figyelmeztető szegéllyel, közepén szerelőakna és nagy csavarkulcs-jel
+    canvasTexture(scene, GTEX.shopFloor, w, h, (ctx) => {
+      ctx.fillStyle = '#8f9499';
+      ctx.fillRect(0, 0, w, h);
+      // betontáblák fugái
+      ctx.strokeStyle = 'rgba(40,44,50,0.35)';
+      ctx.lineWidth = 2;
+      for (let x = 51; x < w; x += 51) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      for (let y = 56; y < h; y += 56) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      // olajfoltok
+      for (const [x, y, r] of [[60, 50, 16], [150, 118, 22], [118, 40, 10], [40, 130, 12]]) {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, 'rgba(20,20,24,0.4)');
+        g.addColorStop(1, 'rgba(20,20,24,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      }
+      // sárga-fekete szegély körben
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.rect(10, 10, w - 20, h - 20);
+      ctx.clip('evenodd');
+      ctx.fillStyle = '#ffd23c';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = '#1a1a14';
+      ctx.lineWidth = 7;
+      for (let d = -h; d < w + h; d += 22) {
+        ctx.beginPath();
+        ctx.moveTo(d, h + 4);
+        ctx.lineTo(d + h, -4);
+        ctx.stroke();
+      }
+      ctx.restore();
+      // zöld kör, benne fehér csavarkulcs: itt javul a tank
+      const cx = w / 2;
+      const cy = h / 2;
+      ctx.fillStyle = 'rgba(46,160,80,0.9)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(-Math.PI / 4);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-30, -7, 60, 14);
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.arc(side * 34, 0, 16, 0, Math.PI * 2);
+        ctx.fill();
+        // a kulcs nyílása
+        ctx.fillStyle = 'rgba(46,160,80,1)';
+        ctx.fillRect(side > 0 ? 36 : -52, -6, 16, 12);
+        ctx.fillStyle = '#ffffff';
+      }
+      ctx.restore();
+    });
+    // váz és tető: acélgerendák, sarkain oszlopok, a mezőkben áttetsző hullámlemez; a homlokán piros-fehér tábla
+    canvasTexture(scene, GTEX.shopRoof, w, h, (ctx) => {
+      ctx.fillStyle = 'rgba(70,96,120,0.5)';
+      ctx.fillRect(6, 6, w - 12, h - 12);
+      ctx.strokeStyle = 'rgba(210,225,240,0.22)';
+      ctx.lineWidth = 2;
+      for (let x = 12; x < w - 8; x += 9) {
+        ctx.beginPath();
+        ctx.moveTo(x, 8);
+        ctx.lineTo(x, h - 8);
+        ctx.stroke();
+      }
+      // középen nyitott a tető: látszik a tank
+      ctx.clearRect(34, 30, w - 68, h - 60);
+      ctx.strokeStyle = '#2a323c';
+      ctx.lineWidth = 8;
+      ctx.strokeRect(4, 4, w - 8, h - 8);
+      ctx.lineWidth = 5;
+      ctx.strokeRect(34, 30, w - 68, h - 60);
+      for (const x of [w / 3, (2 * w) / 3]) {
+        ctx.beginPath();
+        ctx.moveTo(x, 4);
+        ctx.lineTo(x, 30);
+        ctx.moveTo(x, h - 30);
+        ctx.lineTo(x, h - 4);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = '#8fa0b0';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(4, 4, w - 8, h - 8);
+      // sarokoszlopok
+      for (const [x, y] of [[9, 9], [w - 9, 9], [9, h - 9], [w - 9, h - 9]]) {
+        ctx.fillStyle = '#1c232b';
+        ctx.fillRect(x - 9, y - 9, 18, 18);
+        ctx.fillStyle = '#ffd23c';
+        ctx.fillRect(x - 5, y - 5, 10, 10);
+      }
+      // tábla a felső gerendán: piros alapon fehér kereszt
+      ctx.fillStyle = '#d8322c';
+      ctx.fillRect(w / 2 - 26, 0, 52, 26);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(w / 2 - 25, 1, 50, 24);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(w / 2 - 3.5, 4, 7, 18);
+      ctx.fillRect(w / 2 - 10, 9.5, 20, 7);
+    });
+  }
+
+  // kiegészítő géppuska felülről: lőszeres doboz hevederrel, tok, hűtőbordás cső, csőszájfék
+  canvasTexture(scene, GTEX.mg, 46, 20, (ctx) => {
+    // lőszeres doboz a tok mellett, belőle sárga heveder fut a tokba
+    ctx.fillStyle = '#4a5a3a';
+    ctx.fillRect(2, 11, 11, 8);
+    ctx.strokeStyle = '#141a10';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(2, 11, 11, 8);
+    ctx.fillStyle = '#ffd84a';
+    for (let i = 0; i < 4; i++) ctx.fillRect(4 + i * 2.4, 8.2, 1.4, 3.2);
+    // tok
+    ctx.fillStyle = '#2a2d33';
+    ctx.beginPath();
+    ctx.roundRect(1, 3, 17, 8, 1.5);
+    ctx.fill();
+    ctx.strokeStyle = '#0a0b0d';
+    ctx.stroke();
+    ctx.fillStyle = '#5a5f6a';
+    ctx.fillRect(3, 4.3, 12, 1.6);
+    // cső hűtőbordákkal
+    ctx.fillStyle = '#1c1e22';
+    ctx.fillRect(18, 5.2, 24, 3.6);
+    ctx.fillStyle = '#6a6f7a';
+    for (let x = 20; x < 36; x += 3) ctx.fillRect(x, 4.4, 1.5, 5.2);
+    // csőszájfék
+    ctx.fillStyle = '#0c0d10';
+    ctx.fillRect(40, 4, 5, 6);
+    ctx.fillStyle = '#8a9099';
+    ctx.fillRect(41.2, 5, 1.2, 4);
   });
 
   // akna: sötét tányér tüskékkel, közepén piros gyújtó

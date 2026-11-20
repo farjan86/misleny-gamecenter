@@ -19,6 +19,7 @@ export const PICKUP_KINDS = [
   'mine',
   'smoke',
   'super',
+  'gun',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
 /**
@@ -85,10 +86,12 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
    * kerül a pályára (a súlya 0): időnként a pálya közepén jelenik meg, előre bejelentve.
    */
   super: { duration: 20, weight: 0 },
+  /** kiegészítő géppuska: amíg tart, magától lő a közeli ellenségre a fő fegyver mellett */
+  gun: { duration: 30, weight: 9 },
 };
 
 /** Az ellátó teherautó rakománya: fegyverek és képességek. */
-export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret', 'mine'];
+export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret', 'mine', 'gun'];
 
 export const PICKUP = {
   /** a tárgy sugara méterben (a tank érintésre veszi fel) */
@@ -103,9 +106,9 @@ export const PICKUP = {
   oilPerPickup: 3,
   maxOil: 6,
   /** ennyi telepíthető ágyú lehet egyszerre a tanknál */
-  maxTurrets: 2,
-  /** a javítókészlet ennyi életerőt ad vissza */
-  repairAmount: 50,
+  maxTurrets: 8,
+  /** a javítókészlet ennyi életerőt ad vissza (a kezdő tank életerejének fele) */
+  repairAmount: 100,
   /** két tárgy legkisebb távolsága egymástól (m) */
   minGap: 12,
 } as const;

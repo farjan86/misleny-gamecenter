@@ -8,7 +8,7 @@ import { Accounts } from '../server/accounts';
 import { Gate } from '../server/gate';
 import { LIMITS, Lobby } from '../server/lobby';
 import type { MapData } from '../src/game/maps/types';
-import { encode, packInput, PROTOCOL_VERSION, type ClientMessage, type RoomInfo, type ServerMessage, type Snapshot } from '../src/game/net/protocol';
+import { CHAT, cleanChat, encode, messageReader, packInput, PROTOCOL_VERSION, VOICE, type ClientMessage, type FullSnapshot, type RoomInfo, type ServerMessage } from '../src/game/net/protocol';
 import { MATCH } from '../src/game/sim/match';
 
 const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
@@ -18,9 +18,30 @@ class FakeClient {
   closed = false;
   private readonly session: { message(text: string): void; close(): void };
 
+  /** a pillanatképek összefésülve, teljes állapotként (a szerver csak a változást küldi) */
+  readonly snaps: FullSnapshot[] = [];
+  /** a pillanatképek tényleges mérete a hálózaton (karakter) */
+  snapBytes = 0;
+
   constructor(lobby: Lobby, name: string) {
-    this.session = lobby.connect({ send: (text) => this.inbox.push(JSON.parse(text) as ServerMessage), close: () => (this.closed = true) });
+    const read = messageReader();
+    this.session = lobby.connect({
+      send: (text) => {
+        const message = read(text);
+        if (message.t === 'snap') {
+          this.snaps.push(message as FullSnapshot);
+          this.snapBytes += text.length;
+        }
+        this.inbox.push(message as ServerMessage);
+      },
+      close: () => (this.closed = true),
+    });
     this.send({ t: 'hello', v: PROTOCOL_VERSION, name });
+  }
+
+  /** a legutóbbi teljes állapot */
+  snap(): FullSnapshot {
+    return this.snaps[this.snaps.length - 1];
   }
 
   send(message: ClientMessage): void {
@@ -187,29 +208,30 @@ describe('a meccs a szerveren', () => {
     const mine = host.last('start')!.tank;
     let now = MATCH.countdown * 1000 + 1;
     let seq = 0;
-    const first = (): Snapshot | undefined => host.inbox.find((m): m is Snapshot => m.t === 'snap');
+    const first = (): FullSnapshot | undefined => host.snaps[0];
     for (let i = 0; i < 120; i++) {
       host.send({ t: 'input', s: ++seq, i: packInput({ throttle: 1, turn: 0, aim: null, fire: false }) });
       now += 1000 / 60;
       lobby.tick(now);
     }
     const start = first()!;
-    const end = host.last('snap')!;
+    const end = host.snap();
     expect(end.me?.id).toBe(mine);
     expect(end.v).toBe(mine);
     expect(end.a).toBeGreaterThan(seq - 6);
     // a tank elindult (a véletlen kezdőhelytől függ, hogy két másodperc múlva nem állítja-e meg épp egy fal)
-    const fastest = Math.max(...host.inbox.filter((m): m is Snapshot => m.t === 'snap').map((m) => m.me?.speed ?? 0));
+    const fastest = Math.max(...host.snaps.map((m) => m.me?.speed ?? 0));
     expect(fastest).toBeGreaterThan(5);
     expect(Math.hypot(end.me!.x - start.me!.x, end.me!.y - start.me!.y)).toBeGreaterThan(3);
-    // a pillanatképben benne van a saját tank és a közeli tárgyak
-    expect(end.T.some((t) => t[0] === mine)).toBe(true);
+    // a saját tank állapota külön megy, a tankok listájában nem ismétlődik
+    expect(end.T.some((t) => t[0] === mine)).toBe(false);
+    expect(end.me?.id).toBe(mine);
     // az állás: [tank, kilövések, halálok, kilépett-e]; a hátralévő idő másodpercben
     expect(end.S).toEqual([[mine, 0, 0, 0]]);
     expect(end.r).toBeGreaterThanOrEqual(5 * 60 - 2);
     expect(end.r).toBeLessThan(5 * 60);
     // 20 pillanatkép másodpercenként
-    const snaps = host.inbox.filter((m) => m.t === 'snap').length;
+    const snaps = host.snaps.length;
     expect(snaps).toBeGreaterThanOrEqual(38);
     expect(snaps).toBeLessThanOrEqual(42);
   });
@@ -264,7 +286,7 @@ describe('a meccs a szerveren', () => {
       }
     }
     const ms = (performance.now() - started) / steps;
-    const bytes = clients[0].inbox.filter((m) => m.t === 'snap').reduce((sum, m) => sum + encode(m).length, 0);
+    const bytes = clients[0].snapBytes;
     console.log(`8 játékos, 100 bot, 60 jármű: átlag ${ms.toFixed(2)}, a legjobb 100 lépés ${best.toFixed(2)} ms / lépés, pillanatkép átlag ${(bytes / (steps / 3) / 1024).toFixed(1)} KB (${((bytes / (steps / 60)) / 1024).toFixed(0)} KB/s játékosonként)`);
     // egy lépésre 16,7 ms jut; a legjobb szakasz a gép tényleges sebességét mutatja (a tesztek párhuzamosan futnak)
     expect(best).toBeLessThan(6);
@@ -286,7 +308,7 @@ describe('a meccs a szerveren', () => {
       now += 1000 / 60;
       lobby.tick(now);
     }
-    const clock = host.inbox.filter((m): m is Snapshot => m.t === 'snap').map((m) => m.r);
+    const clock = host.snaps.map((m) => m.r);
     expect(clock[0]).toBe(300);
     expect(clock[clock.length - 1]).toBeLessThanOrEqual(1);
     for (const client of [host, guest]) {
@@ -426,7 +448,7 @@ describe('egyjátékos mód: ugyanaz a szobakezelő, visszaszámlálás nélkül
     expect(start.room.settings).toMatchObject({ maxPlayers: 1, botSkill: 5, botAggression: 1 });
     expect(start.room.plan.bots).toBeGreaterThan(0);
     lobby.tick(210);
-    expect(solo.last('snap')?.me?.id).toBe(start.tank);
+    expect(solo.snap()?.me?.id).toBe(start.tank);
   });
 
   it('a hiányzó vagy hibás botbeállítás a közepes szintre kerül', () => {
@@ -435,5 +457,151 @@ describe('egyjátékos mód: ugyanaz a szobakezelő, visszaszámlálás nélkül
     solo.send({ t: 'create', settings: { ...small, maxPlayers: 1, botSkill: 42, botAggression: Number.NaN } });
     lobby.tick(10);
     expect(solo.last('start')!.room.settings).toMatchObject({ botSkill: 5, botAggression: 3 });
+  });
+});
+
+describe('ki van bejelentkezve', () => {
+  it('a menükben lévők látják, kik vannak még bent, és ki hol van: előszobában, váróban vagy meccsen', () => {
+    const lobby = new Lobby(data, 0);
+    lobby.tick(1000);
+    const anna = new FakeClient(lobby, 'Anna');
+    expect(anna.last('online')?.players).toEqual([{ name: 'Anna', where: 'lobby' }]);
+    const bela = new FakeClient(lobby, 'Béla');
+    // a korábban belépett is megtudja, hogy új játékos jött
+    expect(anna.last('online')?.players).toEqual([{ name: 'Anna', where: 'lobby' }, { name: 'Béla', where: 'lobby' }]);
+    expect(bela.last('online')?.players).toHaveLength(2);
+    // Béla szobát nyit: a váróban van
+    bela.send({ t: 'create', settings: { ...small, maxPlayers: 2 } });
+    expect(anna.last('online')?.players).toContainEqual({ name: 'Béla', where: 'room' });
+    expect(bela.last('online')?.players).toContainEqual({ name: 'Béla', where: 'room' });
+    // Cili belép hozzá: indul a meccs, mindketten meccsen vannak
+    const cili = new FakeClient(lobby, 'Cili');
+    cili.send({ t: 'join', room: cili.rooms()[0].id });
+    lobby.tick(1100);
+    expect(bela.last('start')).toBeDefined();
+    expect(anna.last('online')?.players).toEqual([{ name: 'Anna', where: 'lobby' }, { name: 'Béla', where: 'game' }, { name: 'Cili', where: 'game' }]);
+    // aki kilép az oldalról, eltűnik a listából
+    cili.disconnect();
+    expect(anna.last('online')?.players.map((p) => p.name)).toEqual(['Anna', 'Béla']);
+    const before = bela.inbox.filter((m) => m.t === 'online').length;
+    const dani = new FakeClient(lobby, 'Dani');
+    expect(dani.last('online')?.players.map((p) => p.name)).toEqual(['Anna', 'Béla', 'Dani']);
+    // a meccsen lévő nem kapja a listát (ott nem látszik): nem terheli a hálózatát
+    expect(bela.inbox.filter((m) => m.t === 'online').length).toBe(before);
+  });
+});
+
+describe('üzenetek és hang', () => {
+  const chats = (c: FakeClient): Extract<ServerMessage, { t: 'chat' }>[] => c.inbox.filter((m): m is Extract<ServerMessage, { t: 'chat' }> => m.t === 'chat');
+  const voices = (c: FakeClient): Extract<ServerMessage, { t: 'voice' }>[] => c.inbox.filter((m): m is Extract<ServerMessage, { t: 'voice' }> => m.t === 'voice');
+  const frame = 'A'.repeat(800);
+
+  it('az előszobában mindenki megkapja az üzenetet, aki nincs szobában; a később belépő az utolsókat is', () => {
+    const lobby = new Lobby(data);
+    lobby.tick(1000);
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    const cili = new FakeClient(lobby, 'Cili');
+    // Cili szobát nyit: ő már nem az előszobában van
+    cili.send({ t: 'create', settings: { ...small, maxPlayers: 3 } });
+    anna.send({ t: 'chat', text: '  Sziasztok,   ki jön <b>játszani</b>?\n ' });
+    expect(chats(bela)).toEqual([{ t: 'chat', from: 'Anna', text: 'Sziasztok, ki jön b játszani /b ?', scope: 'lobby' }]);
+    // a küldő is megkapja, megjelölve, hogy az övé
+    expect(chats(anna)).toEqual([{ t: 'chat', from: 'Anna', text: 'Sziasztok, ki jön b játszani /b ?', scope: 'lobby', me: true }]);
+    expect(chats(cili)).toHaveLength(0);
+    // üres vagy hibás üzenet nem megy át
+    anna.send({ t: 'chat', text: '   ' });
+    anna.send({ t: 'chat', text: 42 as never });
+    expect(chats(bela)).toHaveLength(1);
+    expect(cleanChat('x'.repeat(500))).toHaveLength(CHAT.maxLength);
+    // aki később lép be, megkapja az előszoba utolsó üzeneteit
+    const dani = new FakeClient(lobby, 'Dani');
+    expect(dani.last('chatHistory')?.lines).toEqual([{ from: 'Anna', text: 'Sziasztok, ki jön b játszani /b ?' }]);
+  });
+
+  it('szobában és meccsen az üzenet csak a szobatársaknak megy', () => {
+    const lobby = new Lobby(data, 0);
+    lobby.tick(1000);
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    const kint = new FakeClient(lobby, 'Kint');
+    anna.send({ t: 'create', settings: { ...small, maxPlayers: 3 } });
+    bela.send({ t: 'join', room: bela.rooms()[0].id });
+    // a váróban
+    anna.send({ t: 'chat', text: 'Várjuk a harmadikat' });
+    expect(chats(bela)).toEqual([{ t: 'chat', from: 'Anna', text: 'Várjuk a harmadikat', scope: 'room' }]);
+    expect(chats(kint)).toHaveLength(0);
+    // a szobán belüli beszélgetés nem kerül az előszoba előzményei közé
+    expect(new FakeClient(lobby, 'Új').last('chatHistory')).toBeUndefined();
+    // a meccs alatt is
+    const cili = new FakeClient(lobby, 'Cili');
+    cili.send({ t: 'join', room: cili.rooms()[0].id });
+    lobby.tick(1100);
+    expect(anna.last('start')).toBeDefined();
+    bela.send({ t: 'chat', text: 'Hol vagytok?' });
+    expect(chats(anna).pop()).toMatchObject({ from: 'Béla', text: 'Hol vagytok?', scope: 'room' });
+    expect(chats(cili).pop()).toMatchObject({ from: 'Béla', text: 'Hol vagytok?' });
+    expect(chats(kint)).toHaveLength(0);
+  });
+
+  it('aki elárasztja a csevegést, annak az üzenetei egy időre nem mennek át', () => {
+    const lobby = new Lobby(data);
+    lobby.tick(1000);
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    for (let i = 0; i < CHAT.burst + 3; i++) anna.send({ t: 'chat', text: `üzenet ${i}` });
+    expect(chats(bela)).toHaveLength(CHAT.burst);
+    expect(anna.last('error')?.message).toContain('Túl gyorsan');
+    lobby.tick(1000 + CHAT.window + 1);
+    anna.send({ t: 'chat', text: 'újra' });
+    expect(chats(bela).pop()?.text).toBe('újra');
+  });
+
+  it('a hang a szobatársaknak megy tovább, a beszélőnek nem; az előszobából és a hibás darab nem megy át', () => {
+    const lobby = new Lobby(data, 0);
+    lobby.tick(1000);
+    const anna = new FakeClient(lobby, 'Anna');
+    const bela = new FakeClient(lobby, 'Béla');
+    const kint = new FakeClient(lobby, 'Kint');
+    // szobán kívül nincs kinek beszélni
+    anna.send({ t: 'voice', d: frame });
+    expect(voices(bela)).toHaveLength(0);
+    anna.send({ t: 'create', settings: { ...small, maxPlayers: 2 } });
+    bela.send({ t: 'join', room: bela.rooms()[0].id });
+    lobby.tick(1100);
+    expect(anna.last('start')).toBeDefined();
+    anna.send({ t: 'voice', d: frame });
+    expect(voices(bela)).toEqual([{ t: 'voice', from: 'Anna', d: frame }]);
+    expect(voices(anna)).toHaveLength(0);
+    expect(voices(kint)).toHaveLength(0);
+    // túl nagy, üres vagy nem base64 darab
+    anna.send({ t: 'voice', d: 'A'.repeat(VOICE.maxChars + 1) });
+    anna.send({ t: 'voice', d: '' });
+    anna.send({ t: 'voice', d: '<script>' });
+    anna.send({ t: 'voice', d: 5 as never });
+    expect(voices(bela)).toHaveLength(1);
+    // másodpercenként csak korlátozott számú darab megy át
+    lobby.tick(3000);
+    for (let i = 0; i < VOICE.maxPerSecond + 20; i++) anna.send({ t: 'voice', d: frame });
+    expect(voices(bela)).toHaveLength(1 + VOICE.maxPerSecond);
+  });
+
+  it('egy szobában egyszerre legfeljebb hárman beszélhetnek; aki elhallgat, helyet ad', () => {
+    const lobby = new Lobby(data, 0);
+    lobby.tick(1000);
+    const names = ['Anna', 'Béla', 'Cili', 'Dani', 'Emma'];
+    const players = names.map((name) => new FakeClient(lobby, name));
+    players[0].send({ t: 'create', settings: { ...small, maxPlayers: names.length } });
+    for (const p of players.slice(1)) p.send({ t: 'join', room: p.rooms()[0].id });
+    lobby.tick(1100);
+    expect(players[0].last('start')).toBeDefined();
+    const listener = players[4];
+    for (const p of players.slice(0, 4)) p.send({ t: 'voice', d: frame });
+    // az első három hangja megy át, a negyediké nem
+    expect(voices(listener).map((v) => v.from)).toEqual(names.slice(0, VOICE.speakers));
+    // szünet után a negyedik is szóhoz jut
+    lobby.tick(1100 + VOICE.quiet + 50);
+    players[3].send({ t: 'voice', d: frame });
+    expect(voices(listener).pop()?.from).toBe('Dani');
   });
 });

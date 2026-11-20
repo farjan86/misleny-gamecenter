@@ -13,6 +13,9 @@ import type { ServerMessage } from './game/net/protocol';
 import { pickPpm, canvasSize } from './game/quality';
 import { GameScene, type GameSceneData } from './game/scenes/GameScene';
 import { loadSettings } from './game/settings';
+import { Voice } from './game/systems/voice';
+import { GameChat } from './game/ui/GameChat';
+import { guardLeave } from './game/ui/leaveGuard';
 import { VERSION } from './game/version';
 import { Menu } from './game/ui/Menu';
 
@@ -27,6 +30,9 @@ async function start(): Promise<void> {
   let game: Phaser.Game | null = null;
   let world: ClientWorld | null = null;
   let finished = false;
+  /** üzenetek és hang a meccsen (csak többjátékos játékban) */
+  let chat: GameChat | null = null;
+  let voice: Voice | null = null;
   /** a helyi (egyjátékos) játék, ha az fut */
   let local: LocalGame | null = null;
 
@@ -36,7 +42,16 @@ async function start(): Promise<void> {
     // a pálya a meccs beállításai szerint: játéktér és időjárás
     map.setArea(settings.area);
     map.weather = settings.weather;
-    world = new ClientWorld(map, link, message.room, message.tank, message.players);
+    world = new ClientWorld(map, link, message.room, message.tank, message.players, message.workshops);
+    // meccs közben a böngésző megerősítést kér a lap bezárása előtt (a Ctrl+W ellen)
+    guardLeave(true);
+    // többjátékos meccsen: üzenetek a többieknek és hang gombnyomásra (a saját szerveren át)
+    if (message.players.length > 1) {
+      const settings = loadSettings();
+      voice = new Voice((d) => link.send({ t: 'voice', d }));
+      voice.setVolume(settings.volume / 100);
+      chat = new GameChat(settings.keys, (text) => link.send({ t: 'chat', text }), voice);
+    }
     menu.hide();
 
     const { ppm } = pickPpm();
@@ -93,8 +108,16 @@ async function start(): Promise<void> {
       case 'ev':
         world?.receiveEvents(message.e);
         break;
+      case 'chat':
+        chat?.add(message.from, message.text, message.me === true);
+        break;
+      case 'voice':
+        voice?.receive(message.from, message.d);
+        break;
       case 'over':
         finished = true;
+        guardLeave(false);
+        chat?.dispose();
         menu.showResults(message.winner, message.standings, myId);
         break;
       case 'left':

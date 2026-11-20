@@ -439,6 +439,12 @@ export class Sfx {
         this.clang(300, 0.28, 0, 0.18);
         this.clang(450, 0.24, 0.12, 0.22);
         break;
+      case 'gun':
+        // géppuska: a heveder becsúszik, a závár kétszer kattan
+        this.noise(0.14, 1200, 3200, 0.3, { type: 'bandpass', q: 2 });
+        this.clang(620, 0.24, 0.14, 0.08);
+        this.clang(480, 0.26, 0.24, 0.1);
+        break;
       case 'smoke':
         this.noise(0.45, 5000, 1800, 0.28, { type: 'highpass', attack: 0.05 });
         this.clang(380, 0.2, 0, 0.15);
@@ -497,6 +503,30 @@ export class Sfx {
 
   // --- akna, füst, tüzérség ---------------------------------------------------------------
 
+  /** a kiegészítő géppuska egy lövése: rövid, száraz kattanás */
+  mg(volume = 1): void {
+    const k = vary(0.08);
+    this.noise(0.05, 3800 * k, 900, 0.34 * volume, { type: 'bandpass', q: 1.2 });
+    this.tone('square', 300 * k, 120 * k, 0.04, 0.12 * volume);
+  }
+
+  /** géppuskatalálat a saját tankon: apró koppanás a páncélon */
+  ping(): void {
+    this.tone('triangle', 1700 * vary(0.2), 900, 0.05, 0.12);
+  }
+
+  /** javítás a műhelyben: racsnis kulcs kattogása, egy-egy fémes koppanással */
+  wrench(): void {
+    for (let i = 0; i < 3; i++) this.tone('square', 900 + i * 60, 880 + i * 60, 0.025, 0.1, i * 0.05);
+    this.clang(700 * vary(0.15), 0.12, 0.2, 0.12);
+  }
+
+  /** szintvesztés: lefelé lépő két hang */
+  levelDown(): void {
+    this.tone('triangle', 440, 436, 0.16, 0.22, 0.5);
+    this.tone('triangle', 311, 306, 0.3, 0.22, 0.68);
+  }
+
   /** akna lerakása: tompa koppanás, majd az élesítés két csipogása */
   mineLay(): void {
     this.noise(0.1, 600, 90, 0.5);
@@ -529,6 +559,17 @@ export class Sfx {
     [392, 523, 659].forEach((f, i) => this.tone('sawtooth', f, f, 0.14, 0.18, i * 0.1));
     this.tone('triangle', 784, 790, 0.4, 0.3, 0.3);
     this.noise(0.25, 300, 90, 0.4, { delay: 0.3 });
+  }
+
+  /** álcázás be: lefelé hulló, elhalkuló zizegés; ki: ugyanez visszafelé */
+  cloak(on: boolean): void {
+    if (on) {
+      this.tone('sine', 1400, 260, 0.5, 0.2);
+      this.noise(0.55, 6000, 900, 0.2, { type: 'bandpass', q: 4, attack: 0.03 });
+    } else {
+      this.tone('sine', 300, 1100, 0.3, 0.16);
+      this.noise(0.3, 900, 5000, 0.14, { type: 'bandpass', q: 4, attack: 0.05 });
+    }
   }
 
   /** bejelentés: szupertárgy érkezik (mindenkinek szól) */

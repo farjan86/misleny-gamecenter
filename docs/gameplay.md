@@ -48,10 +48,14 @@ bekerülhessenek.
 | R | akna lerakása a tank mögé (ha van töltet) |
 | C | füst a tank köré (ha van töltet) |
 | X | tüzérségi csapás oda, ahová az egér mutat (ha jár) |
+| Bal Ctrl / V | álcázás (percenként egyszer, 10 másodpercre) |
+| Enter | üzenet írása a többieknek (többjátékos meccsen) |
+| T | beszéd, amíg nyomva van (többjátékos meccsen) |
 | Tab | eredménytábla, amíg nyomva van |
 | M | az egész város térképe utcanevekkel be/ki |
 | F | teljes képernyős mód be/ki |
 | H | információs panel be/ki |
+| Esc | menü (billentyűk, kilépés) |
 
 Irányítási modell: klasszikus tankirányítás – az A/D a tank testét forgatja,
 a W/S a test saját iránya szerint visz előre vagy hátra, a torony ettől
@@ -62,8 +66,8 @@ mint állva.
 
 ### Ami a képernyőn látszik
 
-Játék közben állandóan a **térkép** (jobb felül), az **információ gombja**
-(bal felül, *i*), mellette a **tank sávja**, felül középen pedig a
+Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
+(bal felül, ☰ Menü), mellette a **tank sávja**, felül középen pedig a
 **visszaszámláló óra** látszik.
 
 - **Az óra** a hátralévő játékidőt mutatja (perc:másodperc), alatta a
@@ -78,16 +82,19 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   helyezése, kilövései, halálai és szintje, a végeredmény sorrendjében.
 - **A pálya a kijelölt játéktérre van vágva:** a kamera a játéktér szélén
   megáll (a határt sárga vonal jelzi), azon túl semmi nem látszik – a térképen sem.
-- **A tank sávja:** elöl a tank szintje, utána ami éppen nála van – a fegyver
-  (nehéz lövedék, rakéta, lézer), a megmaradó képességek (pattanó lövedék), a
-  hármas lövés hátralévő lövései, a pajzs-, olaj- és ágyútöltetek, valamint az
-  időre szóló tárgyak a hátralévő másodpercekkel.
+- **A tank sávja** a bal szélen, egymás alatt (így nem lóg bele az órába):
+  felül a tank szintje, alatta az álcázás állapota, majd ami éppen nála van – a
+  fegyver (nehéz lövedék, rakéta, lézer), a megmaradó képességek (pattanó
+  lövedék), a hármas lövés hátralévő lövései, a pajzs, az olaj, a lövegek, az
+  aknák, a füst, valamint az időre szóló tárgyak a hátralévő másodpercekkel.
+  Amit billentyűvel lehet használni, annál a **beállított billentyű** is ott
+  áll zárójelben, pl. „Löveg (Q) ×5”, „Akna (R) ×2”.
 - A térkép a tank kb. 700 m-es környékét mutatja (kis játéktérnél az egészet); az M az egész játékteret mutatja nagyban. A botok piros, a többi játékos narancssárga pontként látszik
   (a játékosok mindig, bármilyen messze vannak).
 - A saját tank zöld, a botok vörösek, a többi játékos tankja kék.
 - A tankok fölött az életerősáv; a sajátod fölött – használat közben – a
   gyorsító hőfoka is.
-- Az **információs panel** (H vagy az *i* gomb): az irányítás az aktuális
+- Az **információs panel** (H, vagy a menü *Billentyűk és információ* pontja): az irányítás az aktuális
   billentyűkkel, a tankod állapota (életerő, szint, kilövések és halálok, fegyver, aktív
   tárgyak), a játékosok állása, a forrásmegjelölés és a *Kilépés a meccsből* gomb.
 - A fontos események rövid értesítésként jelennek meg felül (felvett tárgy,
@@ -105,8 +112,16 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
 - A tájékozódási pontok (hivatal, templom, rendőrség…) felirata a pályán marad.
 - **A többi játékos neve** a tankja fölött látszik, kis, halvány felirattal
   (a saját tankod és a botok fölött nincs név). Füstben a név sem látszik.
+- **Menü** a bal felső sarokban (☰ Menü, vagy az **Esc**): lenyitva két pont
+  van benne – *Billentyűk és információ* (az irányítás az éppen beállított
+  billentyűkkel, a tankod állapota, a játékosok) és *Kilépés a játékból*
+  (megerősítést kér). A kilépés egyjátékos és többjátékos meccsből is
+  kiléptet: egyjátékosból a főképernyőre, többjátékosból a játékok listájához.
 - **Verziószám** a bal alsó sarokban (a menüben és játék közben is), pl. „v1.0”.
-  Ebből látszik, hogy a böngésző a legfrissebb játékot tölti-e be.
+  Ebből látszik, hogy a böngésző a legfrissebb játékot tölti-e be. Játék közben
+  mellette áll a **képkockaszám** és a szerver **válaszideje** („v1.4 · 60 fps ·
+  35 ms”); ha a gép lassú (45 fps alatt) vagy a hálózat (150 ms fölött), a
+  kijelzés narancsra vált. Ha valakinél akad a játék, ebből látszik, melyik a ludas.
 
 ### Szabályok
 
@@ -119,7 +134,8 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   közlekedő járművek, a telepített ágyúk és a roncsok nem járhatók át. A fák és a villanyoszlopok nem akadályok: a tank
   kidönti őket. A bokrokon és a patakokon át lehet hajtani.
 - **A játéktér határa** fal: a tank nem megy át rajta, a lövedék ott becsapódik.
-- **Sebzés:** a tank életereje 100 (szintenként több). Egy sima lövedék 25-öt
+- **Sebzés:** a tank életereje 200 (szintenként 24-gyel több, a 20. szinten
+  656), vagyis a kezdő tank nyolc sima lövedéket bír ki. Egy sima lövedék 25-öt
   sebez, a nehéz 50-et, a rakéta 55-öt (a robbanása 7 m-en belül további
   30-at), a lézer 18-at.
 - **Kilövés:** a kilőtt tank 4 másodperc múlva éled újra – véletlen helyen, a
@@ -130,12 +146,27 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   felrobbantott jármű ért el). Azonos kilövésszámnál az nyer, akit
   kevesebbszer lőttek ki; ha ez is egyezik, döntetlen. Ha egy többjátékos
   meccsből mindenki más kilép, a bent maradó nyer.
-- **Szintek:** a játékos tankja minden kilőtt tank után szintet lép (legfeljebb
-  a 20. szintig): szintenként 4%-kal nagyobb, 12-vel több a legnagyobb
-  életereje, és 8%-kal többet sebez. A botok nem lépnek szintet.
-- **A szint megmarad:** a kilőtt tank ugyanazon a szinten, a szintjéhez járó
-  teljes életerővel éled újra. Csak a felszerelése vész el: a felvett fegyver,
-  a pajzs, az olaj, a telepíthető ágyú töltetei és az időre szóló hatások.
+- **Önjavítás:** ha a tankot 8 másodpercig nem éri sebzés, az életereje
+  nagyon lassan visszatöltődik: másodpercenként a legnagyobb életerő 1%-a
+  (az 1. szinten 2 életerő; a nulláról 100 másodperc lenne a teljes feltöltés).
+  Az újabb találat újraindítja a várakozást; a pajzs által felfogott találat
+  nem. Harc közben nem számít, a javítókészletet nem pótolja. A botok tankja
+  is így gyógyul.
+- **Szintek:** a tank a kilövésekkel fejlődik, legfeljebb a 20. szintig:
+  szintenként 4%-kal nagyobb, 24-gyel több a legnagyobb életereje, és 8%-kal
+  többet sebez. A botok nem lépnek szintet.
+  - **Játékos kilövése:** egy szint. Ha a kilőtt játékos **jóval magasabb
+    szintű** volt – legalább három szinttel –, a győztes **két szintet** lép.
+    Nagyjából egyszintű tankok párharcában tehát a győztes egyet nyer, a
+    vesztes kettőt veszít.
+  - **Botok kilövése:** három bot ér egy szintet. A tank sávja mutatja, hol
+    tartasz („bot 2/3”); a számláló a halállal nem vész el.
+  - **Halál:** a kilőtt tank **két szintet veszít** (az 1. szint alá nem megy),
+    és az új szintjéhez járó teljes életerővel éled újra. A felszerelése is
+    elvész: a felvett fegyver, a pajzs, az olaj, az akna, a füst, a
+    telepíthető ágyú töltetei és az időre szóló hatások.
+  Így a vezető előnye nem nő a végtelenségig, és aki lemaradt, egy jó
+  kilövéssel sokat behozhat.
 - **Tanktípusok:** a szintek hat osztályba tartoznak, és osztályváltáskor a
   tank más típus lesz – más a teste és a tornya, és a mérete is ugrik (további
   7%-kal). A váltást aranyszínű fénygyűrű és hang jelzi; a tank sávja és az
@@ -275,22 +306,100 @@ teherautó**. A számukat a „Forgalom" csúszka (0–5) és a pálya mérete a
   sebezhetetlenség vagy telepíthető ágyú).
 - A járművek kilövéséért nem jár szint.
 
-### Telepíthető ágyú
+### Lövegek (telepíthető tüzérség)
 
-Felvehető tárgy; egyszerre legfeljebb két töltet lehet a tanknál. A **Q**
-billentyű a tank mögé rakja le.
+Minden tank **öt löveggel** indul, és újraéledéskor újra megkapja az ötöt; a
+*Löveg* tárgy egy továbbit ad (egyszerre legfeljebb nyolc lehet a tanknál). A
+**Q** a tank mögé rakja le. A botok nem kapnak és nem telepítenek löveget.
 
-- Az ágyú a lerakójáé: **magától lő minden ellenséges tankra** (a többi
-  játékosra és a botokra) 55 m-en belül, ha rálát – falon át nem. Másodpercenként
-  egyet lő, sima lövedékkel; a találatai és a kilövései a lerakójának számítanak.
-- **Kilőhető:** 120 életereje van; az ellenség lövedéke, a rakéta robbanása és
-  a felrobbanó jármű is sebzi. A lerakója lövedéke nem árt neki. A magas
-  szintű ellenséges tank az ütközésével is szétrombolja.
+- A löveg a lerakójáé: **magától lő minden ellenséges tankra** (a többi
+  játékosra és a botokra), amelyre rálát – falon át nem. A találatai és a
+  kilövései a lerakójának számítanak.
+- **A löveg a gazdája szintjét követi**, akkor is, ha a gazda később lép szintet
+  (vagy veszít): a csöve a tank típusáé, és a tankkal együtt nő.
+
+  | A gazda szintje | Életerő | Lőtáv | Két lövés között | Egy lövés sebzése |
+  |---|---|---|---|---|
+  | 1. | 160 | 55 m | 1,0 mp | 25 |
+  | 10. | 448 | 68,5 m | 0,65 mp | 43 |
+  | 20. | 768 | 83,5 m | 0,47 mp | 63 |
+
+  A 20. szintű tank egy lövege így kb. ötször annyit sebez másodpercenként,
+  mint a kezdőé, és közel ötször annyit bír ki. Szintlépéskor a löveg a többlet
+  életerőt megkapja; ha a gazda szintet veszít, a löveg felső határa is csökken.
+- **Kilőhető:** az ellenség lövedéke, a rakéta robbanása, az akna, a tüzérségi
+  csapás és a felrobbanó jármű is sebzi. A lerakója lövedéke nem árt neki. A
+  magas szintű ellenséges tank az ütközésével is szétrombolja.
 - Akadály: a tankok (a lerakójáé is) nem tudnak átmenni rajta.
-- Egy játékosnak egyszerre két ágyúja állhat; a harmadik lerakásakor a
-  legrégebbi eltűnik. A tank kilövésekor a nála lévő töltetek elvesznek, a
-  már lerakott ágyúk megmaradnak.
-- A botok megtámadják az ellenséges ágyút. A civil járművekre az ágyú nem lő.
+- Egy játékosnak egyszerre nyolc lövege állhat; a kilencedik lerakásakor a
+  legrégebbi eltűnik. A már lerakott lövegek a gazda kilövése után is megmaradnak.
+- A botok megtámadják az ellenséges löveget; a füstben álló és az álcázott
+  tankot a löveg nem (illetve csak közelről) látja. A civil járművekre nem lő.
+
+### Üzenetek és hang
+
+- **Ki van bejelentkezve:** a csevegő tetején névcímkék mutatják a
+  bejelentkezett játékosokat és hogy hol vannak: zöld az előszobában, kék a
+  váróban, narancs a meccsen lévő; a saját neved sárga. A lista magától frissül.
+- **Előszoba:** belépés után a főképernyőn és a játékok listájánál csevegő
+  látszik: amit ide írsz, mindenki megkapja, aki be van lépve és nincs
+  szobában. Aki később lép be, az utolsó 30 üzenetet is látja.
+- **A váróban** a csevegő a szobáé: csak a szobatársak látják.
+- **Meccs közben** az **Enter** beviteli mezőt nyit a bal alsó sarokban
+  (Enter: küldés, Esc: mégsem); gépelés közben a tank megáll, a billentyűk nem
+  irányítják. Az üzenetek a bal alsó sarokban jelennek meg, és néhány másodperc
+  múlva elhalványulnak. Csak a szobatársak kapják meg.
+- **Hang (adóvevő):** a **T** nyomva tartása alatt a mikrofonod hangját a
+  szobatársak hallják; elengedve vége. Az első használatkor a böngésző
+  engedélyt kér a mikrofonhoz (utána a meccs végéig nyitva tartja, de hang csak
+  a gomb nyomva tartása alatt megy). A beszéd elejét és végét rövid rádiójel
+  jelzi, és a bal alsó sarokban látszik, ki beszél. Egyszerre legfeljebb hárman
+  beszélhetnek. A hang a hangerő-beállítást követi.
+- A hang **a játék saját szerverén** megy át: nincs külső szolgáltatás, és a
+  játékosok nem látják egymás hálózati címét. Telefonminőségű, rádiószerű hang
+  (12 kHz), kb. 0,2 másodperc késéssel. Mikrofon csak biztonságos kapcsolaton
+  (https vagy a saját gép) érhető el: a helyi hálózati IP-címen megnyitott
+  játékban a hang nem működik, a szöveges üzenet igen.
+- Egyjátékos módban nincs csevegő és hang. A szerver az üzeneteket megtisztítja
+  (legfeljebb 200 karakter), és aki elárasztja a csevegőt, annak az üzenetei
+  néhány másodpercig nem mennek át.
+
+### Álcázás
+
+Minden tank alapképessége, tárgy nem kell hozzá: a **bal Ctrl** (vagy a **V**)
+10 másodpercre álcázza a tankot, és a bekapcsolástól számítva **percenként
+egyszer** használható. A tank sávja mutatja, hogy éppen tart, készen áll, vagy
+mennyi idő múlva lesz újra használható.
+
+- **Nem láthatatlanság:** a tank halvány, kékes, vibráló sziluett lesz. Aki
+  figyel, észreveszi – a lánctalpa nyoma is megmarad a füvön –, de nincs
+  fölötte életerősáv, név és szintjelvény, nem füstöl, nincs fénye, és a
+  térképen sem látszik. A saját álcázott tankod félig áttetsző.
+- **A lövés leleplez:** az első lövésnél az álcázás azonnal megszűnik.
+- A botok és a telepített ágyúk az álcázott tankot csak 20 méteren belülről
+  veszik észre.
+- A találatok (sebzésszám, robbanás) álcázva is látszanak; az akna alatta is
+  felrobban. A bosszújel az álcázott tankot nem mutatja.
+- **A Ctrl és a böngésző:** a böngésző néhány gyorsbillentyűjét (Ctrl+W: a
+  lap bezárása) az oldal nem tudja letiltani, ezért meccs közben a böngésző
+  megerősítést kér, mielőtt bezárná a lapot. Teljes képernyőn (F) a Chrome és
+  az Edge ezeket a billentyűket is átengedi a játéknak. Aki nem szeretné, a
+  Beállításokban másik billentyűt adhat meg.
+
+### Javítóműhely
+
+A pályán néhány **javítóműhely** áll, minden meccsen máshol (négyzetkilométerenként
+négy, legalább egy, legfeljebb tizenkettő): 17 × 14 méteres nyitott csarnok,
+figyelmeztető csíkos betonpadlóval, zöld csavarkulcs-jellel, piros-fehér
+táblával és villogó zöld fénnyel – a legnagyobb tank is kényelmesen elfér benne.
+Fala nincs, be lehet hajtani.
+
+- Amíg a tank a csarnokban áll, az életereje töltődik: másodpercenként a
+  legnagyobb életerő 8%-a, vagyis kb. 12 másodperc alatt a nulláról teljesen
+  feltölt. Közben szikrák és racsnikattogás jelzi a javítást.
+- A műhely nem véd: a benne álló tankot ugyanúgy lehet lőni.
+- A térképen (a kicsin és a nagyon is) zöld négyzet jelöli fehér kereszttel.
+- Úttestre, épületbe és fák alá nem kerül; két műhely nincs egymás közelében.
 
 ### Kilövéssorozat és tüzérségi csapás
 
@@ -302,7 +411,7 @@ billentyű a tank mögé rakja le.
 - 2,2 másodperc figyelmeztetés után (piros kör a földön és a térképen, süvítő
   hang) nyolc lövedék hull a 13 méter sugarú körbe. Egy lövedék 7 méteres
   körben legfeljebb 60-at sebez, a távolsággal gyengülve; az épületeket is
-  rombolja, a fákat kidönti. A kérőt és a saját ágyúit nem sebzi; a kilövés
+  rombolja, a fákat kidönti. A kérőt és a saját lövegeit nem sebzi; a kilövés
   neki számít.
 
 ### Akna, füst, gázpalack
@@ -346,15 +455,16 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 | Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
 | Olajfolt | 3 lerakható folt; aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
-| Javítókészlet | azonnal visszaad 50 életerőt; a leggyakoribb tárgy (kb. minden ötödik) | azonnali |
+| Javítókészlet | azonnal visszaad 100 életerőt; a leggyakoribb tárgy (kb. minden ötödik) | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
 | Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg | 25 mp |
 | Pajzs | egy töltet egy találatot nyel el (legfeljebb 3) | töltet |
 | Sebezhetetlenség | semmi nem sebez, nem csúszik meg | 10 mp |
 | Radar | a térképen látszanak a felvehető tárgyak | 30 mp |
-| Telepíthető ágyú | lerakható (Q): magától lő a közeli ellenségre | töltet (legfeljebb 2), az ágyú a kilövéséig áll |
+| Löveg | lerakható (Q): magától lő a közeli ellenségre, és a tankkal együtt fejlődik | egy további löveg (legfeljebb 8 lehet a tanknál); a löveg a kilövéséig áll |
 | Akna | lerakható (R): az ellenséges tank alatt robban | 2 töltet (legfeljebb 4) |
 | Füst | lerakható (C): 13 méteres felhő, amely eltakar | 2 töltet (legfeljebb 4), a felhő 10 mp |
+| Géppuska | a tank jobb oldalára szerelt géppuska magától lő a legközelebbi ellenségre (40 m-en belül, ha rálát): másodpercenként kb. 8 lövés, egyenként 2,5 sebzés; a fő fegyver mellett működik, álcázva hallgat | 30 mp |
 | Szupertárgy | teljes javítás, tele pajzs, háromszoros sebzés (csak a pálya közepén jelenik meg, percenként) | 20 mp |
 
 Egyszerre egy fegyver lehet a tanknál: az újonnan felvett a régi helyére lép.
@@ -463,7 +573,7 @@ src/
     ui/Hud.ts             játék közbeni felület: térkép, információs panel, értesítések
     quality.ts            a részletesség (pixel/méter) megválasztása
 assets/maps/osm/          nyers OSM-adat + lekérdezés, kiegészítő épületalaprajzok
-assets/maps/landmarks/    fotók alapján kézzel felvett részletek
+assets/maps/landmarks/    fotók alapján kézzel felvett részletek, vázlatrajz alapján felvett házak
 assets/maps/processed/    feldolgozott pályafájl
 data/                     a szerver adatai: fiókok (nincs verziókezelés alatt)
 pictures/                 fotók mintának (nincs verziókezelés alatt)

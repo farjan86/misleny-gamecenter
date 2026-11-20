@@ -59,6 +59,8 @@ billentyűk a főmenü **Beállítások** pontjában átállíthatók; ezek az a
 | Q | ágyú telepítése a tank mögé (ha van töltet) |
 | R / C | akna lerakása / füst (ha van töltet) |
 | X | tüzérségi csapás a célkeresztre (három kilövésenként jár, halál nélkül) |
+| Bal Ctrl / V | álcázás: 10 másodpercig halvány sziluett (percenként egyszer) |
+| Enter / T | üzenet írása / beszéd, amíg nyomva van (többjátékos meccsen) |
 | Tab | eredménytábla, amíg nyomva van (vagy kattintás az órára) |
 | M | az egész város térképe utcanevekkel |
 | F | teljes képernyős mód |
@@ -118,4 +120,7 @@ a Polgármesteri Hivatal, a református templom és a rendőrség megjelenése �
 közvetlen környezete, valamint a főút utcaképe – a `pictures/` mappa
 képeiből. A képek csak mintául szolgálnak, a játékba nem kerülnek be, és a
 mappa nincs verziókezelés alatt. A pálya nem méretarányos térkép és
-nem geodéziai pontosságú. A projekt nem használ Google Maps-adatot.
+nem geodéziai pontosságú. Egy új beépítésű részen 49 ház a pálya
+készítőjének vázlatrajza alapján, kézzel került fel, mellettük 11 generált
+(kitalált) ház áll – részletek: `docs/map-data.md`. A letöltő és feldolgozó
+scriptek nem használnak Google Maps-adatot.

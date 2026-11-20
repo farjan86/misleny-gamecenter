@@ -8,7 +8,7 @@
 // tankot lövi ki. A mód a beállítások része, hogy később több is lehessen.
 
 import { BOT_LEVELS, BotManager, botTuning } from './bots';
-import { BARREL, SUPER } from './gadgets';
+import { BARREL, SUPER, WORKSHOP } from './gadgets';
 import { Traffic } from './traffic';
 import { ANY_PLAYER, TEAM, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
 
@@ -22,6 +22,14 @@ export interface Area {
 export const GAME_MODES = ['deathmatch'] as const;
 /** deathmatch: időre megy, mindenki mindenki ellen, a legtöbb kilövés nyer */
 export type GameMode = (typeof GAME_MODES)[number];
+
+/** A játékmódok neve és egysoros leírása (a létrehozó képernyőn ebből lehet választani). */
+export const GAME_MODE_NAME: Record<GameMode, string> = {
+  deathmatch: 'Death Match',
+};
+export const GAME_MODE_HINT: Record<GameMode, string> = {
+  deathmatch: 'Mindenki mindenki ellen: az nyer, aki az idő lejártáig a legtöbb tankot lövi ki. A kilőtt tank újraéled.',
+};
 
 /** A szoba létrehozójának beállításai. A szintek 0–5 közötti csúszkák. */
 export interface MatchSettings {
@@ -135,6 +143,8 @@ export interface MatchPlan {
   traffic: number;
   /** a házak mellé kerülő gázpalackok száma */
   barrels: number;
+  /** a javítóműhelyek száma */
+  workshops: number;
   /** a játékosok ennyire születnek egymástól (m) */
   spawnGap: number;
 }
@@ -154,7 +164,8 @@ export function matchPlan(settings: MatchSettings): MatchPlan {
   const spawnGap = clamp(Math.sqrt((w * h) / Math.max(2, settings.maxPlayers)) * 0.6, 40, 220);
   const traffic = settings.traffic === 0 ? 0 : clamp(Math.round(settings.traffic * MATCH.trafficPerKm2 * km2), minTraffic, MATCH.maxTraffic);
   const barrels = clamp(Math.round(km2 * BARREL.perKm2), BARREL.min, BARREL.max);
-  return { km2, bots, pickups, traffic, barrels, spawnGap: Math.round(spawnGap) };
+  const workshops = clamp(Math.round(km2 * WORKSHOP.perKm2), WORKSHOP.min, WORKSHOP.max);
+  return { km2, bots, pickups, traffic, barrels, workshops, spawnGap: Math.round(spawnGap) };
 }
 
 export interface MatchPlayer {
@@ -228,6 +239,7 @@ export class Match {
     this.timeLeft = settings.minutes * 60;
     // az életek száma korlátlan: a kilőtt tank néhány másodperc múlva újraéled
     this.world = new World(terrain, seed, { weather: settings.weather, lives: 0, spawnGap: this.plan.spawnGap });
+    this.world.scatterWorkshops(this.plan.workshops);
     const { area } = settings;
     entrants.forEach((entrant, i) => {
       // a játékosok egymástól távol, véletlen helyen születnek
@@ -238,6 +250,7 @@ export class Match {
     this.bots = new BotManager(this.world, botTuning(settings.botSkill, settings.botAggression));
     this.bots.setCount(this.plan.bots, TEAM.bots, ANY_PLAYER);
     this.world.scatterPickups(this.plan.pickups);
+    // a műhelyek előbb kerülnek ki, hogy a tárgyak és a palackok ne essenek beléjük
     this.world.scatterBarrels(this.plan.barrels);
     this.traffic = new Traffic(this.world, this.plan.traffic);
     this.world.traffic = this.traffic;

@@ -17,7 +17,17 @@
       <div id="hud-minimap" class="panel">
         <canvas id="minimap" width="220" height="220"></canvas>
       </div>
-      <div id="hud-info-button" class="panel" role="button" title="Irányítás és információ">i</div>
+      <!-- lenyitható menü: billentyűk és információ, kilépés -->
+      <div id="hud-menu-button" class="panel" role="button" title="Menü (Esc)">☰ Menü</div>
+      <div id="hud-menu-list" class="panel hidden">
+        <span class="btn" id="hud-menu-keys" role="button">Billentyűk és információ</span>
+        <span class="btn danger" id="hud-menu-leave" role="button">Kilépés a játékból</span>
+        <div id="hud-menu-confirm" class="hidden">
+          <div>Biztosan kilépsz a játékból?</div>
+          <span class="btn danger" id="hud-menu-yes" role="button">Kilépés</span>
+          <span class="btn" id="hud-menu-no" role="button">Mégsem</span>
+        </div>
+      </div>
       <!-- ami éppen a tanknál van: fegyver, képességek, aktív tárgyak -->
       <div id="hud-loadout"></div>
       <div id="hud-info" class="panel hidden">
@@ -34,6 +44,12 @@
       </div>
       <!-- eredménytábla: a Tab nyomva tartására vagy az órára kattintva jelenik meg -->
       <div id="hud-scores" class="panel hidden"></div>
+      <!-- üzenetek a többi játékostól, a beszélők, és az üzenetíró mező (csak többjátékos meccsen) -->
+      <div id="hud-chat" class="hidden">
+        <div id="hud-chat-log"></div>
+        <div id="hud-voice" class="hidden"></div>
+        <input id="hud-chat-input" class="hidden" autocomplete="off" spellcheck="false" />
+      </div>
       <!-- kilövési értesítő: ki kit lőtt ki -->
       <div id="hud-feed"></div>
       <div id="hud-toast" class="panel"></div>
@@ -43,31 +59,62 @@
 
     <!-- Menük: főképernyő, beállítások, játékok listája, új játék, váró, eredmény. -->
     <div id="menu">
-      <div class="screen" id="screen-main">
-        <h1>TANK MISLENY</h1>
-        <p class="sub">Tankcsata Kozármisleny utcáin</p>
-        <p class="sub" id="server-status"></p>
-        <!-- belépés előtt: név és jelszó -->
-        <div id="auth-box">
-          <label class="field">Játékosnév<input id="auth-name" maxlength="18" autocomplete="username" spellcheck="false" placeholder="pl. Páncélos Pista" /></label>
-          <label class="field">Jelszó<input id="auth-password" type="password" maxlength="72" autocomplete="current-password" /></label>
-          <div class="buttons">
-            <span class="btn big" id="auth-login" role="button">Belépés</span>
-            <span class="btn big" id="auth-register" role="button">Regisztráció</span>
-          </div>
-          <div class="buttons"><span class="btn" id="auth-single" role="button">Egyjátékos (szerver nélkül)</span></div>
-          <p class="note">
-            Regisztrációhoz csak egy játékosnév (3–18 karakter) és egy jelszó (legalább 6 karakter) kell. E-mail-címet nem kérünk, ezért az elfelejtett jelszót nem tudjuk visszaállítani.
-          </p>
+      <!-- háttér: a pálya elmosott, lassan úszó térképe -->
+      <canvas id="menu-bg"></canvas>
+      <!-- csevegő: az előszobában mindenkinek, szobában a szobatársaknak; mindig az éppen látható képernyőre kerül -->
+      <div id="chat" class="hidden">
+        <div class="chat-head"><span id="chat-title">Előszoba</span><span id="chat-hint"></span></div>
+        <!-- ki van még bejelentkezve, és hol van éppen -->
+        <div id="chat-online"></div>
+        <div id="chat-log"></div>
+        <input id="chat-input" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Írj a többieknek, majd Enter…" />
+      </div>
+      <div class="screen wide" id="screen-main">
+        <div class="title-block">
+          <div class="hazard"></div>
+          <h1>TANK <span>MISLENY</span></h1>
+          <p class="tagline">Tankcsata Kozármisleny utcáin</p>
         </div>
-        <!-- belépés után: a főmenü -->
-        <div id="user-box" class="hidden">
-          <p class="big-note" id="user-greeting"></p>
-          <div class="buttons column">
-            <span class="btn big" id="main-multiplayer" role="button">Multiplayer</span>
-            <span class="btn big" id="main-single" role="button">Egyjátékos</span>
-            <span class="btn big" id="main-settings" role="button">Beállítások</span>
-            <span class="btn" id="main-logout" role="button">Kijelentkezés</span>
+        <!-- animált utcakép: a hat tanktípus vonul végig rajta -->
+        <canvas id="hero"></canvas>
+        <p class="sub" id="server-status"></p>
+        <div class="main-cols">
+          <div class="main-left">
+            <!-- belépés előtt: név és jelszó -->
+            <div id="auth-box">
+              <h3>Belépés</h3>
+              <label class="field">Játékosnév<input id="auth-name" maxlength="18" autocomplete="username" spellcheck="false" placeholder="pl. Páncélos Pista" /></label>
+              <label class="field">Jelszó<input id="auth-password" type="password" maxlength="72" autocomplete="current-password" /></label>
+              <div class="buttons">
+                <span class="btn big primary" id="auth-login" role="button">Belépés</span>
+                <span class="btn big" id="auth-register" role="button">Regisztráció</span>
+              </div>
+              <div class="buttons"><span class="btn" id="auth-single" role="button">Egyjátékos (szerver nélkül)</span></div>
+              <p class="note">
+                Regisztrációhoz csak egy játékosnév (3–18 karakter) és egy jelszó (legalább 6 karakter) kell. E-mail-címet nem kérünk, ezért az elfelejtett jelszót nem tudjuk visszaállítani.
+              </p>
+            </div>
+            <!-- belépés után: a főmenü -->
+            <div id="user-box" class="hidden">
+              <p class="big-note" id="user-greeting"></p>
+              <div class="buttons column">
+                <span class="btn big primary" id="main-multiplayer" role="button">Multiplayer</span>
+                <span class="btn big" id="main-single" role="button">Egyjátékos</span>
+                <span class="btn big" id="main-settings" role="button">Beállítások</span>
+                <span class="btn" id="main-logout" role="button">Kijelentkezés</span>
+              </div>
+            </div>
+          </div>
+          <div class="main-right">
+            <!-- belépés előtt: mi ez a játék; belépés után a helyén az előszoba csevegője áll -->
+            <ul class="features" id="main-features">
+              <li><b>Valódi utcák.</b> A pálya Kozármisleny térképe: a saját utcádban is harcolhatsz.</li>
+              <li><b>Hat tanktípus, húsz szint.</b> Minden kilövéssel nagyobb és erősebb a tankod.</li>
+              <li><b>Minden rombolható.</b> A házak összedőlnek, a fák kidőlnek, a gázpalack robban.</li>
+              <li><b>Akna, füst, tüzérség, álcázás.</b> Nem csak lőni lehet.</li>
+              <li><b>Beszélgetés.</b> Üzenetek és hang gombnyomásra a meccsen.</li>
+            </ul>
+            <div class="chat-slot"></div>
           </div>
         </div>
         <p class="credit">
@@ -99,8 +146,9 @@
             <span class="btn" id="code-cancel" role="button">Mégsem</span>
           </div>
         </div>
+        <div class="chat-slot"></div>
         <div class="buttons">
-          <span class="btn big" id="lobby-create" role="button">Új játék</span>
+          <span class="btn big primary" id="lobby-create" role="button">Új játék</span>
           <span class="btn" id="lobby-back" role="button">Vissza</span>
         </div>
       </div>
@@ -118,6 +166,8 @@
             <label class="field" id="create-code-field"
               >Belépőkód – privát játékhoz (üresen hagyva bárki beléphet)<input id="create-code" maxlength="16" autocomplete="off" spellcheck="false" placeholder="pl. tankcsata7"
             /></label>
+            <label class="field" id="create-mode-field">Játékmód<select id="create-mode"></select></label>
+            <p class="note" id="mode-note"></p>
             <label class="slider" id="create-players-field">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
             <label class="slider">Játékidő <b id="val-minutes"></b><input type="range" id="sl-minutes" min="5" max="30" step="5" /></label>
             <label class="slider">Botok <b id="val-bots"></b><input type="range" id="sl-bots" min="0" max="5" step="1" /></label>
@@ -127,7 +177,7 @@
             <label class="slider">Forgalom (autók, buszok) <b id="val-traffic"></b><input type="range" id="sl-traffic" min="0" max="5" step="1" /></label>
             <label class="slider">Időjárás <b id="val-weather"></b><input type="range" id="sl-weather" min="0" max="2" step="1" /></label>
             <div class="buttons">
-              <span class="btn big" id="create-ok" role="button">Létrehozás</span>
+              <span class="btn big primary" id="create-ok" role="button">Létrehozás</span>
               <span class="btn" id="create-back" role="button">Vissza</span>
             </div>
           </div>
@@ -140,6 +190,7 @@
         <p class="big-note hidden" id="room-code"></p>
         <div id="room-players"></div>
         <p class="big-note" id="room-state"></p>
+        <div class="chat-slot"></div>
         <div class="buttons">
           <span class="btn" id="room-leave" role="button">Kilépés</span>
         </div>
@@ -149,7 +200,7 @@
         <h2 id="results-title">Vége a játéknak</h2>
         <div id="results-table"></div>
         <div class="buttons">
-          <span class="btn big" id="results-back" role="button">Vissza a játékokhoz</span>
+          <span class="btn big primary" id="results-back" role="button">Vissza a játékokhoz</span>
         </div>
       </div>
 

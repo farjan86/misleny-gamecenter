@@ -343,6 +343,37 @@ describe('utcakép: zebrák, növényzet, utcanevek', () => {
     }
   });
 
+  it('a kézzel felvett és a generált házak jelölve vannak, és nem lógnak úttestre vagy más épületbe', () => {
+    const hand = data.buildings.filter((b) => b.src === 'hand');
+    const gen = data.buildings.filter((b) => b.src === 'gen');
+    expect(hand.length).toBe(data.meta.handBuildings?.buildings);
+    expect(hand.length).toBeGreaterThan(40);
+    expect(gen.length).toBe((data.meta.generatedHouses?.houses ?? 0) + (data.meta.generatedHouses?.outbuildings ?? 0));
+    expect(gen.length).toBeGreaterThan(0);
+    const drivable = data.roads.filter((r) => ['residential', 'living_street', 'unclassified', 'tertiary', 'secondary', 'primary', 'service', 'track'].includes(r.kind));
+    const others = data.buildings.filter((b) => b.src !== 'hand' && b.src !== 'gen');
+    for (const b of [...hand, ...gen]) {
+      expect(b.area, String(b.id)).toBeGreaterThan(15);
+      let cx = 0;
+      let cy = 0;
+      for (let k = 0; k < b.pts.length; k += 2) {
+        const x = b.pts[k];
+        const y = b.pts[k + 1];
+        cx += x / (b.pts.length / 2);
+        cy += y / (b.pts.length / 2);
+        for (const road of drivable) expect(nearestOnPolyline(x, y, road.pts).dist, `${b.id} – ${road.name ?? road.kind}`).toBeGreaterThan(road.width / 2);
+      }
+      // a ház közepe nem esik más (valós) épületbe
+      for (const o of others) {
+        if (Math.abs(o.pts[0] - cx) > 80 || Math.abs(o.pts[1] - cy) > 80) continue;
+        expect(pointInPolygon(cx, cy, o.pts), `${b.id} ↔ ${o.id}`).toBe(false);
+      }
+    }
+    // a generált házak a kézzel felvett területen kívül állnak
+    const minHandY = Math.min(...hand.map((b) => b.pts[1]));
+    for (const b of gen) expect(b.pts[1], String(b.id)).toBeLessThan(minHandY + 5);
+  });
+
   it('az utcanevek az útra kerülnek, utcánként több helyre', () => {
     const labels = placeRoadLabels(map);
     expect(labels.length).toBeGreaterThan(150);

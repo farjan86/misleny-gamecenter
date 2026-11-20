@@ -7,6 +7,7 @@
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
+import { MG } from '../sim/gadgets';
 import { angleDiff, LEVEL, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
 import { FIRE_FRAMES, GTEX } from './gameTextures';
 import { damageStage, tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
@@ -31,6 +32,8 @@ export class TankView {
   private readonly hullDamage: Phaser.GameObjects.Image;
   private readonly turretDamage: Phaser.GameObjects.Image;
   private readonly flame: Phaser.GameObjects.Image;
+  /** álcázva volt-e a tank az előző képkockán */
+  private cloaked = false;
   /** a kirajzolt sérülés fokozata (0: ép); a GameScene ebből tudja, mennyire füstöl a tank */
   stage = 0;
   private stageKey = '';
@@ -41,6 +44,12 @@ export class TankView {
   private readonly barFill: Phaser.GameObjects.Image;
   /** a magasabb osztályú tank alatt lüktető fény */
   private aura: Phaser.GameObjects.Image | null = null;
+  /** a kiegészítő géppuska a tank jobb oldalán (amíg a tárgy hatása tart) */
+  private mg: Phaser.GameObjects.Image | null = null;
+  /** amerre a géppuska legutóbb lőtt, mikor, és amerre éppen néz */
+  private mgTarget = 0;
+  private mgShotAt = -Infinity;
+  private mgAngle = 0;
   /** a szupertárgy lüktető lila fénye */
   private power: Phaser.GameObjects.Image | null = null;
   /** a játékos neve az életerősáv fölött (csak a többi játékos tankján; a sajátunkon és a botokon nincs) */
@@ -162,6 +171,12 @@ export class TankView {
     });
   }
 
+  /** A géppuska lőtt a megadott irányba (`time`: másodperc, ugyanaz az óra, mint a render()-nél). */
+  mgFire(angle: number, time: number): void {
+    this.mgTarget = angle;
+    this.mgShotAt = time;
+  }
+
   /** Ugrás (újraéledés, áthelyezés) után: ne interpoláljon a régi helyről. */
   snap(tank: TankState): void {
     this.remember(tank);
@@ -173,6 +188,7 @@ export class TankView {
     for (const part of [this.shadow, this.hull, this.turret, this.barBack, this.barFill]) part.setVisible(visible);
     this.aura?.setVisible(visible);
     this.power?.setVisible(visible);
+    this.mg?.setVisible(visible);
     this.badge?.setVisible(visible);
     this.label?.setVisible(visible);
     this.hullDamage.setVisible(visible && this.stage > 0);
@@ -197,6 +213,31 @@ export class TankView {
     this.py = y;
     this.lastHull = hull;
     this.lastTurret = turret;
+    // Álcázás: nem láthatatlanság – a tank kékes, vibráló, halvány sziluett. A másokén nincs
+    // életerősáv, név, jelvény és fény; a sajátunk félig áttetsző, hogy lássuk, merre megyünk.
+    const cloaked = tank.cloak > 0;
+    const hide = cloaked && this.enemy;
+    const body = cloaked ? (this.enemy ? 0.17 + 0.07 * Math.sin(time * 6.5 + tank.id) : 0.5 + 0.06 * Math.sin(time * 6.5)) : 1;
+    if (cloaked !== this.cloaked) {
+      this.cloaked = cloaked;
+      if (cloaked) {
+        this.hull.setTint(0xa8dcff);
+        this.turret.setTint(0xa8dcff);
+      } else {
+        this.hull.clearTint();
+        this.turret.clearTint();
+      }
+      this.shadow.setAlpha(cloaked ? 0 : 0.3);
+      this.barBack.setAlpha(hide ? 0 : 0.85);
+      this.barFill.setAlpha(hide ? 0 : 1);
+      this.label?.setAlpha(hide ? 0 : 0.85);
+    }
+    this.hull.setAlpha(body);
+    this.turret.setAlpha(body);
+    this.hullDamage.setAlpha(body);
+    this.turretDamage.setAlpha(body);
+    this.flame.setAlpha(hide ? 0 : 1);
+    this.badge?.setAlpha(hide ? 0 : 1);
     // szintlépéskor a tank megnő; osztályváltáskor más típus lesz belőle
     const size = this.scale * tankSize(tank);
     if (tank.level !== this.level) {
@@ -235,16 +276,36 @@ export class TankView {
       // a titán fénye erős, az ostromtanké és a rombolóé halvány parázslás
       const strong = this.tier === TANK_TIERS - 1;
       const pulse = 0.5 + 0.5 * Math.sin(time * 3.2);
-      this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(strong ? 0.3 + 0.16 * pulse : 0.14 + 0.1 * pulse);
+      this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(hide ? 0 : strong ? 0.3 + 0.16 * pulse : 0.14 + 0.1 * pulse);
     }
     // szupertárgy: amíg tart, a tank körül erős lila fény lüktet (mindenki látja)
     if (tank.effects.super > 0) {
       this.power ??= this.scene.add.image(0, 0, GTEX.light).setDepth(9.5).setTint(0xb45cff).setBlendMode(Phaser.BlendModes.ADD);
       const pulse = 0.5 + 0.5 * Math.sin(time * 11);
-      this.power.setPosition(x, y).setScale(size * (1.15 + 0.2 * pulse)).setAlpha(0.6 + 0.3 * pulse);
+      this.power.setPosition(x, y).setScale(size * (1.15 + 0.2 * pulse)).setAlpha(hide ? 0 : 0.6 + 0.3 * pulse);
     } else if (this.power) {
       this.power.destroy();
       this.power = null;
+    }
+    // kiegészítő géppuska: a tank jobb oldalán ül, kilóg a lánctalp fölé; a célja felé fordul, különben előre néz
+    if (tank.effects.gun > 0) {
+      if (!this.mg) {
+        this.mg = this.scene.add.image(0, 0, GTEX.mg).setOrigin(0.2, 0.37).setDepth(11.2);
+        this.mgAngle = hull;
+      }
+      const want = time - this.mgShotAt < 0.7 ? this.mgTarget : hull;
+      this.mgAngle += angleDiff(want, this.mgAngle) * 0.3;
+      const side = MG.side * tankSize(tank) * this.ppm;
+      // lövéskor a fegyver egy pillanatra hátrarúg
+      const kick = Math.max(0, 1 - (time - this.mgShotAt) / 0.07) * 2.5 * size;
+      this.mg
+        .setPosition(x + Math.cos(hull + Math.PI / 2) * side - Math.cos(this.mgAngle) * kick, y + Math.sin(hull + Math.PI / 2) * side - Math.sin(this.mgAngle) * kick)
+        .setRotation(this.mgAngle)
+        .setScale(size * 1.7)
+        .setAlpha(body);
+    } else if (this.mg) {
+      this.mg.destroy();
+      this.mg = null;
     }
     const off = 6 * size;
     this.shadow.setPosition(x + off, y + off).setRotation(hull);
@@ -289,7 +350,7 @@ export class TankView {
 
     // gyűrű: arany villogás sebezhetetlenségnél, kék a pajzstöltetek szerint
     const invulnerable = tank.effects.invulnerable > 0;
-    if (invulnerable || tank.shield > 0) {
+    if ((invulnerable || tank.shield > 0) && !hide) {
       const pulse = 0.5 + 0.5 * Math.sin(time * 9);
       this.ring
         .setVisible(true)
@@ -336,6 +397,7 @@ export class TankView {
     this.heatFill?.destroy();
     this.aura?.destroy();
     this.power?.destroy();
+    this.mg?.destroy();
     this.badge?.destroy();
     this.label?.destroy();
     this.marker?.destroy();

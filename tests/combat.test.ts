@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { GameMap, pointInPolygon } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
 import { packBullet, unpackBullet } from '../src/game/net/protocol';
+import { TURRET } from '../src/game/sim/vehicles';
 import { BOT, BotBrain, BotManager, botTuning } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { BOOST, LASER, mulberry32, OIL, PICKUP, PICKUP_KINDS, pickKind, PICKUPS, ROCKET } from '../src/game/sim/pickups';
@@ -20,6 +21,7 @@ import {
   tankRadius,
   tankSize,
   tankTier,
+  killGain,
   TEAM,
   World,
   WRECK,
@@ -308,7 +310,7 @@ describe('sebzés', () => {
 
   it('a kilőtt tank eltűnik, a lövő pontot kap, majd a tank teljes életerővel újraéled', () => {
     const { world, shooter, target } = duel(TEAM.bots);
-    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(events.some((e) => e.type === 'destroyed' && e.tank === target.id && e.by === shooter.id)).toBe(true);
     expect(target.alive).toBe(false);
     expect(shooter.kills).toBe(1);
@@ -613,7 +615,7 @@ describe('roncsok', () => {
     const world = new World(arena());
     const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
     const target = world.addTank(140, 200, Math.PI, { team: TEAM.bots });
-    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(target.alive).toBe(false);
     expect(world.wrecks).toHaveLength(1);
     expect(world.wrecks[0].x).toBeCloseTo(140, 1);
@@ -640,7 +642,7 @@ describe('szintek', () => {
     const shooter = world.addTank(100, 200, 0, { team: TEAM.player });
     const target = world.addTank(140, 200, Math.PI, { team: TEAM.bots });
     expect(shooter.level).toBe(1);
-    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(shooter.level).toBe(2);
     expect(events.some((e) => e.type === 'levelup' && e.tank === shooter.id && e.level === 2)).toBe(true);
     expect(tankSize(shooter)).toBeGreaterThan(tankSize(target));
@@ -660,7 +662,7 @@ describe('szintek', () => {
     expect(fresh.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * (1 + LEVEL.damage), 5);
   });
 
-  it('a kilőtt tank a szintjét megtartja: újraéledve ugyanazon a szinten folytatja, csak a felszerelése vész el', () => {
+  it('a kilőtt tank két szintet veszít, és a felszerelése is elvész; az új szintjéről fejlődik tovább', () => {
     const world = new World(arena());
     const veteran = world.addTank(140, 200, Math.PI, { team: TEAM.player });
     const shooter = world.addTank(100, 200, 0, { team: TEAM.bots });
@@ -681,25 +683,124 @@ describe('szintek', () => {
     const events = run(world, {}, seconds(TANK.respawnDelay + 0.5));
     expect(events.some((e) => e.type === 'respawn' && e.tank === veteran.id)).toBe(true);
     expect(veteran.alive).toBe(true);
-    expect(veteran.level).toBe(7);
+    // két szintet vesztett: erről esemény is ment
+    expect(veteran.level).toBe(7 - LEVEL.deathLoss);
+    expect(events.length).toBeGreaterThan(0);
     expect(veteran.kills).toBe(6);
     expect(veteran.deaths).toBe(1);
-    // a szintjéhez járó teljes életerővel éled újra
-    expect(veteran.hp).toBe(tankMaxHp({ level: 7 }));
-    expect(veteran.hp).toBe(TANK.maxHp + 6 * LEVEL.hp);
+    // az új szintjéhez járó teljes életerővel éled újra
+    expect(veteran.hp).toBe(tankMaxHp({ level: 5 }));
+    expect(veteran.hp).toBe(TANK.maxHp + 4 * LEVEL.hp);
     // a fegyverzet és a képességek elvesznek
     expect(veteran.weapon).toBeNull();
     expect(veteran.tripleShots).toBe(0);
     expect(veteran.ricochet).toBe(false);
     expect(veteran.shield).toBe(0);
     expect(veteran.oil).toBe(0);
-    expect(veteran.turrets).toBe(0);
+    // a lövegekből az alapkészlet újra jár
+    expect(veteran.turrets).toBe(TURRET.base);
     expect(veteran.effects.rapid).toBe(0);
     // és a következő kilövéssel onnan lép tovább
     const victim = world.addTank(veteran.x + 30, veteran.y, 0, { team: TEAM.bots });
     victim.hp = 1;
     run(world, { [veteran.id]: { fire: true, aim: 0 } }, seconds(1.5));
-    expect(veteran.level).toBe(8);
+    expect(veteran.level).toBe(6);
+  });
+
+  it('az 1. és a 2. szintű tank nem megy az 1. szint alá; a szintvesztésről esemény megy', () => {
+    for (const [level, after, lost] of [[1, 1, 0], [2, 1, 1], [3, 1, 2], [20, 18, 2]]) {
+      const world = new World(arena());
+      const victim = world.addTank(140, 200, Math.PI, { team: 10 });
+      const shooter = world.addTank(100, 200, 0, { team: 11 });
+      victim.level = level;
+      victim.hp = 1;
+      const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(1));
+      expect(victim.alive).toBe(false);
+      expect(victim.level).toBe(after);
+      const down = events.filter((e) => e.type === 'leveldown');
+      expect(down).toHaveLength(lost > 0 ? 1 : 0);
+      if (lost > 0) expect(down[0]).toMatchObject({ tank: victim.id, level: after, lost });
+      // a roncs akkora, amekkora a tank a kilövésekor volt
+      expect(world.wrecks[0].level).toBe(level);
+    }
+  });
+
+  it('nagyjából egyszintű ellenfélért egy szint jár, jóval magasabb szintűért kettő', () => {
+    expect(killGain(5, 5)).toBe(1);
+    expect(killGain(9, 2)).toBe(1); // gyengébb ellenfélért is jár az egy szint
+    // egy-két szint különbség még „kb. egyszintű”
+    expect(killGain(5, 6)).toBe(1);
+    expect(killGain(5, 7)).toBe(1);
+    // három vagy több szinttel erősebb ellenfélért kettő – de ennél több akkor sem
+    expect(killGain(5, 8)).toBe(2);
+    expect(killGain(1, 12)).toBe(2);
+    expect(killGain(1, 20)).toBe(LEVEL.upsetGain);
+    expect(LEVEL.upsetGap).toBe(3);
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: 10 });
+    const giant = world.addTank(140, 200, Math.PI, { team: 11 });
+    giant.level = 12;
+    giant.hp = 1;
+    shooter.level = 3;
+    shooter.hp = 50;
+    const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(1));
+    // 9 szint különbség: a győztes két szintet lép, a vesztes kettőt veszít
+    expect(shooter.level).toBe(5);
+    expect(events.find((e) => e.type === 'levelup')).toMatchObject({ tank: shooter.id, level: 5, gain: 2 });
+    // a többlet életerőt minden megszerzett szint után megkapja
+    expect(shooter.hp).toBe(50 + 2 * LEVEL.hp);
+    expect(giant.level).toBe(10);
+    // két egyszintű tank: a győztes egyet lép, a vesztes kettőt bukik
+    const even = new World(arena());
+    const winner = even.addTank(100, 200, 0, { team: 10 });
+    const loser = even.addTank(140, 200, Math.PI, { team: 11 });
+    winner.level = 6;
+    loser.level = 6;
+    loser.hp = 1;
+    run(even, { [winner.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(winner.level).toBe(7);
+    expect(loser.level).toBe(4);
+    // a felső határ fölé így sem megy
+    const top = world.addTank(100, 260, 0, { team: 12 });
+    top.level = LEVEL.max - 1;
+    const other = world.addTank(140, 260, Math.PI, { team: 13 });
+    other.level = LEVEL.max;
+    other.hp = 1;
+    run(world, { [top.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(top.level).toBe(LEVEL.max);
+  });
+
+  it('a botok kilövése lassabban fejleszt: három bot ér egy szintet', () => {
+    const world = new World(arena());
+    const shooter = world.addTank(100, 200, 0, { team: 10 });
+    const kill = (): SimEvent[] => {
+      const bot = world.addTank(shooter.x + 14, shooter.y, Math.PI, { team: TEAM.bots, bot: true });
+      bot.hp = 1;
+      const events = run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(0.7));
+      expect(bot.alive).toBe(false);
+      world.removeTank(bot.id);
+      world.wrecks.length = 0;
+      return events;
+    };
+    expect(kill().some((e) => e.type === 'levelup')).toBe(false);
+    expect(shooter.level).toBe(1);
+    expect(shooter.botKills).toBe(1);
+    kill();
+    expect(shooter.level).toBe(1);
+    expect(shooter.botKills).toBe(2);
+    expect(kill().find((e) => e.type === 'levelup')).toMatchObject({ level: 2, gain: 1 });
+    expect(shooter.level).toBe(2);
+    expect(shooter.botKills).toBe(0);
+    expect(LEVEL.botKills).toBe(3);
+    // a kilövések száma (a győzelemhez) minden botnál nő
+    expect(shooter.kills).toBe(3);
+    // a számláló a halál után sem vész el
+    kill();
+    const enemy = world.addTank(shooter.x - 12, shooter.y, 0, { team: 11 });
+    shooter.hp = 1;
+    run(world, { [enemy.id]: { fire: true, aim: 0 } }, seconds(0.7));
+    expect(shooter.alive).toBe(false);
+    expect(shooter.botKills).toBe(1);
   });
 
   it('a szintek hat osztályba tartoznak; osztályváltáskor a tank mérete ugrik', () => {
@@ -724,7 +825,7 @@ describe('szintek', () => {
     const world = new World(arena());
     const bot = world.addTank(100, 200, 0, { team: TEAM.bots, bot: true });
     const victim = world.addTank(140, 200, Math.PI, { team: TEAM.player });
-    run(world, { [bot.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    run(world, { [bot.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(victim.alive).toBe(false);
     expect(bot.kills).toBe(1);
     expect(bot.level).toBe(1);
@@ -852,7 +953,7 @@ describe('megmaradó fegyverek', () => {
     give(world, target, 'ricochet');
     give(world, target, 'triple');
     expect(target.weapon).toBe('laser');
-    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(2.5));
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(4.5));
     expect(target.alive).toBe(false);
     run(world, {}, seconds(TANK.respawnDelay + 0.5));
     expect(target.alive).toBe(true);
