@@ -8,6 +8,7 @@ import type { GameMap } from '../maps/GameMap';
 import type { TankState, Weather } from '../sim/world';
 import type { FireLayer } from './FireLayer';
 import { GTEX } from './gameTextures';
+import type { VehicleLayer } from './VehicleLayer';
 
 /** A sötétség színe és erőssége: az este nem teljesen sötét, a pálya kivehető marad. */
 const NIGHT = { color: 0x070b1e, alpha: 0.74 };
@@ -31,7 +32,9 @@ interface Flash {
 }
 
 export class WeatherLayer {
-  private readonly dark: Phaser.GameObjects.RenderTexture | null = null;
+  private dark: Phaser.GameObjects.RenderTexture | null = null;
+  /** borús ég fátyla esőben */
+  private readonly veil: Phaser.GameObjects.Rectangle | null = null;
   private readonly stamp: Phaser.GameObjects.Image | null = null;
   /** az eső két rétege: a távolabbi apróbb és lassabb, a közelebbi nagyobb és gyorsabb */
   private readonly rain: Phaser.GameObjects.TileSprite[] = [];
@@ -55,25 +58,48 @@ export class WeatherLayer {
   ) {
     const cam = scene.cameras.main;
     if (weather === 'night') {
-      this.dark = scene.add
-        .renderTexture(0, 0, Math.ceil(cam.width / DARK_SCALE), Math.ceil(cam.height / DARK_SCALE))
-        .setOrigin(0)
-        .setScale(DARK_SCALE)
-        .setScrollFactor(0)
-        .setDepth(28);
+      this.dark = this.makeDark(cam.width, cam.height);
       this.stamp = scene.make.image({ key: GTEX.light }, false);
     } else if (weather === 'rain') {
       // borús ég: enyhe, hűvös fátyol a képen
-      scene.add.rectangle(0, 0, cam.width, cam.height, 0x2a3442, 0.16).setOrigin(0).setScrollFactor(0).setDepth(28);
-      for (const [scale, alpha] of [[1, 0.55], [1.7, 0.45]] as const) {
-        this.rain.push(scene.add.tileSprite(0, 0, cam.width, cam.height, GTEX.rain).setOrigin(0).setScrollFactor(0).setDepth(29).setAlpha(alpha).setTileScale(scale));
-      }
+      this.veil = scene.add.rectangle(0, 0, cam.width, cam.height, 0x2a3442, 0.16).setOrigin(0).setScrollFactor(0).setDepth(28);
+      this.makeRain(cam.width, cam.height);
     }
   }
 
   private rnd(): number {
     this.seed = (this.seed * 1103515245 + 12345) & 0x7fffffff;
     return this.seed / 0x7fffffff;
+  }
+
+  /** Az eső két rétege a képernyő teljes méretében. */
+  private makeRain(width: number, height: number): void {
+    for (const layer of this.rain) layer.destroy();
+    this.rain.length = 0;
+    for (const [scale, alpha] of [[1, 0.55], [1.7, 0.45]] as const) {
+      this.rain.push(this.scene.add.tileSprite(0, 0, width, height, GTEX.rain).setOrigin(0).setScrollFactor(0).setDepth(29).setAlpha(alpha).setTileScale(scale));
+    }
+  }
+
+  /** A sötétség rétege: a képernyőt fedő, csökkentett felbontású rajzfelület. */
+  private makeDark(width: number, height: number): Phaser.GameObjects.RenderTexture {
+    return this.scene.add
+      .renderTexture(0, 0, Math.ceil(width / DARK_SCALE), Math.ceil(height / DARK_SCALE))
+      .setOrigin(0)
+      .setScale(DARK_SCALE)
+      .setScrollFactor(0)
+      .setDepth(28);
+  }
+
+  /** A játékvászon mérete megváltozott: a képernyőt fedő rétegek követik. */
+  resize(width: number, height: number): void {
+    if (this.dark) {
+      // a rajzfelületet újra létrehozzuk: átméretezve a régi mérete szerint mintavételezne, és a kép széle kimaradna
+      this.dark.destroy();
+      this.dark = this.makeDark(width, height);
+    }
+    this.veil?.setSize(width, height);
+    if (this.rain.length) this.makeRain(width, height);
   }
 
   /** A földet érő cseppek: apró, gyorsan szétterülő és elhalványuló gyűrűk a látómezőben. */
@@ -108,7 +134,7 @@ export class WeatherLayer {
     this.flashes.push({ x, y, radius, left: seconds, life: seconds });
   }
 
-  update(view: Phaser.Geom.Rectangle, tanks: readonly TankState[], fires: FireLayer, dt: number): void {
+  update(view: Phaser.Geom.Rectangle, tanks: readonly TankState[], fires: FireLayer, dt: number, vehicles: VehicleLayer | null = null): void {
     if (this.rain.length) {
       // az eső ferdén esik; a kamera mozgását is követi, így a cseppek a világhoz képest hullanak
       const dx = view.x - this.lastScrollX;
@@ -176,6 +202,11 @@ export class WeatherLayer {
       light(tank.x, tank.y, TANK_RADIUS, 0.85);
       light(tank.x + Math.cos(tank.hullAngle) * BEAM_AHEAD, tank.y + Math.sin(tank.hullAngle) * BEAM_AHEAD, BEAM_RADIUS, 0.9);
     }
+    // a civil járművek fényszórója
+    vehicles?.forEachDriving((x, y, angle, length) => {
+      // egyetlen fényfolt a jármű orra előtt: magát a járművet is megvilágítja
+      light(x + Math.cos(angle) * (length / 2 + 3.5), y + Math.sin(angle) * (length / 2 + 3.5), 9.5, 0.85);
+    });
     fires.forEach((x, y, size) => light(x, y, size * 4.5 + 3, 0.95));
     for (let i = this.flashes.length - 1; i >= 0; i--) {
       const f = this.flashes[i];

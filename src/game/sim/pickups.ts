@@ -15,6 +15,7 @@ export const PICKUP_KINDS = [
   'shield',
   'invulnerable',
   'radar',
+  'turret',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
 /**
@@ -33,10 +34,10 @@ export type AmmoKind = 'triple';
  */
 export type AbilityKind = 'ricochet';
 /** Töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
-export type ChargeKind = 'shield' | 'oil' | 'repair';
+export type ChargeKind = 'shield' | 'oil' | 'repair' | 'turret';
 /** Az időzített hatások. */
 export type TimedKind = Exclude<PickupKind, ChargeKind | WeaponKind | AmmoKind | AbilityKind>;
-export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair');
+export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair' && k !== 'turret');
 
 /**
  * duration: a hatás ideje másodpercben (csak az időzített tárgyaknál; a
@@ -70,7 +71,12 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
   invulnerable: { duration: 10, weight: 5 },
   /** radar: a térképeken látszanak a felvehető tárgyak */
   radar: { duration: 30, weight: 8 },
+  /** telepíthető ágyú: lerakható töltet; az ágyú magától lő a közeli ellenséges tankokra */
+  turret: { duration: 0, weight: 6 },
 };
+
+/** Az ellátó teherautó rakománya: fegyverek és képességek. */
+export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret'];
 
 export const PICKUP = {
   /** a tárgy sugara méterben (a tank érintésre veszi fel) */
@@ -84,6 +90,8 @@ export const PICKUP = {
   /** egy olajos tárgy ennyi lerakható foltot ad */
   oilPerPickup: 3,
   maxOil: 6,
+  /** ennyi telepíthető ágyú lehet egyszerre a tanknál */
+  maxTurrets: 2,
   /** a javítókészlet ennyi életerőt ad vissza */
   repairAmount: 50,
   /** két tárgy legkisebb távolsága egymástól (m) */

@@ -5,7 +5,7 @@
 import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import type { NetClient, NetStatus } from '../net/NetClient';
-import type { RoomInfo, ServerMessage, Standing } from '../net/protocol';
+import { cleanCode, ROOM_CODE, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
 import { ACTION_LABEL, ACTIONS, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
 import { areaOfCells, gridSize, MATCH, matchPlan, sanitizeSettings, WEATHERS, type MatchSettings } from '../sim/match';
 
@@ -13,6 +13,8 @@ type Screen = 'main' | 'settings' | 'lobby' | 'create' | 'room' | 'results';
 const SCREENS: Screen[] = ['main', 'settings', 'lobby', 'create', 'room', 'results'];
 
 const LEVEL_NAME = ['nincs', 'nagyon kevés', 'kevés', 'közepes', 'sok', 'nagyon sok'];
+const SKILL_NAME = ['', 'kezdő', 'gyenge', 'közepes', 'ügyes', 'mesterlövész'];
+const AGGRESSION_NAME = ['', 'békés', 'óvatos', 'közepes', 'harcias', 'vadászik rád'];
 const WEATHER_NAME = { day: 'Nappal', rain: 'Eső', night: 'Este' } as const;
 const STATUS_NAME = { waiting: 'Játékra vár', starting: 'Betelt – indul', playing: 'Betelt – játékban' } as const;
 /** az oldal újratöltése után egyből ide térjen vissza a menü */
@@ -25,12 +27,15 @@ function el<T extends HTMLElement>(id: string): T {
 }
 
 const esc = (text: string): string => text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-const km2 = (value: number): string => `${value.toFixed(2).replace('.', ',')} km²`;
+/** A játéktér területe: a nagyon kicsi hektárban, a többi km²-ben. */
+const km2 = (value: number): string => (value < 0.1 ? `${(value * 100).toFixed(1).replace('.', ',')} hektár` : `${value.toFixed(2).replace('.', ',')} km²`);
 
 function roomDetails(room: RoomInfo): string {
   const s = room.settings;
   const bots = room.plan.bots ? `kb. ${room.plan.bots} bot` : 'bot nélkül';
-  return `${km2(room.plan.km2)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${s.lives} élet · ${bots}`;
+  // a területet a határokból számoljuk (a hálózaton átjövő érték két tizedesre kerekített)
+  const size = ((s.area.maxX - s.area.minX) * (s.area.maxY - s.area.minY)) / 1e6;
+  return `${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${s.minutes} perc · ${bots}`;
 }
 
 export class Menu {
@@ -47,6 +52,14 @@ export class Menu {
   private dragging = false;
   private areaBase: HTMLCanvasElement | null = null;
   private currentRoom: RoomInfo | null = null;
+  /** az a privát szoba, amelyhez éppen a belépőkódot kérjük */
+  private codeRoom: string | null = null;
+  /** az „Új játék” képernyő egyjátékos módban van-e (szerver nélkül indul) */
+  private single = false;
+  /** az egyjátékos játék indítását kérő visszahívás */
+  onSingle: (settings: MatchSettings, name: string) => void = () => undefined;
+  /** hová térjen vissza a menü a meccs után */
+  afterMatch: 'lobby' | 'main' = 'lobby';
 
   constructor(
     private readonly map: GameMap,
@@ -60,7 +73,7 @@ export class Menu {
     this.bindLobby();
     this.bindCreate();
     el('room-leave').onclick = () => this.net.send({ t: 'leave' });
-    el('results-back').onclick = () => Menu.reloadTo('lobby');
+    el('results-back').onclick = () => Menu.reloadTo(this.afterMatch);
 
     net.on((message) => this.onMessage(message));
     net.onStatus((status) => this.onStatus(status));
@@ -117,7 +130,8 @@ export class Menu {
     window.clearTimeout(this.retryTimer);
     if (status !== 'offline') return;
     this.showAuth(false);
-    if (this.screen === 'lobby' || this.screen === 'create' || this.screen === 'room') this.show('main');
+    // az egyjátékos beállítóképernyőhöz nem kell szerver
+    if (this.screen === 'lobby' || (this.screen === 'create' && !this.single) || this.screen === 'room') this.show('main');
     this.currentRoom = null;
     this.retryTimer = window.setTimeout(() => {
       if (this.settings.token) this.net.resume(this.settings.token);
@@ -151,6 +165,12 @@ export class Menu {
     });
     el('main-settings').onclick = () => this.show('settings');
     el('main-multiplayer').onclick = () => this.show('lobby');
+    const single = (): void => {
+      this.single = true;
+      this.show('create');
+    };
+    el('auth-single').onclick = single;
+    el('main-single').onclick = single;
     el('main-logout').onclick = () => {
       this.net.logout();
       this.settings.token = '';
@@ -195,7 +215,8 @@ export class Menu {
         break;
       case 'room':
         this.currentRoom = message.room;
-        this.renderRoom(message.room, message.countdown);
+        this.closeCode();
+        this.renderRoom(message.room, message.countdown, message.code ?? '');
         if (this.screen !== 'room') this.show('room');
         break;
       case 'left':
@@ -267,13 +288,49 @@ export class Menu {
   // --- a játékok listája ---------------------------------------------------------
 
   private bindLobby(): void {
-    el('lobby-back').onclick = () => this.show('main');
-    el('lobby-create').onclick = () => this.show('create');
+    el('lobby-back').onclick = () => {
+      this.closeCode();
+      this.show('main');
+    };
+    el('lobby-create').onclick = () => {
+      this.closeCode();
+      this.single = false;
+      this.show('create');
+    };
+    const input = el<HTMLInputElement>('code-input');
+    const submit = (): void => {
+      if (!this.codeRoom) return;
+      if (cleanCode(input.value).length < ROOM_CODE.min) return this.error('Add meg a belépőkódot.');
+      this.net.send({ t: 'join', room: this.codeRoom, code: input.value });
+    };
+    el('code-ok').onclick = submit;
+    el('code-cancel').onclick = () => this.closeCode();
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') submit();
+      else if (ev.key === 'Escape') this.closeCode();
+    });
+  }
+
+  /** Privát szobába lépés: a kód bekérése a lista alatt. */
+  private askCode(room: RoomInfo): void {
+    this.codeRoom = room.id;
+    el('code-title').textContent = `Belépőkód – ${room.settings.name}`;
+    el('code-box').classList.remove('hidden');
+    const input = el<HTMLInputElement>('code-input');
+    input.value = '';
+    input.focus();
+  }
+
+  private closeCode(): void {
+    this.codeRoom = null;
+    el('code-box').classList.add('hidden');
   }
 
   private renderRooms(rooms: RoomInfo[]): void {
     const list = el('room-list');
     list.replaceChildren();
+    // ha közben megszűnt vagy betelt a szoba, amelyhez a kódot kérjük, a kérdés eltűnik
+    if (this.codeRoom && !rooms.some((r) => r.id === this.codeRoom && r.status === 'waiting')) this.closeCode();
     if (rooms.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty';
@@ -286,14 +343,19 @@ export class Menu {
       const row = document.createElement('div');
       row.className = 'room';
       row.innerHTML =
-        `<div><div class="name">${esc(room.settings.name)}</div><div class="small">létrehozta: ${esc(room.host)}</div></div>` +
+        `<div><div class="name">${room.locked ? '<span class="lock" title="Privát játék – belépőkód kell">🔒</span> ' : ''}${esc(room.settings.name)}</div>` +
+        `<div class="small">létrehozta: ${esc(room.host)}${room.locked ? ' · privát' : ''}</div></div>` +
         `<div>${room.players.length} / ${room.settings.maxPlayers} játékos</div>` +
         `<div class="small">${roomDetails(room)}</div>` +
         `<div class="state ${open ? 'waiting' : 'full'}">${STATUS_NAME[room.status]}</div>`;
       const join = document.createElement('span');
       join.className = open ? 'btn' : 'btn disabled';
       join.textContent = 'Belépés';
-      join.onclick = () => this.net.send({ t: 'join', room: room.id });
+      join.onclick = () => {
+        if (!open) return;
+        if (room.locked) this.askCode(room);
+        else this.net.send({ t: 'join', room: room.id });
+      };
       row.appendChild(join);
       list.appendChild(row);
     }
@@ -301,15 +363,19 @@ export class Menu {
 
   // --- új játék ------------------------------------------------------------------
 
-  private readonly sliders = ['players', 'lives', 'bots', 'pickups', 'weather'] as const;
+  private readonly sliders = ['players', 'minutes', 'bots', 'skill', 'aggression', 'pickups', 'traffic', 'weather'] as const;
 
   private bindCreate(): void {
-    el('create-back').onclick = () => this.show('lobby');
+    el('create-back').onclick = () => this.show(this.single ? 'main' : 'lobby');
     el('create-ok').onclick = () => {
       const settings = this.readCreate();
-      this.settings.lastMatch = settings;
+      // a létszám a többjátékos beállítás része: egyjátékos indítás nem írja felül
+      this.settings.lastMatch = this.single ? { ...settings, maxPlayers: this.settings.lastMatch?.maxPlayers ?? 4 } : settings;
       this.save();
-      this.net.send({ t: 'create', settings });
+      if (this.single) return this.onSingle(settings, this.net.name || this.settings.name || 'Játékos');
+      const code = el<HTMLInputElement>('create-code').value;
+      if (code.trim() && cleanCode(code).length < ROOM_CODE.min) return this.error(`A belépőkód legalább ${ROOM_CODE.min} karakter legyen.`);
+      this.net.send({ t: 'create', settings, ...(code.trim() ? { code } : {}) });
     };
     for (const name of this.sliders) el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => this.updateCreate());
 
@@ -386,15 +452,25 @@ export class Menu {
       } else {
         const c = Math.floor(map.data.townhall.x / cw);
         const r = Math.floor(map.data.townhall.y / ch);
-        this.sel = { c0: Math.max(0, c - 1), r0: Math.max(0, r - 1), c1: Math.min(this.grid.cols - 1, c + 1), r1: Math.min(this.grid.rows - 1, r + 1) };
+        // kb. 750 × 750 méter a hivatal körül
+        this.sel = { c0: Math.max(0, c - 4), r0: Math.max(0, r - 4), c1: Math.min(this.grid.cols - 1, c + 4), r1: Math.min(this.grid.rows - 1, r + 4) };
       }
       el<HTMLInputElement>('sl-players').value = String(last.maxPlayers);
-      el<HTMLInputElement>('sl-lives').value = String(Math.max(0, MATCH.lives.indexOf(last.lives as 1)));
+      el<HTMLInputElement>('sl-minutes').value = String(last.minutes);
       el<HTMLInputElement>('sl-bots').value = String(last.bots);
+      el<HTMLInputElement>('sl-skill').value = String(last.botSkill);
+      el<HTMLInputElement>('sl-aggression').value = String(last.botAggression);
       el<HTMLInputElement>('sl-pickups').value = String(last.pickups);
+      el<HTMLInputElement>('sl-traffic').value = String(last.traffic);
       el<HTMLInputElement>('sl-weather').value = String(WEATHERS.indexOf(last.weather));
     }
     el<HTMLInputElement>('create-name').value = `${this.net.name} játéka`;
+    // egyjátékos módban nincs szoba: nem kell név és létszám, és azonnal indul
+    el('create-title').textContent = this.single ? 'Egyjátékos játék' : 'Új játék';
+    el('create-name-field').classList.toggle('hidden', this.single);
+    el('create-players-field').classList.toggle('hidden', this.single);
+    el('create-code-field').classList.toggle('hidden', this.single);
+    el('create-ok').textContent = this.single ? 'Indítás' : 'Létrehozás';
     this.updateCreate();
   }
 
@@ -405,10 +481,13 @@ export class Menu {
       {
         name: el<HTMLInputElement>('create-name').value,
         area: areaOfCells(this.map.width, this.map.height, s.c0, s.r0, s.c1, s.r1),
-        maxPlayers: value('players'),
-        lives: MATCH.lives[value('lives')] ?? 3,
+        maxPlayers: this.single ? 1 : value('players'),
+        minutes: value('minutes'),
         bots: value('bots'),
+        botSkill: value('skill'),
+        botAggression: value('aggression'),
         pickups: value('pickups'),
+        traffic: value('traffic'),
         weather: WEATHERS[value('weather')] ?? 'day',
       },
       this.map.width,
@@ -421,12 +500,15 @@ export class Menu {
     const settings = this.readCreate();
     const plan = matchPlan(settings);
     el('val-players').textContent = `${settings.maxPlayers} fő`;
-    el('val-lives').textContent = `${settings.lives}`;
+    el('val-minutes').textContent = `${settings.minutes} perc`;
     el('val-bots').textContent = settings.bots ? `${LEVEL_NAME[settings.bots]} – kb. ${plan.bots} bot` : 'nincs';
+    el('val-skill').textContent = settings.bots ? SKILL_NAME[settings.botSkill] : '–';
+    el('val-aggression').textContent = settings.bots ? AGGRESSION_NAME[settings.botAggression] : '–';
     el('val-pickups').textContent = settings.pickups ? `${LEVEL_NAME[settings.pickups]} – kb. ${plan.pickups} db` : 'nincs';
+    el('val-traffic').textContent = settings.traffic ? `${LEVEL_NAME[settings.traffic]} – kb. ${plan.traffic} jármű` : 'nincs';
     el('val-weather').textContent = WEATHER_NAME[settings.weather];
     const { area } = settings;
-    el('area-text').textContent = `Kijelölt játéktér: ${area.maxX - area.minX} × ${area.maxY - area.minY} m (${km2(plan.km2)})`;
+    el('area-text').textContent = `Kijelölt játéktér: ${area.maxX - area.minX} × ${area.maxY - area.minY} m (${km2(plan.km2)}) – a legkisebb kb. ${Math.round((this.map.width / this.grid.cols) * MATCH.minCells)} m széles`;
 
     const canvas = el<HTMLCanvasElement>('area-map');
     const ctx = canvas.getContext('2d');
@@ -442,7 +524,7 @@ export class Menu {
     ctx.fillRect(0, (s.r1 + 1) * ch, canvas.width, canvas.height);
     ctx.fillRect(0, s.r0 * ch, s.c0 * cw, (s.r1 - s.r0 + 1) * ch);
     ctx.fillRect((s.c1 + 1) * cw, s.r0 * ch, canvas.width, (s.r1 - s.r0 + 1) * ch);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let c = 1; c < cols; c++) {
@@ -461,9 +543,13 @@ export class Menu {
 
   // --- váró ----------------------------------------------------------------------
 
-  private renderRoom(room: RoomInfo, countdown: number): void {
+  private renderRoom(room: RoomInfo, countdown: number, code: string): void {
     el('room-title').textContent = room.settings.name;
-    el('room-summary').textContent = `${roomDetails(room)} · tárgyak: ${LEVEL_NAME[room.settings.pickups]}`;
+    // privát játék: a bent lévők látják a kódot, hogy tovább tudják adni
+    const codeNote = el('room-code');
+    codeNote.classList.toggle('hidden', !room.locked);
+    codeNote.textContent = room.locked ? `🔒 Privát játék – belépőkód: ${code}` : '';
+    el('room-summary').textContent = `${roomDetails(room)} · tárgyak: ${LEVEL_NAME[room.settings.pickups]} · forgalom: ${LEVEL_NAME[room.settings.traffic]}`;
     const list = el('room-players');
     list.replaceChildren();
     for (let i = 0; i < room.settings.maxPlayers; i++) {
@@ -482,13 +568,21 @@ export class Menu {
   showResults(winner: string | null, standings: Standing[], myId: string): void {
     const me = standings.find((s) => s.id === myId);
     const first = standings.find((s) => s.id === winner);
-    el('results-title').textContent = winner === myId ? 'Győztél!' : first ? `Vége – nyert: ${first.name}` : 'Vége a játéknak';
+    // egyedül játszva nincs győztes: az eredmény a kilövések száma
+    const solo = standings.length === 1;
+    el('results-title').textContent = solo
+      ? `Lejárt az idő – ${me?.kills ?? 0} kilövés`
+      : winner === myId
+        ? 'Győztél!'
+        : first
+          ? `Vége – nyert: ${first.name}`
+          : 'Lejárt az idő – döntetlen';
     const table = el('results-table');
     table.replaceChildren();
     for (const s of standings) {
       const row = document.createElement('div');
       row.className = s === me ? 'player-row me' : 'player-row';
-      row.innerHTML = `<span>${s.place}. ${esc(s.name)}</span><span>${s.kills} kilövés · ${s.level}. szint</span>`;
+      row.innerHTML = `<span>${s.place}. ${esc(s.name)}</span><span>${s.kills} kilövés · ${s.deaths} halál · ${s.level}. szint</span>`;
       table.appendChild(row);
     }
     this.show('results');

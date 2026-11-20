@@ -4,6 +4,7 @@
 import { SegmentGrid } from '../sim/collision';
 import { FELLABLE, Fellables, type FellableItem } from '../sim/props';
 import { Structures } from '../sim/structures';
+import type { NetRoad } from '../sim/roadnet';
 import type { RoadGuide, Terrain, Weather } from '../sim/world';
 import type { LandmarkBuilding, MapData, RoadFeature } from './types';
 
@@ -213,6 +214,8 @@ export class GameMap implements Terrain {
   /** a közutak a hosszukkal, a véletlen helyek kisorsolásához (első használatkor épül fel) */
   private spotRoads: { road: RoadFeature; length: number }[] | null = null;
   private spotTotal = 0;
+  /** a tárgyaknak, születési helynek használható utak játéktérbe eső hossza (m) */
+  private spotInside = 0;
 
   /**
    * `collision: false` – csak rajzoláshoz (pl. háttérszálon): az ütközési rács
@@ -412,15 +415,33 @@ export class GameMap implements Terrain {
     if (!this.spotRoads) {
       this.spotRoads = [];
       this.spotTotal = 0;
+      this.spotInside = 0;
       this.data.roads.forEach((road, ri) => {
         if (!DRIVABLE.has(road.kind) || road.kind.startsWith('motorway')) return;
         // a játéktéren kívüli utak kimaradnak
         if (area && !boxesOverlap(this.roadBoxes[ri], area.minX, area.minY, area.maxX, area.maxY)) return;
         let length = 0;
-        for (let i = 0; i + 3 < road.pts.length; i += 2) length += Math.hypot(road.pts[i + 2] - road.pts[i], road.pts[i + 3] - road.pts[i + 1]);
+        // a játéktérbe eső hossz (a szakaszok felezőpontja szerint)
+        let inside = 0;
+        for (let i = 0; i + 3 < road.pts.length; i += 2) {
+          const len = Math.hypot(road.pts[i + 2] - road.pts[i], road.pts[i + 3] - road.pts[i + 1]);
+          length += len;
+          const mx = (road.pts[i] + road.pts[i + 2]) / 2;
+          const my = (road.pts[i + 1] + road.pts[i + 3]) / 2;
+          if (!area || (mx > area.minX + 6 && my > area.minY + 6 && mx < area.maxX - 6 && my < area.maxY - 6)) inside += len;
+        }
+        // amelyik út csak a befoglaló téglalapjával ér a játéktérbe, arra nem kerülhet semmi
+        if (inside <= 0) return;
         this.spotRoads!.push({ road, length });
         this.spotTotal += length;
+        this.spotInside += inside;
       });
+    }
+    // nagyon kicsi játéktéren alig (vagy egyáltalán nem) van út: ott bármelyik szabad pont megfelel
+    if (area && this.spotInside < 60) {
+      const x = area.minX + 8 + rnd() * Math.max(0, area.maxX - area.minX - 16);
+      const y = area.minY + 8 + rnd() * Math.max(0, area.maxY - area.minY - 16);
+      return this.walls.resolveCircle(x, y, 3).hit ? null : { x, y };
     }
     let roll = rnd() * this.spotTotal;
     let pick = this.spotRoads[0];
@@ -451,6 +472,11 @@ export class GameMap implements Terrain {
       return { x, y };
     }
     return null;
+  }
+
+  /** A járművel járható közutak (a forgalom úthálózatához). */
+  driveRoads(): NetRoad[] {
+    return this.data.roads.filter((r) => DRIVABLE.has(r.kind) && !r.kind.startsWith('motorway')).map((r) => ({ pts: r.pts, width: r.width, main: MAIN_ROADS.has(r.kind) }));
   }
 
   /** A legközelebbi közút pontja és iránya (a botok útkövetéséhez). */
@@ -495,6 +521,7 @@ export class GameMap implements Terrain {
     this.walls.setOwnerEnabled(this.borderOwner, false);
     this.bounds = area;
     this.spotRoads = null;
+    this.spotInside = 0;
     if (!area) return;
     this.borderOwner--;
     this.walls.addPolygon([area.minX, area.minY, area.maxX, area.minY, area.maxX, area.maxY, area.minX, area.maxY], this.borderOwner);

@@ -1,20 +1,11 @@
 // A harchoz és a felvehető tárgyakhoz tartozó, kódból rajzolt textúrák:
-// ellenséges tank (a saját tank átszínezve), tárgyikonok, rakéta, olajfolt,
-// pajzsgyűrű, füst. A createTextures() után hívandó.
+// tárgyikonok, rakéta, olajfolt, pajzsgyűrű, füst. A createTextures() után hívandó.
 
 import Phaser from 'phaser';
 import { PICKUP_KINDS } from '../sim/pickups';
 import { PICKUP_STYLE, pickupTexture } from './pickupStyle';
-import { HULL_SIZE, TEX, TURRET_SIZE } from './textures';
 
 export const GTEX = {
-  enemyHull: ['enemy-hull-0', 'enemy-hull-1', 'enemy-hull-2'],
-  enemyTurret: 'enemy-turret',
-  /** a többi játékos tankja: kék (a botoké vörös, a sajátunk zöld) */
-  rivalHull: ['rival-hull-0', 'rival-hull-1', 'rival-hull-2'],
-  rivalTurret: 'rival-turret',
-  wreckHull: 'wreck-hull',
-  wreckTurret: 'wreck-turret',
   rocket: 'rocket',
   heavyShell: 'heavy-shell',
   /** lángok: FIRE_FRAMES képkocka egymás mellett */
@@ -51,63 +42,7 @@ function canvasTexture(scene: Phaser.Scene, key: string, w: number, h: number, d
   tex.refresh();
 }
 
-/** A saját tank textúrájának átszínezése: a zöld árnyalatok vörösre (vagy kékre) váltanak, a többi marad. */
-function recolored(scene: Phaser.Scene, source: string, key: string, w: number, h: number, hue: 'red' | 'blue' = 'red'): void {
-  canvasTexture(scene, key, w, h, (ctx) => {
-    const src = scene.textures.get(source).getSourceImage() as HTMLCanvasElement;
-    ctx.drawImage(src, 0, 0);
-    const image = ctx.getImageData(0, 0, w, h);
-    const d = image.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i];
-      const g = d[i + 1];
-      const b = d[i + 2];
-      if (g > r * 1.08 && g > b) {
-        if (hue === 'red') {
-          d[i] = Math.min(255, g * 1.15);
-          d[i + 1] = r * 0.7;
-          d[i + 2] = b * 0.7;
-        } else {
-          d[i] = r * 0.55;
-          d[i + 1] = g * 0.72;
-          d[i + 2] = Math.min(255, g * 1.35);
-        }
-      }
-    }
-    ctx.putImageData(image, 0, 0);
-  });
-}
-
-/** Kiégett roncs: a tank textúrája megfeketedve, rozsdás foltokkal. */
-function charred(scene: Phaser.Scene, source: string, key: string, w: number, h: number): void {
-  canvasTexture(scene, key, w, h, (ctx) => {
-    const src = scene.textures.get(source).getSourceImage() as HTMLCanvasElement;
-    ctx.drawImage(src, 0, 0);
-    const image = ctx.getImageData(0, 0, w, h);
-    const d = image.data;
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i + 3] === 0) continue;
-      const px = (i / 4) % w;
-      const py = Math.floor(i / 4 / w);
-      const lum = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) * 0.42;
-      // szabálytalan rozsdafoltok
-      const rust = (Math.sin(px * 0.9) + Math.sin(py * 1.3 + px * 0.4)) > 1.1 ? 22 : 0;
-      d[i] = Math.min(255, lum + 14 + rust);
-      d[i + 1] = lum + 6 + rust * 0.4;
-      d[i + 2] = lum;
-    }
-    ctx.putImageData(image, 0, 0);
-  });
-}
-
 export function createGameTextures(scene: Phaser.Scene): void {
-  charred(scene, TEX.hull[0], GTEX.wreckHull, HULL_SIZE.w, HULL_SIZE.h);
-  charred(scene, TEX.turret, GTEX.wreckTurret, TURRET_SIZE.w, TURRET_SIZE.h);
-  TEX.hull.forEach((key, i) => recolored(scene, key, GTEX.enemyHull[i], HULL_SIZE.w, HULL_SIZE.h));
-  recolored(scene, TEX.turret, GTEX.enemyTurret, TURRET_SIZE.w, TURRET_SIZE.h);
-  TEX.hull.forEach((key, i) => recolored(scene, key, GTEX.rivalHull[i], HULL_SIZE.w, HULL_SIZE.h, 'blue'));
-  recolored(scene, TEX.turret, GTEX.rivalTurret, TURRET_SIZE.w, TURRET_SIZE.h, 'blue');
-
   canvasTexture(scene, GTEX.light, 128, 128, (ctx) => {
     const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
     g.addColorStop(0, 'rgba(255,255,255,1)');

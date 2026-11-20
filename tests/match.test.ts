@@ -8,7 +8,7 @@ import type { MapData } from '../src/game/maps/types';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { areaOfCells, gridSize, MATCH, Match, matchPlan, sanitizeSettings, type MatchSettings } from '../src/game/sim/match';
 import { Structures } from '../src/game/sim/structures';
-import { CRUSH, DAMAGE, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type Terrain } from '../src/game/sim/world';
+import { CRUSH, DAMAGE, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
 
 const idle: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false };
 const seconds = (s: number): number => Math.round(s / SIM_DT);
@@ -164,20 +164,29 @@ describe('eső: sáros, csúszós zöldterület', () => {
 
 describe('a meccs beállításai', () => {
   it('a rács celláiból a játéktér méterben adódik, a pályán belül', () => {
-    expect(gridSize(2000, 3460)).toEqual({ cols: 8, rows: 14 });
-    expect(areaOfCells(2000, 3460, 2, 3, 3, 4)).toEqual({ minX: 500, minY: 741, maxX: 1000, maxY: 1236 });
+    expect(gridSize(2000, 3460)).toEqual({ cols: 24, rows: 42 });
+    expect(areaOfCells(2000, 3460, 6, 9, 11, 14)).toEqual({ minX: 500, minY: 741, maxX: 1000, maxY: 1236 });
+    // a legkisebb kijelölhető játéktér két cella széles: a korábbi 500 méter harmada
+    const tiny = areaOfCells(2000, 3460, 10, 20, 10 + MATCH.minCells - 1, 20 + MATCH.minCells - 1);
+    expect(tiny.maxX - tiny.minX).toBeLessThanOrEqual(170);
+    expect(tiny.maxY - tiny.minY).toBeLessThanOrEqual(170);
+    expect(sanitizeSettings({ area: tiny }, 2000, 3460).area).toEqual(tiny);
     expect(areaOfCells(2000, 3460, -5, 0, 99, 99)).toEqual({ minX: 0, minY: 0, maxX: 2000, maxY: 3460 });
   });
 
   it('a hibás vagy rosszindulatú beállítások a megengedett határok közé kerülnek', () => {
-    const s = sanitizeSettings({ name: '  <b>Meccs</b>\n', maxPlayers: 99, lives: 4, bots: -3, pickups: 42, weather: 'hurricane' as never, area: { minX: 900, minY: 900, maxX: 910, maxY: 5000 } }, 2000, 3460);
+    const s = sanitizeSettings({ name: '  <b>Meccs</b>\n', maxPlayers: 99, minutes: 500, mode: 'capture' as never, bots: -3, pickups: 42, weather: 'hurricane' as never, area: { minX: 900, minY: 900, maxX: 910, maxY: 5000 } }, 2000, 3460);
     expect(s.name).toBe('bMeccs/b');
     expect(s.maxPlayers).toBe(MATCH.players.max);
-    expect(s.lives).toBe(3);
+    expect(s.minutes).toBe(MATCH.minutes.max);
+    expect(s.mode).toBe('deathmatch');
+    expect(sanitizeSettings({ minutes: 1 }, 2000, 3460).minutes).toBe(MATCH.minutes.min);
+    expect(sanitizeSettings({}, 2000, 3460).minutes).toBe(10);
     expect(s.bots).toBe(0);
     expect(s.pickups).toBe(5);
     expect(s.weather).toBe('day');
-    expect(s.area.maxX - s.area.minX).toBeGreaterThanOrEqual(450);
+    expect(s.area.maxX - s.area.minX).toBeGreaterThanOrEqual(149);
+    expect(Number.isInteger(s.area.maxX)).toBe(true);
     expect(s.area.maxY).toBe(3460);
     expect(sanitizeSettings(null, 2000, 3460).area).toEqual({ minX: 0, minY: 0, maxX: 2000, maxY: 3460 });
   });
@@ -195,13 +204,27 @@ describe('a meccs beállításai', () => {
     // kis pályán közelebb születnek a játékosok
     expect(small.spawnGap).toBeLessThan(big.spawnGap);
   });
+
+  it('a legkisebb pályán a legmagasabb szint is csak néhány botot és járművet ad', () => {
+    const area = areaOfCells(2000, 3460, 10, 20, 11, 21);
+    const tiny = matchPlan(sanitizeSettings({ area, bots: 5, pickups: 5, traffic: 5, maxPlayers: 2 }, 2000, 3460));
+    expect(tiny.km2).toBeLessThan(0.03);
+    expect(tiny.bots).toBeGreaterThanOrEqual(1);
+    expect(tiny.bots).toBeLessThanOrEqual(3);
+    expect(tiny.traffic).toBeGreaterThanOrEqual(1);
+    expect(tiny.traffic).toBeLessThanOrEqual(2);
+    expect(tiny.pickups).toBeGreaterThanOrEqual(5);
+    // az 1-es szint itt is ad legalább egyet
+    const few = matchPlan(sanitizeSettings({ area, bots: 1, pickups: 1, traffic: 1 }, 2000, 3460));
+    expect(few).toMatchObject({ bots: 1, traffic: 1 });
+  });
 });
 
 describe('meccs a valódi pályán', () => {
   const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
   const setup = (overrides: Partial<MatchSettings>, names: string[]): { map: GameMap; match: Match } => {
     const map = new GameMap(data);
-    const settings = sanitizeSettings({ area: areaOfCells(map.width, map.height, 2, 2, 4, 5), bots: 3, pickups: 3, lives: 1, ...overrides }, map.width, map.height);
+    const settings = sanitizeSettings({ area: areaOfCells(map.width, map.height, 6, 6, 14, 17), bots: 3, pickups: 3, traffic: 0, minutes: 5, ...overrides }, map.width, map.height);
     map.setArea(settings.area);
     map.weather = settings.weather;
     const match = new Match(map, settings, names.map((name, i) => ({ id: `p${i}`, name })), 77);
@@ -243,49 +266,114 @@ describe('meccs a valódi pályán', () => {
     expect(me.x).toBeLessThanOrEqual(area.maxX);
   }, 30000);
 
-  it('az nyer, aki utolsónak marad; az újraéledés a többiektől távol történik', () => {
-    const { match } = setup({ bots: 0, lives: 3, maxPlayers: 3 }, ['a', 'b', 'c']);
+  /** A `by` tank lövedéke kilövi a `victim` tankot (a szimuláció saját sebzésén keresztül). */
+  const kill = (match: Match, by: TankState, victim: TankState): void => {
+    victim.effects.invulnerable = 0;
+    victim.shield = 0;
+    victim.hp = 1;
+    match.world.bullets.push({ id: 900000 + match.world.tick, owner: by.id, team: by.team, kind: 'rocket', x: victim.x - 3, y: victim.y, vx: 100, vy: 0, life: 1, bounces: 0 });
+    match.step(new Map());
+  };
+  const wait = (match: Match, s: number): void => {
+    for (let i = 0; i < seconds(s) && !match.over; i++) match.step(new Map());
+  };
+
+  it('időre megy: a kilőtt tank mindig újraéled (a többiektől távol), és az nyer, aki a legtöbb tankot lövi ki', () => {
+    const { match } = setup({ bots: 0, maxPlayers: 3 }, ['a', 'b', 'c']);
     const [a, b, c] = ['p0', 'p1', 'p2'].map((id) => match.tankOf(id)!);
-    const none = new Map<string, TankInput>();
-    const kill = (victim: typeof a): void => {
-      // a szimuláció saját sebzésén keresztül: a győztes (a) lövedéke találja el
-      victim.effects.invulnerable = 0;
-      victim.shield = 0;
-      match.world.bullets.push({ id: 900000 + match.world.tick, owner: a.id, team: a.team, kind: 'rocket', x: victim.x - 3, y: victim.y, vx: 100, vy: 0, life: 1, bounces: 0 });
-      victim.hp = 1;
-      match.step(none);
-    };
-    kill(b);
-    expect(b.alive).toBe(false);
-    expect(b.lives).toBe(2);
-    for (let i = 0; i < seconds(TANK.respawnDelay + 0.2); i++) match.step(none);
-    expect(b.alive).toBe(true);
-    // az újraéledés helye távol van a többi játékostól
-    expect(Math.min(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(b.x - c.x, b.y - c.y))).toBeGreaterThan(match.plan.spawnGap * 0.3);
-    for (let n = 0; n < 2; n++) {
-      kill(b);
-      for (let i = 0; i < seconds(TANK.respawnDelay + 0.2); i++) match.step(none);
+    expect(match.timeLeft).toBe(5 * 60);
+    // b-t akárhányszor kilövik, mindig újraéled: nincs kiesés
+    for (let n = 0; n < 4; n++) {
+      kill(match, a, b);
+      expect(b.alive).toBe(false);
+      wait(match, TANK.respawnDelay + 0.2);
+      expect(b.alive).toBe(true);
+      expect(b.out).toBe(false);
+      expect(Math.min(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(b.x - c.x, b.y - c.y))).toBeGreaterThan(match.plan.spawnGap * 0.3);
     }
-    expect(b.out).toBe(true);
+    kill(match, c, a);
+    kill(match, c, b);
+    wait(match, 5);
     expect(match.over).toBe(false);
-    for (let n = 0; n < 3; n++) {
-      kill(c);
-      for (let i = 0; i < seconds(TANK.respawnDelay + 0.2); i++) match.step(none);
-    }
+    expect(match.timeLeft).toBeLessThan(5 * 60 - 20);
+    expect(match.standings().map((s) => [s.id, s.place, s.kills, s.deaths])).toEqual([
+      ['p0', 1, 4, 1],
+      ['p2', 2, 2, 0],
+      ['p1', 3, 0, 5],
+    ]);
+    // az idő lejártakor vége; addig nincs győztes
+    expect(match.winner).toBeNull();
+    match.timeLeft = 0.5;
+    wait(match, 1);
     expect(match.over).toBe(true);
+    expect(match.timeLeft).toBe(0);
     expect(match.winner).toBe('p0');
-    expect(match.standings().map((s) => [s.id, s.place])).toEqual([['p0', 1], ['p2', 2], ['p1', 3]]);
-    expect(match.standings()[0].kills).toBe(6);
+    // a vége után a meccs már nem lép tovább
+    const tick = match.world.tick;
+    match.step(new Map());
+    expect(match.world.tick).toBe(tick);
   });
 
-  it('ha a többiek kilépnek, a bent maradó nyer', () => {
+  it('azonos kilövésszámnál az nyer, akit kevesebbszer lőttek ki; teljes egyenlőségnél döntetlen', () => {
+    const first = setup({ bots: 0, maxPlayers: 3 }, ['a', 'b', 'c']).match;
+    const [a, b, c] = ['p0', 'p1', 'p2'].map((id) => first.tankOf(id)!);
+    kill(first, a, c);
+    wait(first, TANK.respawnDelay + 0.2);
+    kill(first, b, c);
+    wait(first, TANK.respawnDelay + 0.2);
+    kill(first, c, a); // a-t egyszer kilőtték, b-t egyszer sem
+    first.timeLeft = 0.2;
+    wait(first, 1);
+    expect(first.winner).toBe('p1');
+
+    const draw = setup({ bots: 0, maxPlayers: 2 }, ['a', 'b']).match;
+    draw.timeLeft = 0.2;
+    wait(draw, 1);
+    expect(draw.over).toBe(true);
+    expect(draw.winner).toBeNull();
+    expect(draw.standings().map((s) => s.place)).toEqual([1, 1]);
+  });
+
+  it('a botok kilövése is számít, és a teljes játékidő alatt van kit lőni', () => {
+    const { match } = setup({ bots: 2, maxPlayers: 2 }, ['a', 'b']);
+    const a = match.tankOf('p0')!;
+    const bot = match.world.tanks.find((t) => t.bot)!;
+    kill(match, a, bot);
+    expect(match.standings()[0]).toMatchObject({ id: 'p0', kills: 1 });
+    wait(match, TANK.respawnDelay + 0.5);
+    expect(bot.alive).toBe(true);
+  });
+
+  it('egyedül játszva a meccs az idő végéig tart, és nincs győztes – az eredmény a kilövések száma', () => {
+    const { match } = setup({ bots: 1, maxPlayers: 1 }, ['a']);
+    const a = match.tankOf('p0')!;
+    kill(match, match.world.tanks.find((t) => t.bot)!, a);
+    wait(match, TANK.respawnDelay + 0.5);
+    expect(a.alive).toBe(true);
+    expect(match.over).toBe(false);
+    match.timeLeft = 0.2;
+    wait(match, 1);
+    expect(match.over).toBe(true);
+    expect(match.winner).toBeNull();
+    expect(match.standings()).toHaveLength(1);
+  });
+
+  it('ha a többiek kilépnek, a bent maradó nyer; a kilépettek az állás végére kerülnek', () => {
     const { match } = setup({ bots: 0, maxPlayers: 3 }, ['a', 'b', 'c']);
+    const [a, , c] = ['p0', 'p1', 'p2'].map((id) => match.tankOf(id)!);
+    kill(match, a, c);
     match.leave('p1');
     expect(match.over).toBe(false);
     expect(match.world.tanks.filter((t) => !t.bot)).toHaveLength(2);
     match.leave('p0');
     expect(match.over).toBe(true);
     expect(match.winner).toBe('p2');
+    // a kilépett játékos eredménye megmarad, de a bent maradó mögé kerül
+    expect(match.standings().map((s) => [s.id, s.place, s.kills])).toEqual([
+      ['p2', 1, 0],
+      ['p0', 2, 1],
+      ['p1', 3, 0],
+    ]);
   });
 
   it('a pályán az épület összedől a találatoktól, és a helyén át lehet hajtani', () => {
@@ -321,5 +409,65 @@ describe('meccs a valódi pályán', () => {
     expect(hit === null || hit.owner !== index).toBe(true);
     map.resetDamage();
     expect(map.walls.raycast(box[0] - 1, y, box[0] + 1, y)?.owner).toBe(index);
+  });
+});
+
+describe('nagyon kis pálya a valódi térképen (kétfős párbaj)', () => {
+  const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+  const { cols, rows } = gridSize(data.meta.width, data.meta.height);
+  const start = (c: number, r: number, overrides: Partial<MatchSettings> = {}): { map: GameMap; match: Match; settings: MatchSettings } => {
+    const map = new GameMap(data);
+    const area = areaOfCells(map.width, map.height, c, r, c + MATCH.minCells - 1, r + MATCH.minCells - 1);
+    const settings = sanitizeSettings({ area, bots: 2, pickups: 3, traffic: 2, minutes: 5, maxPlayers: 2, ...overrides }, map.width, map.height);
+    map.setArea(settings.area);
+    const match = new Match(map, settings, [{ id: 'a', name: 'Anna' }, { id: 'b', name: 'Béla' }], 31 + c * 7 + r);
+    return { map, match, settings };
+  };
+  const inside = (o: { x: number; y: number }, s: MatchSettings): boolean => o.x > s.area.minX && o.x < s.area.maxX && o.y > s.area.minY && o.y < s.area.maxY;
+
+  it('a pálya bármelyik részén: a két játékos a játéktéren belül, szabad helyen, egymástól távolabb születik', () => {
+    let checked = 0;
+    // a rács minden harmadik helye (a mezőkön, út nélküli részeken is)
+    for (let r = 0; r + MATCH.minCells <= rows; r += 3) {
+      for (let c = 0; c + MATCH.minCells <= cols; c += 3) {
+        const { map, match, settings } = start(c, r, { bots: 0, traffic: 0 });
+        const [a, b] = match.players.map((p) => match.world.tank(p.tankId)!);
+        expect(inside(a, settings), `a (${c},${r})`).toBe(true);
+        expect(inside(b, settings), `b (${c},${r})`).toBe(true);
+        expect(map.walls.resolveCircle(a.x, a.y, 1.5).hit, `a falban (${c},${r})`).toBe(false);
+        expect(map.walls.resolveCircle(b.x, b.y, 1.5).hit, `b falban (${c},${r})`).toBe(false);
+        expect(Math.hypot(a.x - b.x, a.y - b.y), `távolság (${c},${r})`).toBeGreaterThan(12);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(80);
+  });
+
+  it('botokkal, tárgyakkal és forgalommal is elindul és fut; a kilőtt bot a kis pályán is újraéled', () => {
+    const c = Math.floor(data.townhall.x / (data.meta.width / cols));
+    const r = Math.floor(data.townhall.y / (data.meta.height / rows));
+    const { match, settings } = start(c, r);
+    expect(match.plan.bots).toBeGreaterThanOrEqual(1);
+    expect(match.bots.count).toBe(match.plan.bots);
+    for (const tank of match.world.tanks) expect(inside(tank, settings)).toBe(true);
+    for (const p of match.world.pickups) expect(inside(p, settings)).toBe(true);
+    const bot = match.world.tanks.find((t) => t.bot)!;
+    bot.hp = 1;
+    const shooter = match.tankOf('a')!;
+    // az egyik játékos kilövi a botot (közvetlen közelről, hogy biztos legyen)
+    shooter.x = bot.x - 6;
+    shooter.y = bot.y;
+    shooter.effects.invulnerable = 60;
+    const inputs = new Map([['a', { throttle: 0, turn: 0, aim: 0, fire: true, drop: false }]]);
+    let died = false;
+    for (let i = 0; i < 60 * 20; i++) {
+      match.step(inputs);
+      if (!bot.alive) died = true;
+      if (died && bot.alive) break;
+    }
+    expect(died).toBe(true);
+    expect(bot.alive).toBe(true);
+    expect(inside(bot, settings)).toBe(true);
+    for (const v of match.world.vehicles) expect(v.x > settings.area.minX - 12 && v.x < settings.area.maxX + 12).toBe(true);
   });
 });

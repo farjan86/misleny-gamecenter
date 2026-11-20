@@ -240,6 +240,28 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
       ctx.fill();
     },
   },
+  turret: {
+    label: 'Telepíthető ágyú',
+    hint: 'Q: lerakás a tank mögé – magától lő a közeli ellenségre',
+    color: '#4a6a3a',
+    icon: (ctx) => {
+      // háromlábú talp, rajta rövid csövű ágyú
+      stroke(ctx, 3.5);
+      path(ctx, [24, 28, 13, 39]);
+      ctx.stroke();
+      path(ctx, [24, 28, 35, 39]);
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(22, 25, 7.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.save();
+      ctx.translate(22, 25);
+      ctx.rotate(-0.5);
+      ctx.fillRect(4, -3, 18, 6);
+      ctx.restore();
+    },
+  },
 };
 
 export const pickupTexture = (kind: PickupKind): string => `pickup-${kind}`;

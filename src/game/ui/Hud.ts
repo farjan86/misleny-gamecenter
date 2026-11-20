@@ -137,6 +137,14 @@ export class Hud {
   private miniAngle = NaN;
   private miniDirty = true;
   private readonly toastBox = el<HTMLDivElement>('hud-toast');
+  private readonly clock = el<HTMLDivElement>('hud-clock');
+  private readonly clockTime = el<HTMLDivElement>('hud-clock-time');
+  private readonly clockScore = el<HTMLDivElement>('hud-clock-score');
+  private readonly scores = el<HTMLDivElement>('hud-scores');
+  private scoresKey = '';
+  /** az órára kattintva a tábla kint marad (a billentyű elengedése nem rejti el) */
+  private scoresPinned = false;
+  private scoresHeld = false;
   private infoKey = '';
   private readonly loadout = el<HTMLDivElement>('hud-loadout');
   private loadoutKey = '';
@@ -170,6 +178,14 @@ export class Hud {
     el<HTMLDivElement>('hud').classList.remove('hidden');
     el<HTMLDivElement>('hud-info-button').onclick = () => this.toggleInfo();
     el<HTMLSpanElement>('hud-info-close').onclick = () => this.toggleInfo();
+    this.clock.onclick = () => {
+      this.scoresPinned = !this.scoresPinned;
+      this.syncScores();
+    };
+    this.scores.onclick = () => {
+      this.scoresPinned = false;
+      this.syncScores();
+    };
 
     const layer = el<HTMLDivElement>('labels');
     layer.replaceChildren();
@@ -195,6 +211,36 @@ export class Hud {
   }
 
   /** Rövid értesítés a képernyő tetején (pl. felvett tárgy). */
+  /** Az eredménytábla megjelenítése, amíg a billentyűje nyomva van. */
+  holdScores(held: boolean): void {
+    this.scoresHeld = held;
+    this.syncScores();
+  }
+
+  get scoresOpen(): boolean {
+    return this.scoresHeld || this.scoresPinned;
+  }
+
+  private syncScores(): void {
+    this.scores.classList.toggle('hidden', !this.scoresOpen);
+    this.scores.style.pointerEvents = this.scoresPinned ? 'auto' : 'none';
+  }
+
+  /** Az eredménytábla tartalma (HTML); csak változáskor íródik a dokumentumba. */
+  setScores(html: string): void {
+    if (html === this.scoresKey) return;
+    this.scoresKey = html;
+    this.scores.innerHTML = html;
+  }
+
+  /** A visszaszámláló óra (perc:másodperc) és alatta az állás; az utolsó fél percben pirosan villog. */
+  setClock(seconds: number, score: string): void {
+    const s = Math.max(0, Math.ceil(seconds));
+    this.clockTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    this.clockScore.textContent = score;
+    this.clock.classList.toggle('ending', s <= 30);
+  }
+
   toast(text: string): void {
     this.toastBox.textContent = text;
     this.toastBox.classList.add('show');

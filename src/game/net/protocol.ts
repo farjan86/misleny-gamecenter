@@ -6,9 +6,10 @@
 
 import { PICKUP_KINDS } from '../sim/pickups';
 import type { MatchPlan, MatchSettings } from '../sim/match';
+import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehicles';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 3;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -21,8 +22,18 @@ export interface RoomInfo {
   /** a bent lévő játékosok nevei */
   players: string[];
   status: RoomStatus;
+  /** privát játék: a belépéshez kód kell (magát a kódot a lista nem tartalmazza) */
+  locked: boolean;
   settings: MatchSettings;
   plan: MatchPlan;
+}
+
+/** A privát játék belépőkódjának hossza. */
+export const ROOM_CODE = { min: 3, max: 16 } as const;
+
+/** A belépőkód egységes alakja: szóközök nélkül, a kis- és nagybetű nem számít. */
+export function cleanCode(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/\s+/g, '').toLowerCase().slice(0, ROOM_CODE.max) : '';
 }
 
 export interface PlayerInfo {
@@ -40,7 +51,7 @@ export interface Standing {
   level: number;
 }
 
-/** [gáz, forgatás, célzás (rad) vagy null, jelzők: 1 = tűz, 2 = olaj, 4 = gyorsító] */
+/** [gáz, forgatás, célzás (rad) vagy null, jelzők: 1 = tűz, 2 = olaj, 4 = gyorsító, 8 = ágyú telepítése] */
 export type PackedInput = [number, number, number | null, number];
 
 export type ClientMessage =
@@ -51,8 +62,9 @@ export type ClientMessage =
   | { t: 'logout' }
   /** a szerver kapuja küldi a szobakezelőnek a sikeres belépés után (a kliensé nem jut el odáig) */
   | { t: 'hello'; v: number; name: string }
-  | { t: 'create'; settings: Partial<MatchSettings> }
-  | { t: 'join'; room: string }
+  /** code: ha meg van adva, a játék privát – csak ezzel a kóddal lehet belépni */
+  | { t: 'create'; settings: Partial<MatchSettings>; code?: string }
+  | { t: 'join'; room: string; code?: string }
   | { t: 'leave' }
   /** s: a bemenet sorszáma (a szerver ezzel nyugtáz) */
   | { t: 'input'; s: number; i: PackedInput }
@@ -82,10 +94,16 @@ export interface Snapshot {
   P: number[][];
   /** olajfoltok: [id, x, y] */
   O: number[][];
-  /** roncsok: [id, x, y, test szöge, torony szöge, kor] */
+  /** roncsok: [id, x, y, test szöge, torony szöge, kor, szint] */
   W: number[][];
-  /** játékosok állása: [tank, életek, kilövések, kiesett-e] */
+  /** civil járművek: [id, fajta, megjelenés, x, y, szög, sebesség, állapot] */
+  V: number[][];
+  /** telepített ágyúk: [id, lerakó tank, csapat, x, y, szög, életerő] */
+  U: number[][];
+  /** játékosok állása: [tank, kilövések, halálok, kilépett-e] */
   S: number[][];
+  /** a hátralévő játékidő (mp) */
+  r: number;
 }
 
 export type ServerMessage =
@@ -95,7 +113,7 @@ export type ServerMessage =
   | { t: 'welcome'; id: string; map: { width: number; height: number } }
   | { t: 'rooms'; rooms: RoomInfo[] }
   /** a szoba állapota, amíg a játékos a váróban van; countdown: az indulásig hátralévő mp */
-  | { t: 'room'; room: RoomInfo; you: string; countdown: number }
+  | { t: 'room'; room: RoomInfo; you: string; countdown: number; code?: string }
   | { t: 'left'; reason: string }
   | { t: 'error'; message: string }
   | { t: 'start'; room: RoomInfo; tank: number; players: PlayerInfo[] }
@@ -107,7 +125,7 @@ export type ServerMessage =
 // --- tömörítés ------------------------------------------------------------------
 
 export function packInput(input: TankInput): PackedInput {
-  return [input.throttle, input.turn, input.aim === null ? null : Math.round(input.aim * 1000) / 1000, (input.fire ? 1 : 0) | (input.drop ? 2 : 0) | (input.boost ? 4 : 0)];
+  return [input.throttle, input.turn, input.aim === null ? null : Math.round(input.aim * 1000) / 1000, (input.fire ? 1 : 0) | (input.drop ? 2 : 0) | (input.boost ? 4 : 0) | (input.deploy ? 8 : 0)];
 }
 
 export function unpackInput(packed: unknown): TankInput | null {
@@ -122,6 +140,7 @@ export function unpackInput(packed: unknown): TankInput | null {
     fire: (flags & 1) !== 0,
     drop: (flags & 2) !== 0,
     boost: (flags & 4) !== 0,
+    deploy: (flags & 8) !== 0,
   };
 }
 
@@ -168,6 +187,7 @@ export function blankTank(id: number): TankState {
     ricochet: false,
     shield: 0,
     oil: 0,
+    turrets: 0,
     dropCooldown: 0,
     slip: 0,
     slideAngle: 0,
@@ -205,8 +225,13 @@ export const packPickup = (p: PickupState): number[] => [p.id, PICKUP_KINDS.inde
 export const unpackPickup = (p: number[]): PickupState => ({ id: p[0], kind: PICKUP_KINDS[p[1]] ?? 'repair', x: p[2], y: p[3] });
 export const packOil = (o: OilState): number[] => [o.id, o.x, o.y];
 export const unpackOil = (p: number[]): OilState => ({ id: p[0], owner: 0, x: p[1], y: p[2], life: 10, ownerSafe: false });
-export const packWreck = (w: WreckState): number[] => [w.id, w.x, w.y, w.hullAngle, w.turretAngle, w.age];
-export const unpackWreck = (p: number[]): WreckState => ({ id: p[0], x: p[1], y: p[2], hullAngle: p[3], turretAngle: p[4], team: 0, age: p[5] });
+export const packWreck = (w: WreckState): number[] => [w.id, w.x, w.y, w.hullAngle, w.turretAngle, w.age, w.level];
+export const unpackWreck = (p: number[]): WreckState => ({ id: p[0], x: p[1], y: p[2], hullAngle: p[3], turretAngle: p[4], team: 0, level: p[6] ?? 1, age: p[5] });
+
+export const packVehicle = (v: VehicleState): number[] => [v.id, VEHICLE_KINDS.indexOf(v.kind), v.look, v.x, v.y, v.angle, v.speed, v.state];
+export const unpackVehicle = (p: number[]): VehicleState => ({ id: p[0], kind: VEHICLE_KINDS[p[1]] ?? 'car', look: p[2], x: p[3], y: p[4], angle: p[5], speed: p[6], hp: 1, state: p[7], timer: 0, by: 0 });
+export const packTurret = (t: TurretState): number[] => [t.id, t.owner, t.team, t.x, t.y, t.angle, t.hp];
+export const unpackTurret = (p: number[]): TurretState => ({ id: p[0], owner: p[1], team: p[2], x: p[3], y: p[4], angle: p[5], hp: p[6], cooldown: 0, target: -1 });
 
 /** JSON-kódolás a számok kerekítésével (a pillanatképek így jóval kisebbek). */
 export function encode(message: ServerMessage | ClientMessage): string {

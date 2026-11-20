@@ -3,13 +3,12 @@
 // alá tett rajzolt sprite-okra cserélhetők.
 //
 // A sprite-ok 12 pixel/méter felbontásra készülnek (lásd GameScene.PPM).
-// A tank jobbra néz; az elejét sárga, hegyes orr és fekete nyilak jelölik.
+// A tankok rajza külön fájlban van (tankTextures.ts).
 
 import Phaser from 'phaser';
+import { createTankTextures } from './tankTextures';
 
 export const TEX = {
-  hull: ['tank-hull-0', 'tank-hull-1', 'tank-hull-2'],
-  turret: 'tank-turret',
   shadow: 'tank-shadow',
   bullet: 'bullet',
   flash: 'muzzle-flash',
@@ -17,10 +16,8 @@ export const TEX = {
   marker: 'tank-marker',
 } as const;
 
-export const HULL_SIZE = { w: 68, h: 42 };
-export const TURRET_SIZE = { w: 64, h: 28 };
-/** a torony forgáspontja a textúrán belül (pixel) */
-export const TURRET_PIVOT = { x: 16, y: 14 };
+/** az árnyék mérete: az 1. osztályú tank teste */
+const SHADOW_SIZE = { w: 68, h: 42 };
 export const EXPLOSION_FRAMES = 10;
 const EXPLOSION_SIZE = 112;
 
@@ -58,85 +55,6 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
     ctx.lineWidth = lineWidth;
     ctx.stroke();
   }
-}
-
-function drawHull(ctx: Ctx, frame: number): void {
-  // lánctalpak
-  for (const y of [1, 31]) {
-    roundRect(ctx, 1, y, 58, 10, 3, '#17171c', '#0c0c10', 1.5);
-    ctx.fillStyle = '#3a3a44';
-    for (let x = 4 + frame * 2; x < 57; x += 6) ctx.fillRect(x, y + 1.5, 2.5, 7);
-  }
-
-  // test: hátul szögletes, elöl hegyes
-  const body = [5, 8, 46, 8, 66, 17, 66, 25, 46, 34, 5, 34];
-  poly(ctx, body, '#4c7c3c', '#182c14', 2.5);
-  // fény felül, árnyék alul
-  poly(ctx, [7, 10, 45, 10, 45, 13, 7, 13], '#6fa558');
-  poly(ctx, [7, 29, 45, 29, 45, 32, 7, 32], '#356330');
-
-  // sárga orr – ez a tank eleje
-  poly(ctx, [44, 9.5, 46.5, 9.5, 64.5, 17.5, 64.5, 24.5, 46.5, 32.5, 44, 32.5], '#ffd23c', '#3a2c06', 1.5);
-  poly(ctx, [45, 11, 47, 11, 62, 18, 62, 20, 45, 13], '#fff0a0');
-  // fekete nyilak előre
-  ctx.strokeStyle = '#2a2006';
-  ctx.lineWidth = 2.6;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  for (const x of [47, 53]) {
-    ctx.beginPath();
-    ctx.moveTo(x, 15);
-    ctx.lineTo(x + 5.5, 21);
-    ctx.lineTo(x, 27);
-    ctx.stroke();
-  }
-
-  // motortér rácsokkal és kipufogókkal (hátul)
-  roundRect(ctx, 8, 13, 13, 16, 1.5, '#27332a', '#141c16', 1.5);
-  ctx.fillStyle = '#0f1611';
-  for (let x = 10.5; x < 20; x += 3) ctx.fillRect(x, 15, 1.4, 12);
-  ctx.fillStyle = '#b05a2c';
-  ctx.fillRect(2.5, 13, 4, 4.5);
-  ctx.fillRect(2.5, 24.5, 4, 4.5);
-  ctx.fillStyle = '#3c1c0c';
-  ctx.fillRect(2.5, 14.5, 1.6, 1.6);
-  ctx.fillRect(2.5, 26, 1.6, 1.6);
-
-  // toronygyűrű
-  ctx.beginPath();
-  ctx.arc(34, 21, 11.5, 0, Math.PI * 2);
-  ctx.fillStyle = '#325a2c';
-  ctx.fill();
-  ctx.strokeStyle = '#182c14';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-}
-
-function drawTurret(ctx: Ctx): void {
-  const { x: px, y: py } = TURRET_PIVOT;
-  // cső
-  roundRect(ctx, px + 8, py - 3, 36, 6, 1.5, '#3a5634', '#12200f', 1.5);
-  ctx.fillStyle = '#5c8050';
-  ctx.fillRect(px + 10, py - 2, 32, 1.6);
-  // csőszájfék
-  roundRect(ctx, px + 38, py - 4.5, 9, 9, 1.5, '#1e1e22', '#0a0a0c', 1.2);
-  ctx.fillStyle = '#4a4a52';
-  ctx.fillRect(px + 40, py - 3, 1.6, 6);
-  ctx.fillRect(px + 43.5, py - 3, 1.6, 6);
-  // torony
-  poly(ctx, [px - 10, py - 8, px + 5, py - 10, px + 11, py - 5, px + 11, py + 5, px + 5, py + 10, px - 10, py + 8, px - 13, py], '#5c9448', '#14240f', 2.2);
-  poly(ctx, [px - 9, py - 6.5, px + 4.5, py - 8.5, px + 8, py - 5.5, px - 8, py - 3.5], '#86be6a');
-  poly(ctx, [px - 9, py + 6.5, px + 4.5, py + 8.5, px + 8, py + 5.5, px - 8, py + 3.5], '#3e7036');
-  // búvónyílás
-  ctx.beginPath();
-  ctx.arc(px - 3, py + 0.5, 4.2, 0, Math.PI * 2);
-  ctx.fillStyle = '#2e5a2a';
-  ctx.fill();
-  ctx.strokeStyle = '#14240f';
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-  ctx.fillStyle = '#6aa256';
-  ctx.fillRect(px - 5, py - 1.5, 3, 1.4);
 }
 
 /** Egyszerű, rögzített magú véletlen, hogy a robbanás minden betöltéskor ugyanolyan legyen. */
@@ -204,11 +122,10 @@ function drawExplosion(ctx: Ctx): void {
 }
 
 export function createTextures(scene: Phaser.Scene): void {
-  TEX.hull.forEach((key, frame) => canvasTexture(scene, key, HULL_SIZE.w, HULL_SIZE.h, (ctx) => drawHull(ctx, frame)));
-  canvasTexture(scene, TEX.turret, TURRET_SIZE.w, TURRET_SIZE.h, drawTurret);
+  createTankTextures(scene);
 
-  canvasTexture(scene, TEX.shadow, HULL_SIZE.w + 4, HULL_SIZE.h + 4, (ctx) => {
-    roundRect(ctx, 2, 2, HULL_SIZE.w, HULL_SIZE.h, 8, '#000000');
+  canvasTexture(scene, TEX.shadow, SHADOW_SIZE.w + 4, SHADOW_SIZE.h + 4, (ctx) => {
+    roundRect(ctx, 2, 2, SHADOW_SIZE.w, SHADOW_SIZE.h, 8, '#000000');
   });
 
   canvasTexture(scene, TEX.bullet, 18, 8, (ctx) => {

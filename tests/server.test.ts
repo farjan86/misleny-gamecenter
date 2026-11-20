@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Accounts } from '../server/accounts';
 import { Gate } from '../server/gate';
-import { Lobby } from '../server/lobby';
+import { LIMITS, Lobby } from '../server/lobby';
 import type { MapData } from '../src/game/maps/types';
 import { encode, packInput, PROTOCOL_VERSION, type ClientMessage, type RoomInfo, type ServerMessage, type Snapshot } from '../src/game/net/protocol';
 import { MATCH } from '../src/game/sim/match';
@@ -41,7 +41,7 @@ class FakeClient {
   }
 }
 
-const small = { area: { minX: 500, minY: 500, maxX: 1000, maxY: 1000 }, bots: 1, pickups: 2, lives: 1 };
+const small = { area: { minX: 500, minY: 500, maxX: 1000, maxY: 1000 }, bots: 1, pickups: 2, traffic: 0, minutes: 5 };
 
 describe('szobalista és váró', () => {
   it('a létrehozott szoba megjelenik a listában, és látszik, hányan várnak', () => {
@@ -54,7 +54,7 @@ describe('szobalista és váró', () => {
     host.send({ t: 'create', settings: { ...small, name: 'Esti csata', maxPlayers: 3, weather: 'night' } });
     const room = guest.rooms()[0];
     expect(room).toMatchObject({ host: 'Anna', players: ['Anna'], status: 'waiting' });
-    expect(room.settings).toMatchObject({ name: 'Esti csata', maxPlayers: 3, weather: 'night', lives: 1 });
+    expect(room.settings).toMatchObject({ name: 'Esti csata', maxPlayers: 3, weather: 'night', minutes: 5, mode: 'deathmatch' });
     expect(room.plan.bots).toBeGreaterThanOrEqual(1);
     expect(host.last('room')?.room.players).toEqual(['Anna']);
 
@@ -64,6 +64,65 @@ describe('szobalista és váró', () => {
     // a harmadik játékos a listában azt látja, hogy ketten várnak
     const third = new FakeClient(lobby, 'Cili');
     expect(third.rooms()[0].players).toHaveLength(2);
+  });
+
+  it('privát játék: csak a helyes belépőkóddal lehet belépni, a kód a listában nem látszik', () => {
+    const lobby = new Lobby(data);
+    lobby.tick(1000);
+    const host = new FakeClient(lobby, 'Anna');
+    const friend = new FakeClient(lobby, 'Béla');
+    const stranger = new FakeClient(lobby, 'Idegen');
+    host.send({ t: 'create', settings: { ...small, name: 'Baráti meccs', maxPlayers: 3 }, code: ' Misleny 42 ' });
+    const room = stranger.rooms()[0];
+    expect(room.locked).toBe(true);
+    // a szobalistából a kód semmilyen formában nem derül ki
+    expect(JSON.stringify(stranger.inbox).toLowerCase()).not.toContain('misleny42');
+    // a létrehozó a váróban látja, hogy tovább tudja adni
+    expect(host.last('room')?.code).toBe('misleny42');
+
+    stranger.send({ t: 'join', room: room.id });
+    expect(stranger.last('error')?.message).toBe('Hibás belépőkód.');
+    stranger.send({ t: 'join', room: room.id, code: 'tipp' });
+    expect(stranger.last('room')).toBeUndefined();
+    expect(host.last('room')?.room.players).toEqual(['Anna']);
+
+    // a kis- és nagybetű, a szóközök nem számítanak
+    friend.send({ t: 'join', room: room.id, code: 'MISLENY42' });
+    expect(friend.last('room')?.room.players).toEqual(['Anna', 'Béla']);
+    expect(friend.last('room')?.code).toBe('misleny42');
+    expect(JSON.stringify(stranger.inbox).toLowerCase()).not.toContain('misleny42');
+  });
+
+  it('privát játék: a sorozatos találgatást várakozás lassítja', () => {
+    const lobby = new Lobby(data);
+    lobby.tick(1000);
+    const host = new FakeClient(lobby, 'Anna');
+    const stranger = new FakeClient(lobby, 'Idegen');
+    host.send({ t: 'create', settings: { ...small, maxPlayers: 2 }, code: 'titok' });
+    const id = stranger.rooms()[0].id;
+    for (let i = 0; i < LIMITS.codeTries; i++) stranger.send({ t: 'join', room: id, code: `rossz${i}` });
+    expect(stranger.last('error')?.message).toBe('Hibás belépőkód.');
+    // ennyi hiba után a helyes kód sem megy át, amíg a várakozás le nem telik
+    stranger.send({ t: 'join', room: id, code: 'titok' });
+    expect(stranger.last('error')?.message).toContain('Túl sok hibás kód');
+    expect(stranger.last('room')).toBeUndefined();
+    lobby.tick(1000 + LIMITS.codeWait + 1);
+    stranger.send({ t: 'join', room: id, code: 'titok' });
+    expect(stranger.last('room')?.room.players).toEqual(['Anna', 'Idegen']);
+  });
+
+  it('kód nélkül a játék nyilvános; a túl rövid kódot a szerver visszautasítja', () => {
+    const lobby = new Lobby(data);
+    const host = new FakeClient(lobby, 'Anna');
+    const guest = new FakeClient(lobby, 'Béla');
+    host.send({ t: 'create', settings: { ...small, maxPlayers: 2 }, code: 'ab' });
+    expect(host.last('error')?.message).toContain('belépőkód');
+    expect(guest.rooms()).toEqual([]);
+    host.send({ t: 'create', settings: { ...small, maxPlayers: 2 }, code: '   ' });
+    expect(guest.rooms()[0].locked).toBe(false);
+    expect(host.last('room')?.code).toBeUndefined();
+    guest.send({ t: 'join', room: guest.rooms()[0].id });
+    expect(guest.last('room')?.room.players).toEqual(['Anna', 'Béla']);
   });
 
   it('ha a host kilép a váróból, a szoba megszűnik, a többiek visszakerülnek a listához', () => {
@@ -139,11 +198,16 @@ describe('a meccs a szerveren', () => {
     expect(end.me?.id).toBe(mine);
     expect(end.v).toBe(mine);
     expect(end.a).toBeGreaterThan(seq - 6);
-    expect(end.me!.speed).toBeGreaterThan(5);
-    expect(Math.hypot(end.me!.x - start.me!.x, end.me!.y - start.me!.y)).toBeGreaterThan(5);
+    // a tank elindult (a véletlen kezdőhelytől függ, hogy két másodperc múlva nem állítja-e meg épp egy fal)
+    const fastest = Math.max(...host.inbox.filter((m): m is Snapshot => m.t === 'snap').map((m) => m.me?.speed ?? 0));
+    expect(fastest).toBeGreaterThan(5);
+    expect(Math.hypot(end.me!.x - start.me!.x, end.me!.y - start.me!.y)).toBeGreaterThan(3);
     // a pillanatképben benne van a saját tank és a közeli tárgyak
     expect(end.T.some((t) => t[0] === mine)).toBe(true);
-    expect(end.S).toEqual([[mine, 1, 0, 0]]);
+    // az állás: [tank, kilövések, halálok, kilépett-e]; a hátralévő idő másodpercben
+    expect(end.S).toEqual([[mine, 0, 0, 0]]);
+    expect(end.r).toBeGreaterThanOrEqual(5 * 60 - 2);
+    expect(end.r).toBeLessThan(5 * 60);
     // 20 pillanatkép másodpercenként
     const snaps = host.inbox.filter((m) => m.t === 'snap').length;
     expect(snaps).toBeGreaterThanOrEqual(38);
@@ -179,7 +243,7 @@ describe('a meccs a szerveren', () => {
     const lobby = new Lobby(data);
     const clients = Array.from({ length: 8 }, (_, i) => new FakeClient(lobby, `J${i}`));
     lobby.tick(0);
-    clients[0].send({ t: 'create', settings: { area: { minX: 0, minY: 0, maxX: 2000, maxY: 3460 }, bots: 5, pickups: 5, lives: 5, maxPlayers: 8 } });
+    clients[0].send({ t: 'create', settings: { area: { minX: 0, minY: 0, maxX: 2000, maxY: 3460 }, bots: 5, pickups: 5, traffic: 5, minutes: 30, maxPlayers: 8 } });
     const id = clients[1].rooms()[0].id;
     for (const c of clients.slice(1)) c.send({ t: 'join', room: id });
     let now = MATCH.countdown * 1000 + 1;
@@ -187,15 +251,51 @@ describe('a meccs a szerveren', () => {
     expect(clients[7].last('start')).toBeDefined();
     const started = performance.now();
     const steps = 600;
+    let batchStart = started;
+    let best = Infinity;
     for (let i = 0; i < steps; i++) {
       for (const c of clients) c.send({ t: 'input', s: i + 1, i: packInput({ throttle: 1, turn: i % 120 < 60 ? 0.4 : -0.4, aim: i / 30, fire: true }) });
       now += 1000 / 60;
       lobby.tick(now);
+      if (i % 100 === 99) {
+        const t = performance.now();
+        best = Math.min(best, (t - batchStart) / 100);
+        batchStart = t;
+      }
     }
     const ms = (performance.now() - started) / steps;
     const bytes = clients[0].inbox.filter((m) => m.t === 'snap').reduce((sum, m) => sum + encode(m).length, 0);
-    console.log(`8 játékos, 100 bot: ${ms.toFixed(2)} ms / lépés, pillanatkép átlag ${(bytes / (steps / 3) / 1024).toFixed(1)} KB (${((bytes / (steps / 60)) / 1024).toFixed(0)} KB/s játékosonként)`);
-    expect(ms).toBeLessThan(8);
+    console.log(`8 játékos, 100 bot, 60 jármű: átlag ${ms.toFixed(2)}, a legjobb 100 lépés ${best.toFixed(2)} ms / lépés, pillanatkép átlag ${(bytes / (steps / 3) / 1024).toFixed(1)} KB (${((bytes / (steps / 60)) / 1024).toFixed(0)} KB/s játékosonként)`);
+    // egy lépésre 16,7 ms jut; a legjobb szakasz a gép tényleges sebességét mutatja (a tesztek párhuzamosan futnak)
+    expect(best).toBeLessThan(6);
+    expect(ms).toBeLessThan(14);
+  }, 60000);
+
+  it('az idő lejártakor a meccs véget ér: mindenki megkapja az eredményt, és a szoba eltűnik', () => {
+    const lobby = new Lobby(data, 0);
+    const host = new FakeClient(lobby, 'Anna');
+    const guest = new FakeClient(lobby, 'Béla');
+    host.send({ t: 'create', settings: { ...small, maxPlayers: 2, bots: 0, pickups: 0, minutes: 5 } });
+    guest.send({ t: 'join', room: guest.rooms()[0].id });
+    let now = 10;
+    lobby.tick(now);
+    expect(host.last('start')?.room.settings.minutes).toBe(5);
+    // öt perc játékidő (a szerver egy hívásban legfeljebb hat lépést pótol be)
+    const steps = 5 * 60 * 60 + 10;
+    for (let i = 0; i < steps && !host.last('over'); i++) {
+      now += 1000 / 60;
+      lobby.tick(now);
+    }
+    const clock = host.inbox.filter((m): m is Snapshot => m.t === 'snap').map((m) => m.r);
+    expect(clock[0]).toBe(300);
+    expect(clock[clock.length - 1]).toBeLessThanOrEqual(1);
+    for (const client of [host, guest]) {
+      const over = client.last('over')!;
+      // senki nem lőtt ki senkit: döntetlen
+      expect(over.winner).toBeNull();
+      expect(over.standings.map((s) => s.place)).toEqual([1, 1]);
+    }
+    expect(lobby.stats.rooms).toBe(0);
   }, 60000);
 });
 
@@ -312,5 +412,28 @@ describe('regisztráció és belépés', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('egyjátékos mód: ugyanaz a szobakezelő, visszaszámlálás nélkül', () => {
+  it('az egyfős játék azonnal indul, a botok beállításai eljutnak a meccsig', () => {
+    const lobby = new Lobby(data, 0);
+    const solo = new FakeClient(lobby, 'Gyakorló');
+    solo.send({ t: 'create', settings: { ...small, maxPlayers: 1, bots: 4, botSkill: 5, botAggression: 1 } });
+    lobby.tick(10);
+    const start = solo.last('start')!;
+    expect(start.players).toHaveLength(1);
+    expect(start.room.settings).toMatchObject({ maxPlayers: 1, botSkill: 5, botAggression: 1 });
+    expect(start.room.plan.bots).toBeGreaterThan(0);
+    lobby.tick(210);
+    expect(solo.last('snap')?.me?.id).toBe(start.tank);
+  });
+
+  it('a hiányzó vagy hibás botbeállítás a közepes szintre kerül', () => {
+    const lobby = new Lobby(data, 0);
+    const solo = new FakeClient(lobby, 'Gyakorló');
+    solo.send({ t: 'create', settings: { ...small, maxPlayers: 1, botSkill: 42, botAggression: Number.NaN } });
+    lobby.tick(10);
+    expect(solo.last('start')!.room.settings).toMatchObject({ botSkill: 5, botAggression: 3 });
   });
 });

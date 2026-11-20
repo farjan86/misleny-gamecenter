@@ -1,12 +1,14 @@
 // Egy tank megjelenítése: a szimuláció állapotát (méter) képernyőre (világpixel) teszi.
-// A saját tank zöld, az ellenség vörös; fölötte életerősáv, körülötte a pajzs és a
-// sebezhetetlenség gyűrűje.
+// A saját tank zöld, a botoké vörös, a többi játékosé kék; fölötte életerősáv,
+// körülötte a pajzs és a sebezhetetlenség gyűrűje. A tank kinézete a szintjének
+// osztályát követi (felderítő … titán), a mérete a szintjét.
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
-import { angleDiff, tankMaxHp, tankSize, type TankState } from '../sim/world';
+import { angleDiff, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
 import { GTEX } from './gameTextures';
-import { TEX, TURRET_PIVOT, TURRET_SIZE } from './textures';
+import { tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
+import { TEX } from './textures';
 
 interface Snapshot {
   x: number;
@@ -26,12 +28,17 @@ export class TankView {
   private readonly ring: Phaser.GameObjects.Image;
   private readonly barBack: Phaser.GameObjects.Image;
   private readonly barFill: Phaser.GameObjects.Image;
-  private readonly hullFrames: readonly string[];
+  /** a legfelső osztály tankja alatt lüktető fény */
+  private aura: Phaser.GameObjects.Image | null = null;
+  private hullFrames: readonly string[] = [];
   private readonly prev: Snapshot;
   private readonly scale: number;
   private readonly enemy: boolean;
   private frame = -1;
   private level = 0;
+  private tier = -1;
+  /** az életerősáv szélessége világpixelben (a tankkal együtt nő) */
+  private barWidth = 0;
   private lastHull = 0;
   private lastTurret = 0;
   /** a saját tank fölötti kiegészítők: a gyorsító hőfoka és az életek */
@@ -48,17 +55,16 @@ export class TankView {
     private readonly ppm: number,
     tank: TankState,
     /** a saját tank zöld, a botok vörösek, a többi játékos kék */
-    kind: 'own' | 'bot' | 'rival',
+    private readonly kind: TankPaint,
   ) {
     const scale = ppm / BASE_PPM;
     this.scale = scale;
     const enemy = kind !== 'own';
     this.enemy = enemy;
-    this.hullFrames = kind === 'bot' ? GTEX.enemyHull : kind === 'rival' ? GTEX.rivalHull : TEX.hull;
     this.shadow = scene.add.image(0, 0, TEX.shadow).setAlpha(0.3).setDepth(9).setScale(scale);
-    this.hull = scene.add.image(0, 0, this.hullFrames[0]).setDepth(10).setScale(scale);
+    this.hull = scene.add.image(0, 0, tankTex.hull(kind, 0, 0)).setDepth(10).setScale(scale);
     this.turret = scene.add
-      .image(0, 0, kind === 'bot' ? GTEX.enemyTurret : kind === 'rival' ? GTEX.rivalTurret : TEX.turret)
+      .image(0, 0, tankTex.turret(kind, 0))
       .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
       .setDepth(11)
       .setScale(scale);
@@ -67,7 +73,6 @@ export class TankView {
     // életerősáv (a lombréteg fölött, hogy fa alatt is látsszon)
     this.barBack = scene.add.image(0, 0, GTEX.px).setDepth(17).setTint(0x101418).setAlpha(0.85);
     this.barFill = scene.add.image(0, 0, GTEX.px).setDepth(18).setOrigin(0, 0.5);
-    this.barBack.setDisplaySize((BAR.width + 2) * scale, (BAR.height + 2) * scale);
     this.prev = { x: tank.x, y: tank.y, hull: tank.hullAngle, turret: tank.turretAngle };
     this.render(tank, 1, 0);
   }
@@ -105,15 +110,15 @@ export class TankView {
     if (!this.heatBack || !this.heatFill) {
       this.heatBack = this.scene.add.image(0, 0, GTEX.px).setDepth(17).setTint(0x101418).setAlpha(0.85);
       this.heatFill = this.scene.add.image(0, 0, GTEX.px).setDepth(18).setOrigin(0, 0.5);
-      this.heatBack.setDisplaySize((BAR.width + 2) * this.scale, 5 * this.scale);
     }
+    this.heatBack.setDisplaySize(this.barWidth + 2 * this.scale, 5 * this.scale);
     const visible = this.shown;
     const top = this.barBack.y + 6 * this.scale;
     this.heatBack.setVisible(visible && heat > 0).setPosition(this.barBack.x, top);
     this.heatFill
       .setVisible(visible && heat > 0)
-      .setPosition(this.barBack.x - (BAR.width / 2) * this.scale, top)
-      .setDisplaySize(Math.max(1, BAR.width * Math.min(1, heat) * this.scale), 3 * this.scale)
+      .setPosition(this.barBack.x - this.barWidth / 2, top)
+      .setDisplaySize(Math.max(1, this.barWidth * Math.min(1, heat)), 3 * this.scale)
       .setTint(overheated ? 0xe0483a : 0xe8a02a);
     const count = Math.max(0, Math.min(5, lives));
     while (this.pips.length < count) this.pips.push(this.scene.add.image(0, 0, GTEX.px).setDepth(18).setTint(0xffd84a).setDisplaySize(6 * this.scale, 6 * this.scale));
@@ -132,6 +137,7 @@ export class TankView {
     if (visible === this.shown) return;
     this.shown = visible;
     for (const part of [this.shadow, this.hull, this.turret, this.barBack, this.barFill]) part.setVisible(visible);
+    this.aura?.setVisible(visible);
     if (!visible) {
       this.ring.setVisible(false);
       this.marker?.setAlpha(0);
@@ -151,13 +157,32 @@ export class TankView {
     this.py = y;
     this.lastHull = hull;
     this.lastTurret = turret;
-    // szintlépéskor a tank megnő
+    // szintlépéskor a tank megnő; osztályváltáskor más típus lesz belőle
     const size = this.scale * tankSize(tank);
     if (tank.level !== this.level) {
       this.level = tank.level;
-      this.shadow.setScale(size);
+      this.shadow.setScale(size * (1 + 0.04 * tankTier(tank.level)));
       this.hull.setScale(size);
       this.turret.setScale(size);
+      this.barWidth = BAR.width * size;
+      this.barBack.setDisplaySize(this.barWidth + 2 * this.scale, (BAR.height + 2) * this.scale);
+      const tier = Math.min(TANK_TIERS - 1, tankTier(tank.level));
+      if (tier !== this.tier) {
+        this.tier = tier;
+        this.hullFrames = Array.from({ length: TRACK_FRAMES }, (_, f) => tankTex.hull(this.kind, tier, f));
+        this.frame = -1;
+        this.turret.setTexture(tankTex.turret(this.kind, tier));
+        if (tier === TANK_TIERS - 1 && !this.aura) {
+          this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setTint(0x5fe6ff).setBlendMode(Phaser.BlendModes.ADD);
+        } else if (tier < TANK_TIERS - 1 && this.aura) {
+          this.aura.destroy();
+          this.aura = null;
+        }
+      }
+    }
+    if (this.aura) {
+      const pulse = 0.5 + 0.5 * Math.sin(time * 3.2);
+      this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(0.3 + 0.16 * pulse);
     }
     const off = 6 * size;
     this.shadow.setPosition(x + off, y + off).setRotation(hull);
@@ -191,8 +216,8 @@ export class TankView {
     const top = y - BAR.above * size;
     this.barBack.setPosition(x, top);
     this.barFill
-      .setPosition(x - (BAR.width / 2) * this.scale, top)
-      .setDisplaySize(Math.max(1, BAR.width * ratio * this.scale), BAR.height * this.scale)
+      .setPosition(x - this.barWidth / 2, top)
+      .setDisplaySize(Math.max(1, this.barWidth * ratio), BAR.height * this.scale)
       .setTint(this.enemy ? 0xe0483a : ratio > 0.5 ? 0x5ad24a : ratio > 0.25 ? 0xe8c23a : 0xe0483a);
   }
 
@@ -218,6 +243,7 @@ export class TankView {
     for (const part of [this.shadow, this.hull, this.turret, this.ring, this.barBack, this.barFill, ...this.pips]) part.destroy();
     this.heatBack?.destroy();
     this.heatFill?.destroy();
+    this.aura?.destroy();
     this.marker?.destroy();
   }
 }

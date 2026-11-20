@@ -8,7 +8,9 @@
 import { SegmentGrid } from './collision';
 import { FELLABLE, type Fellables } from './props';
 import type { Structures } from './structures';
-import { BOOST, isWeapon, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind, type WeaponKind } from './pickups';
+import { BOOST, CARGO_KINDS, isWeapon, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind, type WeaponKind } from './pickups';
+import type { NetRoad } from './roadnet';
+import { TURRET, VEHICLE, VEHICLES, VSTATE, type TurretState, type VehicleKind, type VehicleState } from './vehicles';
 
 export const SIM_DT = 1 / 60;
 
@@ -48,13 +50,20 @@ export const BOOSTER = {
 } as const;
 
 /**
- * Fejlődés: minden kilőtt tank után egy szinttel erősebb a tank – kicsit
- * nagyobb, több az életereje, és nagyobbat sebez a lövedéke.
+ * Fejlődés: minden kilőtt tank után egy szinttel erősebb a tank – nagyobb,
+ * több az életereje, és nagyobbat sebez a lövedéke. A szint a kilövéssel nem
+ * vész el: az újraéledő tank ugyanazon a szinten folytatja. A szintek
+ * osztályokba (tier) tartoznak: osztályváltáskor a tank más, erősebb típus
+ * lesz – a kinézete megváltozik, és a mérete is ugrik.
  */
 export const LEVEL = {
   max: 20,
+  /** az osztályok első szintjei: felderítő, közepes, nehéz, ostromtank, romboló, titán */
+  tiers: [1, 3, 6, 9, 12, 16],
   /** méretnövekedés szintenként */
   size: 0.03,
+  /** további méretnövekedés osztályonként */
+  tierSize: 0.05,
   /** többlet életerő szintenként */
   hp: 12,
   /** többlet sebzés szintenként */
@@ -62,7 +71,13 @@ export const LEVEL = {
 } as const;
 
 /** A tank mérete az alapmérethez képest (1. szint = 1). */
-export const tankSize = (tank: { level: number }): number => 1 + LEVEL.size * (tank.level - 1);
+/** A szint osztálya (0 … LEVEL.tiers.length − 1). */
+export function tankTier(level: number): number {
+  let tier = 0;
+  for (let i = 1; i < LEVEL.tiers.length; i++) if (level >= LEVEL.tiers[i]) tier = i;
+  return tier;
+}
+export const tankSize = (tank: { level: number }): number => 1 + LEVEL.size * (tank.level - 1) + LEVEL.tierSize * tankTier(tank.level);
 export const tankRadius = (tank: { level: number }): number => TANK.radius * tankSize(tank);
 export const tankMaxHp = (tank: { level: number }): number => TANK.maxHp + LEVEL.hp * (tank.level - 1);
 const damageBoost = (tank: { level: number }): number => 1 + LEVEL.damage * (tank.level - 1);
@@ -100,6 +115,9 @@ export const WRECK = {
   max: 150,
 } as const;
 
+/** A roncs akadályként akkora, amekkora a kilőtt tank volt. */
+export const wreckRadius = (wreck: { level: number }): number => WRECK.radius * tankSize(wreck);
+
 export const BULLET = {
   speed: 75,
   life: 1.1,
@@ -133,6 +151,8 @@ export interface TankInput {
   drop?: boolean;
   /** gyorsító (amíg nem melegszik túl) */
   boost?: boolean;
+  /** ágyú telepítése a tank mögé (ha van töltet) */
+  deploy?: boolean;
 }
 
 /** Az időzített bónuszok hátralévő ideje másodpercben (0 = nem aktív). */
@@ -182,6 +202,8 @@ export interface TankState {
   shield: number;
   /** lerakható olajfoltok száma */
   oil: number;
+  /** telepíthető ágyúk száma */
+  turrets: number;
   dropCooldown: number;
   /** megcsúszás hátralévő ideje (mp); közben a tank irányíthatatlanul sodródik */
   slip: number;
@@ -203,6 +225,8 @@ export interface WreckState {
   hullAngle: number;
   turretAngle: number;
   team: number;
+  /** a kilőtt tank szintje: a roncs mérete és kinézete ehhez igazodik */
+  level: number;
   /** a kilövés óta eltelt idő (mp) – a füstöléshez */
   age: number;
 }
@@ -230,6 +254,8 @@ export interface PickupState {
   kind: PickupKind;
   x: number;
   y: number;
+  /** ráadás (pl. teherautó rakománya): felvétel után nem pótlódik */
+  extra?: boolean;
 }
 
 export interface OilState {
@@ -263,7 +289,17 @@ export type SimEvent =
   /** összedőlt egy épület (index: az épület sorszáma a pályán) */
   | { type: 'collapse'; index: number; x: number; y: number }
   /** a tanknak elfogytak az életei: kiesett */
-  | { type: 'eliminated'; tank: number; by: number };
+  | { type: 'eliminated'; tank: number; by: number }
+  /** felrobbant egy jármű */
+  | { type: 'blast'; kind: VehicleKind; x: number; y: number; radius: number }
+  /** egy magas szintű tank összelapított egy járművet */
+  | { type: 'crushed'; x: number; y: number }
+  /** egy feltartott jármű dudál */
+  | { type: 'honk'; x: number; y: number }
+  /** a tank ágyút telepített */
+  | { type: 'deploy'; tank: number; x: number; y: number }
+  /** megsemmisült egy telepített ágyú (owner: a lerakója) */
+  | { type: 'turretDown'; owner: number; x: number; y: number };
 
 export interface RoadGuide {
   /** az út tengelyének legközelebbi pontja */
@@ -291,6 +327,10 @@ export interface Terrain {
   pickupSpot?(rnd: () => number): { x: number; y: number } | null;
   /** A legközelebbi közút a botok útkövetéséhez. */
   roadGuide?(x: number, y: number): RoadGuide | null;
+  /** A járművel járható közutak (a forgalom úthálózatához). */
+  driveRoads?(): NetRoad[];
+  /** stopvonalak lapítva: x, y, irány (rad), fél hossz */
+  readonly stopLines?: readonly number[];
 }
 
 /** A meccs szabályai. */
@@ -300,6 +340,13 @@ export interface WorldRules {
   lives: number;
   /** a játékosok ennyire születnek (újra) egymástól, ha van rá hely (m); 0: a kezdőpontjukon */
   spawnGap: number;
+  /** tükörvilág (a kliens előrejelzése): a járműveket és az ágyúkat csak akadályként kezeli, nem sebzi */
+  mirror: boolean;
+}
+
+/** A világgal együtt léptetett rendszer (pl. a forgalom). */
+export interface Stepper {
+  step(dt: number): void;
 }
 
 export const NO_INPUT: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false };
@@ -349,6 +396,12 @@ export class World {
   readonly pickups: PickupState[] = [];
   readonly oils: OilState[] = [];
   readonly wrecks: WreckState[] = [];
+  /** a civil forgalom járművei (a roncsaikkal együtt) */
+  readonly vehicles: VehicleState[] = [];
+  /** a telepített ágyúk */
+  readonly turrets: TurretState[] = [];
+  /** a forgalom irányítója: a lépés végén fut, így látja a lépés eseményeit */
+  traffic: Stepper | null = null;
   /** az utolsó step() eseményei (hang, effektek) */
   events: SimEvent[] = [];
   tick = 0;
@@ -366,7 +419,7 @@ export class World {
     rules: Partial<WorldRules> = {},
   ) {
     this.rnd = mulberry32(seed);
-    this.rules = { weather: 'day', lives: 0, spawnGap: 0, ...rules };
+    this.rules = { weather: 'day', lives: 0, spawnGap: 0, mirror: false, ...rules };
   }
 
   /** A játéktér határai (a teljes pálya, ha nincs szűkítve). */
@@ -405,6 +458,7 @@ export class World {
       ricochet: false,
       shield: 0,
       oil: 0,
+      turrets: 0,
       dropCooldown: 0,
       slip: 0,
       slideAngle: 0,
@@ -480,6 +534,8 @@ export class World {
       if (!spot) continue;
       if (this.tanks.some((t) => t.alive && Math.hypot(t.x - spot.x, t.y - spot.y) < distOf(t))) continue;
       if (this.wrecks.some((w) => Math.hypot(w.x - spot.x, w.y - spot.y) < 7)) continue;
+      if (this.vehicles.some((v) => Math.hypot(v.x - spot.x, v.y - spot.y) < 12)) continue;
+      if (this.turrets.some((t) => Math.hypot(t.x - spot.x, t.y - spot.y) < 7)) continue;
       return spot;
     }
     return null;
@@ -527,6 +583,20 @@ export class World {
     this.stepBullets(dt);
     this.stepPickups(dt);
     this.stepOil(dt);
+    if (!this.rules.mirror) {
+      this.stepVehicles(dt);
+      this.stepTurrets(dt);
+      this.traffic?.step(dt);
+    }
+  }
+
+  /** Újraéledő bot helye: az ellenségtől távol; kis pályán, ahol ekkora hely nincs, közelebb is beéri. */
+  private botSpot(tank: TankState): { x: number; y: number } | null {
+    for (const far of [120, 80, 50, 30]) {
+      const spot = this.findSpot((t) => (t.team !== tank.team ? far : 8));
+      if (spot) return spot;
+    }
+    return this.findSpot(() => 8);
   }
 
   private stepRespawn(tank: TankState, dt: number): void {
@@ -535,7 +605,7 @@ export class World {
     if (tank.respawn > 0) return;
     // a botok véletlen helyen, a játékosoktól távol élednek újra; a játékos a többi
     // játékostól távol (ha a szabályok így szólnak), különben a kezdőpontján
-    const spot = tank.bot ? this.findSpot((t) => (t.team !== tank.team ? 120 : 8)) : this.spawnSpot(tank);
+    const spot = tank.bot ? this.botSpot(tank) : this.spawnSpot(tank);
     tank.x = spot?.x ?? tank.homeX;
     tank.y = spot?.y ?? tank.homeY;
     tank.hullAngle = spot ? this.rnd() * Math.PI * 2 : tank.homeAngle;
@@ -558,6 +628,7 @@ export class World {
     tank.effects.invulnerable = 2.5;
     tank.shield = 0;
     tank.oil = 0;
+    tank.turrets = 0;
     this.events.push({ type: 'respawn', tank: tank.id, x: tank.x, y: tank.y });
   }
 
@@ -635,10 +706,11 @@ export class World {
       this.damageStructure(res.owner, power);
     }
     // a roncsokat ki kell kerülni
-    const clear = radius + WRECK.radius;
     for (const w of this.wrecks) {
       const dx = nx - w.x;
       const dy = ny - w.y;
+      if (Math.abs(dx) > 12 || Math.abs(dy) > 12) continue;
+      const clear = radius + wreckRadius(w);
       const d2 = dx * dx + dy * dy;
       if (d2 >= clear * clear) continue;
       const d = Math.sqrt(d2) || 0.001;
@@ -647,6 +719,54 @@ export class World {
       nx = out.x;
       ny = out.y;
       blocked = true;
+    }
+    // a magas szintű tank az ütközésével a járműveket és az ellenséges ágyúkat is rombolja
+    const crush =
+      tank.level >= CRUSH.minLevel && Math.abs(stepLen) > 0.001
+        ? tank.level >= CRUSH.instantLevel
+          ? Infinity
+          : CRUSH.perSecond * (tank.level - CRUSH.minLevel + 1) * dt
+        : 0;
+    // a járművek (és a roncsaik) akadályok: kapszula alakúak
+    for (const v of this.vehicles) {
+      const rx = nx - v.x;
+      const ry = ny - v.y;
+      // a leghosszabb jármű (busz) fele sem ér el ennél messzebbre
+      if (rx > 10 || rx < -10 || ry > 10 || ry < -10 || v.state === VSTATE.flat) continue;
+      const spec = VEHICLES[v.kind];
+      const reach = radius + spec.half + spec.r;
+      if (rx * rx + ry * ry >= reach * reach) continue;
+      const cos = Math.cos(v.angle);
+      const sin = Math.sin(v.angle);
+      // a jármű tengelyének a tankhoz legközelebbi pontja
+      const along = Math.max(-spec.half, Math.min(spec.half, rx * cos + ry * sin));
+      const px = v.x + cos * along;
+      const py = v.y + sin * along;
+      const dx = nx - px;
+      const dy = ny - py;
+      const d2 = dx * dx + dy * dy;
+      const gap = radius + spec.r;
+      if (d2 >= gap * gap) continue;
+      const d = Math.sqrt(d2) || 0.001;
+      const out = terrain.walls.resolveCircle(px + (dx / d) * gap, py + (dy / d) * gap, radius);
+      nx = out.x;
+      ny = out.y;
+      blocked = true;
+      if (crush > 0) this.crushVehicle(v, crush);
+    }
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const t = this.turrets[i];
+      const dx = nx - t.x;
+      const dy = ny - t.y;
+      const d2 = dx * dx + dy * dy;
+      const gap = radius + TURRET.radius;
+      if (d2 >= gap * gap) continue;
+      const d = Math.sqrt(d2) || 0.001;
+      const out = terrain.walls.resolveCircle(t.x + (dx / d) * gap, t.y + (dy / d) * gap, radius);
+      nx = out.x;
+      ny = out.y;
+      blocked = true;
+      if (crush > 0 && t.team !== tank.team) this.damageTurret(t, crush);
     }
 
     const moved = Math.hypot(nx - tank.x, ny - tank.y);
@@ -680,6 +800,7 @@ export class World {
 
     tank.dropCooldown = Math.max(0, tank.dropCooldown - dt);
     if (input.drop && tank.oil > 0 && tank.dropCooldown === 0) this.dropOil(tank);
+    if (input.deploy && tank.turrets > 0 && tank.dropCooldown === 0) this.deployTurret(tank);
   }
 
   /** A gyorsító hőfoka: használat közben nő, különben csökken; a végén túlmelegszik. */
@@ -704,7 +825,7 @@ export class World {
   private wreckOnPath(ax: number, ay: number, bx: number, by: number, limit: number): number {
     let best = -1;
     for (const w of this.wrecks) {
-      const t = segmentCircle(ax, ay, bx, by, w.x, w.y, WRECK.radius);
+      const t = segmentCircle(ax, ay, bx, by, w.x, w.y, wreckRadius(w));
       if (t >= 0 && t <= limit && (best < 0 || t < best)) best = t;
     }
     return best;
@@ -814,6 +935,10 @@ export class World {
     let reach = wall ? wall.t : 1;
     const wreckT = this.wreckOnPath(mx, my, ex, ey, reach);
     if (wreckT >= 0) reach = wreckT;
+    const vehicle = this.vehicleOnPath(mx, my, ex, ey, reach);
+    if (vehicle) reach = vehicle.t;
+    const turret = this.turretOnPath(mx, my, ex, ey, tank.team, reach);
+    if (turret) reach = turret.t;
     const target = this.firstTankOnPath(mx, my, ex, ey, tank.team, reach);
     if (target) reach = target.t;
     // a sugár az útjába eső első fát vagy oszlopot kidönti, és ott megáll
@@ -821,10 +946,13 @@ export class World {
     if (prop) reach = prop.t;
     ex = mx + cos * LASER.range * reach;
     ey = my + sin * LASER.range * reach;
-    if (target || wall || prop || wreckT >= 0) this.events.push({ type: 'impact', kind: 'laser', x: ex, y: ey });
+    if (target || wall || prop || vehicle || turret || wreckT >= 0) this.events.push({ type: 'impact', kind: 'laser', x: ex, y: ey });
     this.events.push({ type: 'laser', x1: mx, y1: my, x2: ex, y2: ey });
+    // a legközelebbi találat számít: a keresés sorrendje miatt mindig a később talált van közelebb
     if (prop) this.fell(prop.index, Math.atan2(sin, cos));
     else if (target) this.damage(target.tank, DAMAGE.laser, tank.id, ex, ey);
+    else if (turret) this.damageTurret(turret.turret, DAMAGE.laser * damageBoost(tank));
+    else if (vehicle) this.damageVehicle(vehicle.vehicle, DAMAGE.laser * damageBoost(tank), tank.id);
     else if (wall && wreckT < 0) this.damageStructure(wall.owner, DAMAGE.laser * damageBoost(tank));
   }
 
@@ -865,9 +993,9 @@ export class World {
       tank.out = true;
       this.events.push({ type: 'eliminated', tank: tank.id, by });
     }
-    this.wrecks.push({ id: this.nextId++, x: tank.x, y: tank.y, hullAngle: tank.hullAngle, turretAngle: tank.turretAngle, team: tank.team, age: 0 });
+    this.wrecks.push({ id: this.nextId++, x: tank.x, y: tank.y, hullAngle: tank.hullAngle, turretAngle: tank.turretAngle, team: tank.team, level: tank.level, age: 0 });
     if (this.wrecks.length > WRECK.max) this.wrecks.shift();
-    if (attacker) {
+    if (attacker && attacker !== tank) {
       attacker.kills++;
       // csak a játékosok tankja fejlődik, a botoké nem
       if (!attacker.bot && attacker.level < LEVEL.max) {
@@ -878,6 +1006,201 @@ export class World {
       }
     }
     this.events.push({ type: 'destroyed', tank: tank.id, by, x: tank.x, y: tank.y });
+  }
+
+  // --- civil járművek ---------------------------------------------------------------
+
+  addVehicle(kind: VehicleKind, look: number, x: number, y: number, angle: number): VehicleState {
+    const vehicle: VehicleState = { id: this.nextId++, kind, look, x, y, angle, speed: 0, hp: VEHICLES[kind].hp, state: VSTATE.driving, timer: 0, by: 0 };
+    this.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  removeVehicle(id: number): void {
+    const at = this.vehicles.findIndex((v) => v.id === id);
+    if (at >= 0) this.vehicles.splice(at, 1);
+  }
+
+  /** A szakasz első találata egy járművön (vagy a roncsán) a `limit` paraméterig. */
+  private vehicleOnPath(ax: number, ay: number, bx: number, by: number, limit: number): { vehicle: VehicleState; t: number } | null {
+    let best: { vehicle: VehicleState; t: number } | null = null;
+    const len = Math.hypot(bx - ax, by - ay);
+    for (const v of this.vehicles) {
+      if (v.state === VSTATE.flat) continue;
+      const spec = VEHICLES[v.kind];
+      const far = len + spec.half + spec.r;
+      if (Math.abs(v.x - ax) > far || Math.abs(v.y - ay) > far) continue;
+      const cos = Math.cos(v.angle);
+      const sin = Math.sin(v.angle);
+      for (const off of spec.circles) {
+        const t = segmentCircle(ax, ay, bx, by, v.x + cos * off, v.y + sin * off, spec.r);
+        if (t >= 0 && t <= limit && (!best || t < best.t)) best = { vehicle: v, t };
+      }
+    }
+    return best;
+  }
+
+  /** Jármű sebzése: ha elfogy az életereje, kigyullad, és rövid idő múlva felrobban. */
+  private damageVehicle(v: VehicleState, amount: number, by: number): void {
+    if (this.rules.mirror || v.state >= VSTATE.wreck) return;
+    if (v.state === VSTATE.burning) {
+      // az égő járművet érő újabb találat sietteti a robbanást
+      v.timer = Math.min(v.timer, VEHICLE.hurry);
+      return;
+    }
+    v.hp -= amount;
+    if (v.hp > 0) return;
+    v.hp = 0;
+    v.state = VSTATE.burning;
+    v.timer = VEHICLES[v.kind].fuse;
+    v.by = by;
+  }
+
+  /** A magas szintű tank összelapítja a járművet: nem robban fel, és át lehet hajtani rajta. */
+  private crushVehicle(v: VehicleState, power: number): void {
+    if (this.rules.mirror || v.state === VSTATE.flat) return;
+    v.hp -= power;
+    if (v.hp > 0 && v.state === VSTATE.driving) return;
+    const loaded = v.state !== VSTATE.wreck;
+    v.state = VSTATE.flat;
+    v.timer = 0;
+    v.speed = 0;
+    this.events.push({ type: 'crushed', x: v.x, y: v.y });
+    if (loaded) this.dropCargo(v);
+  }
+
+  /** Az ellátó teherautó rakománya a jármű mellé, az út közepe felé esik ki. */
+  private dropCargo(v: VehicleState): void {
+    if (v.kind !== 'truck') return;
+    const cos = Math.cos(v.angle);
+    const sin = Math.sin(v.angle);
+    for (let i = 0; i < VEHICLE.cargo; i++) {
+      const along = (i - (VEHICLE.cargo - 1) / 2) * 4;
+      const spot = this.terrain.walls.resolveCircle(v.x + cos * along + sin * 4.2, v.y + sin * along - cos * 4.2, PICKUP.radius);
+      const kind = CARGO_KINDS[Math.floor(this.rnd() * CARGO_KINDS.length)];
+      this.pickups.push({ id: this.nextId++, kind, x: spot.x, y: spot.y, extra: true });
+    }
+  }
+
+  /** A kigyulladt jármű felrobban: sebzi a közeli tankokat, járműveket és ágyúkat, kidönti a fákat. */
+  private blast(v: VehicleState): void {
+    const spec = VEHICLES[v.kind];
+    const radius = spec.blastRadius;
+    v.state = VSTATE.wreck;
+    v.timer = 0;
+    v.speed = 0;
+    this.events.push({ type: 'blast', kind: v.kind, x: v.x, y: v.y, radius });
+    const falloff = (dist: number): number => spec.blastDamage * (1 - 0.6 * Math.min(1, dist / radius));
+    for (const tank of this.tanks) {
+      if (!tank.alive) continue;
+      const dist = Math.hypot(tank.x - v.x, tank.y - v.y) - tankRadius(tank);
+      // a robbanás azt is sebzi, aki a járművet felgyújtotta – de önmaga kilövéséért nem jár neki pont
+      if (dist <= radius) this.damage(tank, falloff(Math.max(0, dist)), tank.id === v.by ? 0 : v.by, v.x, v.y);
+    }
+    for (const other of this.vehicles) {
+      if (other === v) continue;
+      if (Math.hypot(other.x - v.x, other.y - v.y) <= radius + VEHICLES[other.kind].half) this.damageVehicle(other, spec.blastDamage, v.by);
+    }
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const t = this.turrets[i];
+      const dist = Math.hypot(t.x - v.x, t.y - v.y);
+      if (dist <= radius) this.damageTurret(t, falloff(dist));
+    }
+    const props = this.terrain.fellables;
+    props?.forEachTouching(v.x, v.y, radius * 0.8, (i) => {
+      this.fell(i, Math.atan2(props.y[i] - v.y, props.x[i] - v.x));
+    });
+    this.dropCargo(v);
+  }
+
+  private stepVehicles(dt: number): void {
+    for (let i = this.vehicles.length - 1; i >= 0; i--) {
+      const v = this.vehicles[i];
+      if (v.state === VSTATE.burning) {
+        // az égő jármű kigurul és megáll
+        v.speed = Math.max(0, v.speed - 16 * dt);
+        v.x += Math.cos(v.angle) * v.speed * dt;
+        v.y += Math.sin(v.angle) * v.speed * dt;
+        v.timer -= dt;
+        if (v.timer <= 0) this.blast(v);
+      } else if (v.state >= VSTATE.wreck) {
+        v.timer += dt;
+        if (v.timer >= (v.state === VSTATE.wreck ? VEHICLE.wreckLife : VEHICLE.flatLife)) this.vehicles.splice(i, 1);
+      }
+    }
+  }
+
+  // --- telepíthető ágyúk --------------------------------------------------------------
+
+  /** Az útvonal első ellenséges (más csapatbeli) ágyúja a `limit` paraméterig. */
+  private turretOnPath(ax: number, ay: number, bx: number, by: number, team: number, limit: number): { turret: TurretState; t: number } | null {
+    let best: { turret: TurretState; t: number } | null = null;
+    for (const turret of this.turrets) {
+      if (turret.team === team) continue;
+      const t = segmentCircle(ax, ay, bx, by, turret.x, turret.y, TURRET.radius);
+      if (t >= 0 && t <= limit && (!best || t < best.t)) best = { turret, t };
+    }
+    return best;
+  }
+
+  private damageTurret(turret: TurretState, amount: number): void {
+    if (this.rules.mirror) return;
+    turret.hp -= amount;
+    if (turret.hp > 0) return;
+    const at = this.turrets.indexOf(turret);
+    if (at >= 0) this.turrets.splice(at, 1);
+    this.events.push({ type: 'turretDown', owner: turret.owner, x: turret.x, y: turret.y });
+  }
+
+  /** Ágyú lerakása a tank mögé; ha már túl sok áll a pályán, a legrégebbi eltűnik. */
+  private deployTurret(tank: TankState): void {
+    if (this.rules.mirror) return;
+    tank.turrets--;
+    tank.dropCooldown = OIL.dropCooldown;
+    const back = tankRadius(tank) + TURRET.radius + 1.6;
+    const spot = this.terrain.walls.resolveCircle(tank.x - Math.cos(tank.hullAngle) * back, tank.y - Math.sin(tank.hullAngle) * back, TURRET.radius);
+    const mine = this.turrets.filter((t) => t.owner === tank.id);
+    if (mine.length >= TURRET.maxPerOwner) this.damageTurret(mine[0], Infinity);
+    this.turrets.push({ id: this.nextId++, owner: tank.id, team: tank.team, x: spot.x, y: spot.y, angle: tank.turretAngle, hp: TURRET.hp, cooldown: TURRET.fireInterval, target: -1 });
+    this.events.push({ type: 'deploy', tank: tank.id, x: spot.x, y: spot.y });
+  }
+
+  private stepTurrets(dt: number): void {
+    const { walls } = this.terrain;
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const turret = this.turrets[i];
+      const owner = this.tank(turret.owner);
+      // a kiesett vagy kilépett játékos ágyúi eltűnnek
+      if (!owner || owner.out) {
+        this.damageTurret(turret, Infinity);
+        continue;
+      }
+      turret.cooldown = Math.max(0, turret.cooldown - dt);
+      // célpont: a legközelebbi ellenséges tank, amelyre rálát (néhány lépésenként keresi újra)
+      if ((this.tick + turret.id) % TURRET.scanEvery === 0) {
+        let best: number = TURRET.range;
+        turret.target = -1;
+        for (const other of this.tanks) {
+          if (!other.alive || other.team === turret.team) continue;
+          const dist = Math.hypot(other.x - turret.x, other.y - turret.y);
+          if (dist >= best || walls.raycast(turret.x, turret.y, other.x, other.y)) continue;
+          best = dist;
+          turret.target = other.id;
+        }
+      }
+      const target = turret.target >= 0 ? this.tank(turret.target) : undefined;
+      if (!target || !target.alive) continue;
+      const aim = Math.atan2(target.y - turret.y, target.x - turret.x);
+      turret.angle = rotateToward(turret.angle, aim, TURRET.turnRate * dt);
+      if (turret.cooldown > 0 || Math.abs(angleDiff(aim, turret.angle)) > 0.05) continue;
+      turret.cooldown = TURRET.fireInterval;
+      const cos = Math.cos(turret.angle);
+      const sin = Math.sin(turret.angle);
+      const mx = turret.x + cos * TURRET.barrelLength;
+      const my = turret.y + sin * TURRET.barrelLength;
+      this.events.push({ type: 'shot', tank: 0, kind: 'shell', x: mx, y: my, angle: turret.angle });
+      this.bullets.push({ id: this.nextId++, owner: turret.owner, team: turret.team, kind: 'shell', x: mx, y: my, vx: cos * BULLET.speed, vy: sin * BULLET.speed, life: BULLET.life, bounces: 0 });
+    }
   }
 
   private dropOil(tank: TankState): void {
@@ -904,6 +1227,14 @@ export class World {
       if (!other.alive || other === direct || other.team === b.team) continue;
       if (Math.hypot(other.x - x, other.y - y) <= DAMAGE.splashRadius) this.damage(other, DAMAGE.splash, b.owner, x, y);
     }
+    // … a járműveket és az ellenséges ágyúkat is
+    for (const v of this.vehicles) {
+      if (Math.hypot(v.x - x, v.y - y) <= DAMAGE.splashRadius + VEHICLES[v.kind].half) this.damageVehicle(v, DAMAGE.splash, b.owner);
+    }
+    for (let i = this.turrets.length - 1; i >= 0; i--) {
+      const t = this.turrets[i];
+      if (t.team !== b.team && Math.hypot(t.x - x, t.y - y) <= DAMAGE.splashRadius) this.damageTurret(t, DAMAGE.splash);
+    }
   }
 
   private stepBullets(dt: number): void {
@@ -921,7 +1252,12 @@ export class World {
       const ny = b.y + b.vy * dt;
       const wall = terrain.walls.raycast(b.x, b.y, nx, ny);
       const wreckT = this.wreckOnPath(b.x, b.y, nx, ny, wall ? wall.t : 1);
-      const solid = wreckT >= 0 ? wreckT : wall ? wall.t : 1;
+      let solid = wreckT >= 0 ? wreckT : wall ? wall.t : 1;
+      // jármű vagy ellenséges ágyú az útban (a később talált mindig közelebb van)
+      const vehicle = this.vehicleOnPath(b.x, b.y, nx, ny, solid);
+      if (vehicle) solid = vehicle.t;
+      const turret = this.turretOnPath(b.x, b.y, nx, ny, b.team, solid);
+      if (turret) solid = turret.t;
       const target = this.firstTankOnPath(b.x, b.y, nx, ny, b.team, solid);
       // fa vagy oszlop az útban: kidől, a lövedék ott robban
       const prop = terrain.fellables?.raycast(b.x, b.y, nx, ny, target ? target.t : solid) ?? null;
@@ -933,6 +1269,14 @@ export class World {
       }
       if (target) {
         this.explode(b, b.x + (nx - b.x) * target.t, b.y + (ny - b.y) * target.t, target.tank);
+        this.bullets.splice(i, 1);
+        continue;
+      }
+      if (turret || vehicle) {
+        const boost = damageBoost(this.tank(b.owner) ?? { level: 1 });
+        this.explode(b, b.x + (nx - b.x) * solid, b.y + (ny - b.y) * solid, null);
+        if (turret) this.damageTurret(turret.turret, DAMAGE[b.kind] * boost);
+        else if (vehicle) this.damageVehicle(vehicle.vehicle, DAMAGE[b.kind] * boost, b.owner);
         this.bullets.splice(i, 1);
         continue;
       }
@@ -986,7 +1330,7 @@ export class World {
         this.pickups.splice(i, 1);
         this.applyPickup(tank, p.kind);
         this.events.push({ type: 'pickup', tank: tank.id, kind: p.kind, x: p.x, y: p.y });
-        this.respawns.push(PICKUP.respawnDelay);
+        if (!p.extra) this.respawns.push(PICKUP.respawnDelay);
       }
     }
     // a felvett tárgyak helyett idővel új jelenik meg, máshol
@@ -1002,6 +1346,7 @@ export class World {
   private applyPickup(tank: TankState, kind: PickupKind): void {
     if (kind === 'shield') tank.shield = Math.min(PICKUP.maxShield, tank.shield + 1);
     else if (kind === 'oil') tank.oil = Math.min(PICKUP.maxOil, tank.oil + PICKUP.oilPerPickup);
+    else if (kind === 'turret') tank.turrets = Math.min(PICKUP.maxTurrets, tank.turrets + 1);
     else if (kind === 'repair') tank.hp = Math.min(tankMaxHp(tank), tank.hp + PICKUP.repairAmount);
     else if (isWeapon(kind)) tank.weapon = kind; // az előző fegyver helyére lép
     else if (kind === 'ricochet') tank.ricochet = true;

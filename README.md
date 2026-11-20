@@ -6,14 +6,18 @@ a tájékozódási pont a **Polgármesteri Hivatal** (Pécsi utca 124.).
 
 A játékosok regisztráció után szobákat (játékokat) hozhatnak létre vagy
 léphetnek be mások szobájába. A szoba létrehozója csúszkákkal állítja be a
-játékteret (a térkép egy kijelölt részét), a játékosok számát, az életeket, a
-botok és a felvehető tárgyak mennyiségét és az időjárást (nappal, eső, este).
-Mindenki mindenki ellen játszik; az nyer, aki utolsónak marad életben.
+játékteret (a térkép egy kijelölt részét – akár egy képernyőnyi arénát kétfős párbajhoz), a játékosok számát, a játékidőt (5–30 perc), a
+botok, a felvehető tárgyak és a civil forgalom mennyiségét és az időjárást
+(nappal, eső, este), és belépőkóddal priváttá teheti a játékot. Mindenki mindenki ellen játszik; a kilőtt tank újraéled,
+és az nyer, aki az idő lejártáig a legtöbb tankot lövi ki.
+Gyakorolni egyedül is lehet a botok ellen (*Egyjátékos*): ehhez sem belépés,
+sem elérhető szerver nem kell.
 
 A pályán felvehető tárgyak vannak (másféle fegyverek, pajzs, turbó, olajfolt…),
 a fák és az oszlopok kidönthetők, az épületek a találatoktól összedőlnek, az
 eltalált tetők, fák és tankok kigyulladnak, a tank pedig minden kilövéssel
-szintet lép.
+szintet lép – a szintje a kilövése után is megmarad –, és hat egyre nagyobb,
+más kinézetű típuson megy végig a felderítőtől a titánig.
 
 ## Indítás
 
@@ -52,12 +56,15 @@ billentyűk a főmenü **Beállítások** pontjában átállíthatók; ezek az a
 | Szóköz | lövés |
 | Shift | gyorsító: +30% sebesség legfeljebb 3 másodpercig, utána le kell hűlnie |
 | E | olajfolt lerakása (ha van töltet) |
+| Q | ágyú telepítése a tank mögé (ha van töltet) |
+| Tab | eredménytábla, amíg nyomva van (vagy kattintás az órára) |
 | M | az egész város térképe utcanevekkel |
 | F | teljes képernyős mód |
 | H | információ: az irányítás, a tank állapota, a játékosok – és a kilépés |
 
 Játék közben a képernyőn csak a térkép és az információ gombja (**i**) látszik
-állandóan; a tank fölött az életereje, az életei és a gyorsító hőfoka.
+állandóan, felül középen pedig a visszaszámláló óra és az állás; a tank fölött
+az életereje és a gyorsító hőfoka.
 
 ## Parancsok
 

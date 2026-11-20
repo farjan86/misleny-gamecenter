@@ -6,7 +6,7 @@ import type { MatchSettings } from './sim/match';
 const STORAGE_KEY = 'tank-misleny.settings.v2';
 
 /** A billentyűvel kiváltható műveletek. */
-export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'map', 'fullscreen', 'info'] as const;
+export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'deploy', 'scores', 'map', 'fullscreen', 'info'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -17,6 +17,8 @@ export const ACTION_LABEL: Record<Action, string> = {
   fire: 'Lövés',
   boost: 'Gyorsító',
   oil: 'Olajfolt lerakása',
+  deploy: 'Ágyú telepítése',
+  scores: 'Eredménytábla (amíg nyomva van)',
   map: 'Nagy térkép',
   fullscreen: 'Teljes képernyő',
   info: 'Irányítás (súgó)',
@@ -33,6 +35,8 @@ export const DEFAULT_KEYS: KeyBindings = {
   fire: ['Space'],
   boost: ['ShiftLeft', 'ShiftRight'],
   oil: ['KeyE'],
+  deploy: ['KeyQ'],
+  scores: ['Tab'],
   map: ['KeyM'],
   fullscreen: ['KeyF'],
   info: ['KeyH'],

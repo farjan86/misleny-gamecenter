@@ -11,7 +11,9 @@
 // (rövid távon: áll; hosszabb távon: ugyanott köröz), kitolat, körbenéz, és a
 // legszabadabb irányba indul; ha így sem szabadul, a szimuláció az ellenféltől
 // távol új helyre teszi. A botok egymást nem sebzik, és egymásra nem is céloznak.
+// A civil járműveket kikerülik; az ellenséges telepített ágyúkat megtámadják.
 
+import { TURRET, VEHICLES, VSTATE } from './vehicles';
 import { angleDiff, TANK, WRECK, type RoadGuide, type TankInput, type TankState, type World } from './world';
 
 export const BOT = {
@@ -47,6 +49,46 @@ export const BOT = {
   escapeLook: 28,
 } as const;
 
+/** A botok hangolható jellemzői: az ügyesség a célzást és a reakciót, az agresszivitás az észlelést és az üldözést szabja meg. */
+export interface BotTuning {
+  sight: number;
+  reaction: number;
+  fireInterval: number;
+  aimError: number;
+  keepDistance: number;
+  patrolThrottle: number;
+  chaseTime: number;
+  /** ilyen messziről (m) indul el a legközelebbi ellenfél felé akkor is, ha nem látja; 0: nem vadászik */
+  hunt: number;
+}
+
+export const BOT_LEVELS = { min: 1, max: 5, normal: 3 } as const;
+
+// ügyesség 1..5: célzási hiba (rad), reakcióidő (mp), két lövés közötti idő (mp)
+const SKILL = [
+  [0.17, 1.4, 1.9],
+  [0.11, 1.0, 1.5],
+  [BOT.aimError, BOT.reaction, BOT.fireInterval],
+  [0.04, 0.45, 0.95],
+  [0.02, 0.25, 0.75],
+];
+// agresszivitás 1..5: látótáv (m), üldözés ideje (mp), tartott távolság (m), vadászat távolsága (m), járőrsebesség
+const AGGRESSION = [
+  [45, 4, 30, 0, 0.6],
+  [60, 6, 26, 0, 0.65],
+  [BOT.sight, BOT.chaseTime, BOT.keepDistance, 0, BOT.patrolThrottle],
+  [90, 13, 18, 260, 0.8],
+  [110, 20, 14, 4000, 0.9],
+];
+
+/** A botok beállítása a két csúszka (1..5) állásából; a 3-as az alapérték. */
+export function botTuning(skill: number = BOT_LEVELS.normal, aggression: number = BOT_LEVELS.normal): BotTuning {
+  const level = (v: number): number => Math.max(BOT_LEVELS.min, Math.min(BOT_LEVELS.max, Math.round(v))) - 1;
+  const [aimError, reaction, fireInterval] = SKILL[level(skill)];
+  const [sight, chaseTime, keepDistance, hunt, patrolThrottle] = AGGRESSION[level(aggression)];
+  return { sight, reaction, fireInterval, aimError, keepDistance, patrolThrottle, chaseTime, hunt };
+}
+
 type Mode = 'patrol' | 'attack' | 'chase';
 
 const clamp = (v: number): number => Math.max(-1, Math.min(1, v));
@@ -56,6 +98,8 @@ export class BotBrain {
   private readonly input: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false };
   /** a kiszemelt ellenfél, illetve az utolsó ismert helye */
   private targetId = -1;
+  /** a célpont egy telepített ágyú (nem tank) */
+  private targetTurret = false;
   private lastSeenX = 0;
   private lastSeenY = 0;
   private sees = false;
@@ -86,9 +130,13 @@ export class BotBrain {
   private turnedBack = 0;
   private readonly phase: number;
 
+  /** a vadászott ellenfél iránya (null: nincs kit vadászni) */
+  private huntBearing: number | null = null;
+
   constructor(
     private readonly world: World,
     readonly tankId: number,
+    private readonly tune: BotTuning = botTuning(),
   ) {
     const tank = world.tank(tankId);
     this.travel = tank?.hullAngle ?? 0;
@@ -146,7 +194,11 @@ export class BotBrain {
         this.mode = 'patrol';
         // kiszabadulás után egy ideig a kiválasztott irányba megy, csak utána keresi újra az utat
         if (this.freeRun > 0) this.roam(tank, 0.8);
-        else this.followRoad(tank, this.travel, BOT.patrolThrottle);
+        else {
+          // az agresszív bot nem csak járőrözik: az utcákon a legközelebbi ellenfél felé tart
+          const toward = this.tune.hunt > 0 ? this.seek(tank) : null;
+          this.followRoad(tank, toward ?? this.travel, this.tune.patrolThrottle);
+        }
       }
     }
 
@@ -155,11 +207,27 @@ export class BotBrain {
     return input;
   }
 
+  /** A legközelebbi ellenfél iránya a vadászat távolságán belül (időnként újraszámolva), vagy null. */
+  private seek(tank: TankState): number | null {
+    if ((this.world.tick + this.phase) % 30 !== 0) return this.huntBearing;
+    let best = this.tune.hunt;
+    this.huntBearing = null;
+    for (const other of this.world.tanks) {
+      if (!other.alive || other.team === tank.team) continue;
+      const dist = Math.hypot(other.x - tank.x, other.y - tank.y);
+      if (dist >= best) continue;
+      best = dist;
+      this.huntBearing = Math.atan2(other.y - tank.y, other.x - tank.x);
+    }
+    return this.huntBearing;
+  }
+
   /** Ellenfél keresése: a legközelebbi, látótávolságon belüli, takarásban nem lévő más csapatbeli tank. */
   private look(tank: TankState): void {
     if ((this.world.tick + this.phase) % BOT.sightEvery !== 0) return;
-    let best: TankState | null = null;
-    let bestDist: number = BOT.sight;
+    let best: { id: number; x: number; y: number } | null = null;
+    let turret = false;
+    let bestDist: number = this.tune.sight;
     for (const other of this.world.tanks) {
       if (!other.alive || other.team === tank.team) continue;
       const dist = Math.hypot(other.x - tank.x, other.y - tank.y);
@@ -168,25 +236,41 @@ export class BotBrain {
       best = other;
       bestDist = dist;
     }
+    // az ellenséges telepített ágyú is célpont (ha az közelebb van, mint a legközelebbi tank)
+    for (const other of this.world.turrets) {
+      if (other.team === tank.team) continue;
+      const dist = Math.hypot(other.x - tank.x, other.y - tank.y);
+      if (dist >= bestDist) continue;
+      if (this.world.terrain.walls.raycast(tank.x, tank.y, other.x, other.y)) continue;
+      best = other;
+      bestDist = dist;
+      turret = true;
+    }
     if (best) {
-      if (!this.sees) this.reaction = BOT.reaction;
+      if (!this.sees) this.reaction = this.tune.reaction;
       this.sees = true;
       this.mode = 'attack';
       this.targetId = best.id;
+      this.targetTurret = turret;
       this.lastSeenX = best.x;
       this.lastSeenY = best.y;
     } else if (this.sees) {
       // szem elől tévesztette: az utolsó ismert hely felé indul
       this.sees = false;
       this.mode = 'chase';
-      this.chase = BOT.chaseTime;
+      this.chase = this.tune.chaseTime;
     }
   }
 
   private attack(tank: TankState, dt: number): void {
     const input = this.input;
-    const target = this.world.tank(this.targetId);
-    if (!target || !target.alive) {
+    let target: { x: number; y: number } | undefined;
+    if (this.targetTurret) target = this.world.turrets.find((t) => t.id === this.targetId);
+    else {
+      const other = this.world.tank(this.targetId);
+      if (other?.alive) target = other;
+    }
+    if (!target) {
       this.sees = false;
       this.mode = 'patrol';
       return;
@@ -198,22 +282,22 @@ export class BotBrain {
 
     // a célzás hibája lassan vándorol, így a bot nem talál minden lövéssel
     this.aimOffset += (this.world.rnd() - 0.5) * 0.02;
-    this.aimOffset = Math.max(-BOT.aimError, Math.min(BOT.aimError, this.aimOffset));
+    this.aimOffset = Math.max(-this.tune.aimError, Math.min(this.tune.aimError, this.aimOffset));
     input.aim = bearing + this.aimOffset;
 
     this.reaction = Math.max(0, this.reaction - dt);
     const aligned = Math.abs(angleDiff(input.aim, tank.turretAngle) ) < 0.07;
     if (this.reaction === 0 && this.fireWait === 0 && aligned) {
       input.fire = true;
-      this.fireWait = BOT.fireInterval;
+      this.fireWait = this.tune.fireInterval;
     }
 
     // lőtávolságon belülre megy, de nem megy neki a célpontnak; ha az útja el van
     // zárva (elakadt), inkább megáll és onnan lő – hiszen rálát a célra
-    if (dist > BOT.keepDistance + 8 && this.stuckCount === 0) {
+    if (dist > this.tune.keepDistance + 8 && this.stuckCount === 0) {
       this.wants = true;
       this.steerToward(tank, bearing, 0.8);
-    } else if (dist < BOT.keepDistance - 8) this.steerToward(tank, bearing, -0.5);
+    } else if (dist < this.tune.keepDistance - 8) this.steerToward(tank, bearing, -0.5);
     else input.turn = clamp(angleDiff(bearing, tank.hullAngle) * 1.5);
   }
 
@@ -230,7 +314,8 @@ export class BotBrain {
     }
     const guide = this.guide;
     if (!guide) {
-      // nincs út a közelben: toronyiránt megy tovább
+      // nincs út a közelben: toronyiránt megy a kívánt irányba (járőrnél az eddigi irányba)
+      this.travel = prefer;
       this.roam(tank, throttle);
       return;
     }
@@ -315,6 +400,30 @@ export class BotBrain {
         away = side > 0 ? -1 : 1;
       }
     }
+
+    // jármű vagy telepített ágyú az úton: ugyanígy kikerüli
+    const dodge = (ox: number, oy: number, r: number): void => {
+      const dx = ox - tank.x;
+      const dy = oy - tank.y;
+      const forward = dx * cos + dy * sin;
+      if (forward < 0 || forward > reach + r) return;
+      const side = dy * cos - dx * sin;
+      if (Math.abs(side) > TANK.radius + r + 0.8) return;
+      const t = Math.max(0, forward - r) / reach;
+      if (t < nearest) {
+        nearest = t;
+        away = side > 0 ? -1 : 1;
+      }
+    };
+    for (const v of this.world.vehicles) {
+      if (v.state === VSTATE.flat) continue;
+      if (Math.abs(v.x - tank.x) > reach + 8 || Math.abs(v.y - tank.y) > reach + 8) continue;
+      const spec = VEHICLES[v.kind];
+      const vc = Math.cos(v.angle);
+      const vs = Math.sin(v.angle);
+      for (const off of spec.circles) dodge(v.x + vc * off, v.y + vs * off, spec.r);
+    }
+    for (const t of this.world.turrets) dodge(t.x, t.y, TURRET.radius);
 
     if (nearest >= 1) return;
     // minél közelebb az akadály, annál határozottabban tér ki és annál jobban lassít
@@ -445,7 +554,10 @@ export class BotBrain {
 export class BotManager {
   private readonly brains = new Map<number, BotBrain>();
 
-  constructor(private readonly world: World) {}
+  constructor(
+    private readonly world: World,
+    private readonly tune: BotTuning = botTuning(),
+  ) {}
 
   get count(): number {
     return this.brains.size;
@@ -459,10 +571,15 @@ export class BotManager {
       this.world.removeTank(id);
     }
     while (this.brains.size < count) {
-      const spot = this.world.freeSpot(140, avoidTeam);
+      // a játékosoktól távol; kis pályán, ahol ekkora hely nincs, közelebb is beéri
+      let spot: { x: number; y: number } | null = null;
+      for (const far of [140, 90, 60, 35, 20]) {
+        spot = this.world.freeSpot(far, avoidTeam);
+        if (spot) break;
+      }
       if (!spot) break;
       const tank = this.world.addTank(spot.x, spot.y, this.world.rnd() * Math.PI * 2, { team, bot: true });
-      this.brains.set(tank.id, new BotBrain(this.world, tank.id));
+      this.brains.set(tank.id, new BotBrain(this.world, tank.id, this.tune));
     }
   }
 

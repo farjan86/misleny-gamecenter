@@ -23,23 +23,48 @@ ezen az egy szerverprogramon belül – a játékosoknak semmit nem kell telepí
 2. **Multiplayer – játékok.** A lista minden nyitott szobát mutat: a játékra
    várókat és a betelteket (indulókat, folyamatban lévőket) is, a
    beállításaikkal.
-3. **Új játék.** A létrehozó a térképen, rácsban (250 m-es cellák) kijelöli a
-   játékteret, és csúszkákkal beállítja:
+3. **Új játék.** A létrehozó a térképen, rácsban (kb. 83 m-es cellák) kijelöli a
+   játékteret. A legkisebb játéktér két cella széles (kb. 165 × 165 m, nagyjából
+   egy képernyőnyi): kétfős párbajhoz, hogy ne kelljen egymást keresgélni. Egy
+   kattintás a térképen a legkisebb méretet jelöli ki. Ezután megadhat egy
+   **belépőkódot** (lásd lent), és csúszkákkal beállítja:
    - a játékosok számát (1–8),
-   - az életeket (1, 3 vagy 5),
+   - a játékidőt (5–30 perc, 5 perces lépésekben),
    - a botok és a felvehető tárgyak mennyiségét (0–5 szint) – a tényleges
      darabszámot a program számolja a pálya méretéből (szintenként és
-     km²-enként 3 bot, illetve 17 tárgy; legfeljebb 100 bot és 600 tárgy),
+     km²-enként 3 bot, illetve 17 tárgy; legfeljebb 100 bot és 600 tárgy;
+     nagyon kis pályán a legmagasabb szint is csak 2–3 botot ad),
+   - a botok ügyességét és agresszivitását (1–5 szint, lásd gameplay.md),
+   - a civil forgalmat (0–5 szint; 0: nincs – szintenként és km²-enként 4
+     jármű, legfeljebb 60),
    - az időjárást (nappal, eső, este).
+   **Privát játék:** ha a létrehozó belépőkódot ad meg (3–16 karakter), a
+   szobába csak az léphet be, aki a kódot helyesen megadja. A szoba a listában
+   lakattal látszik, a „Belépés” a kódot kéri. A kis- és nagybetű, a szóközök
+   nem számítanak. A kódot a szerver csak a szobában lévőknek küldi el (a
+   váróban látszik, hogy tovább lehessen adni), a listába nem kerül bele. Öt
+   hibás kód után fél percet várni kell az újabb próbálkozásig.
 4. **Váró.** A létrehozó a szobában vár; ha minden hely elkelt, 3 másodperces
    visszaszámlálás után indul a meccs. Ha a létrehozó a váróból kilép, a szoba
    megszűnik.
 5. **Meccs.** Mindenki mindenki ellen; a botok bármelyik játékost megtámadják.
    A játékosok véletlen helyen, egymástól távol születnek, és kilövés után is
-   a többiektől távol élednek újra. Akinek elfogy az élete, kiesik, és nézőként
-   követi tovább a játékot.
-6. **Vége.** Ha egy játékos marad, ő nyer; megjelenik az eredménytábla, és a
-   szoba eltűnik a listából. (Egyfős játék addig tart, amíg a játékosnak van élete.)
+   a többiektől távol élednek újra – akárhányszor, amíg tart a játékidő. A
+   hátralévő időt a képernyő tetején óra mutatja.
+6. **Vége.** Az idő lejártakor az nyer, akinek a legtöbb kilövése van
+   (egyenlőségnél az, akit kevesebbszer lőttek ki; ha ez is egyezik, döntetlen).
+   Megjelenik az eredménytábla, és a szoba eltűnik a listából. Ha mindenki más
+   kilép, a bent maradó nyer. (Egyfős játéknak nincs győztese: az eredmény a
+   kilövések száma.)
+
+## Egyjátékos mód
+
+A főképernyő *Egyjátékos* pontja szerver nélkül indít játékot: ugyanaz a
+szobakezelő és meccslogika (`server/lobby.ts`, `sim/match.ts`) fut a
+böngészőben, egyetlen helyi „kapcsolattal" (`net/LocalGame.ts`). Ezért az
+egyjátékos és a többjátékos játék szabályai biztosan azonosak. Belépés nem
+kell hozzá, és akkor is működik, ha a szerver nem érhető el (az oldalnak
+persze be kell tudnia töltődni). A szerveren ilyenkor nem jön létre szoba.
 
 ## Indítás a saját gépen
 
@@ -149,16 +174,17 @@ A `http://localhost:8787/status` cím megmutatja, hányan vannak fent, hány szo
   késéssel), a lövedékek a sebességük szerint repülnek tovább.
 - **Mit kap egy játékos:** a közelében lévő tankokat (380 m-en belül), minden
   játékos tankját (ők a térképen mindig látszanak), valamint a közeli
-  lövedékeket, tárgyakat, olajfoltokat és roncsokat (170 m). A pálya változásai
-  (kidőlt fa, összedőlt ház, kilövés, kiesés) eseményként mindenkihez
+  lövedékeket, tárgyakat, olajfoltokat, roncsokat, civil járműveket és
+  telepített ágyúkat (185 m – ez a legszélesebb, 32:9-es látómezőnél is túlér a képernyő szélén). A pálya változásai
+  (kidőlt fa, összedőlt ház, kilövés) eseményként mindenkihez
   eljutnak; a csak látványt adó események (lövés, becsapódás) csak a közelben
   lévőkhöz.
 - **Adatforgalom:** mérés szerint 8 játékossal és 100 bottal játékosonként
-  kb. 50 KB/s; egy szimulációs lépés a pillanatképekkel együtt kb. 1 ms a
-  szerveren.
+  kb. 50 KB/s; egy szimulációs lépés a pillanatképekkel együtt kb. 1,5 ms a
+  szerveren, a legsűrűbb forgalommal (60 jármű) kb. 2 ms – a keret 16,7 ms.
 - **Korlátok:** legfeljebb 400 kapcsolat és 60 szoba. Folyamatban lévő meccsbe
   nem lehet belépni, és megszakadt kapcsolat után nem lehet visszatérni a
-  meccsbe (a játékos kiesettnek számít).
+  meccsbe (a játékos kilépettnek számít, az addigi eredménye megmarad).
 
 ### Üzenetek
 
@@ -169,12 +195,12 @@ töltse újra az oldalt.
 | Irány | Típus | Tartalom |
 |---|---|---|
 | kliens → szerver | `register`, `login`, `resume`, `logout` | belépés névvel és jelszóval, vagy megőrzött kulccsal |
-| kliens → szerver | `create`, `join`, `leave` | szoba létrehozása (beállításokkal), belépés, kilépés |
-| kliens → szerver | `input` | sorszám és a bemenet (gáz, forgatás, célzás, tűz, olaj, gyorsító) |
+| kliens → szerver | `create`, `join`, `leave` | szoba létrehozása (beállításokkal, privát játéknál belépőkóddal), belépés (privát szobába a kóddal), kilépés |
+| kliens → szerver | `input` | sorszám és a bemenet (gáz, forgatás, célzás, tűz, olaj, gyorsító, ágyú telepítése) |
 | szerver → kliens | `auth`, `authError` | a belépés eredménye |
 | szerver → kliens | `rooms`, `room`, `left` | a szobalista, a váró állapota (visszaszámlálással), kilépés |
 | szerver → kliens | `start` | a meccs beállításai, a saját tank azonosítója, a játékosok |
-| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank teljes állapota, a közeli elemek, a játékosok állása |
+| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank teljes állapota, a közeli elemek (tankok, lövedékek, tárgyak, járművek, ágyúk), a játékosok állása, a hátralévő játékidő |
 | szerver → kliens | `ev` | a szimuláció eseményei |
 | szerver → kliens | `over` | a győztes és az eredménytábla |
 
@@ -189,9 +215,10 @@ server/
   gate.ts        belépés: csak hitelesített kapcsolat érheti el a szobákat
   accounts.ts    fiókok: regisztráció, belépés, tárolás fájlban
   lobby.ts       szobalista, váró, a meccsek léptetése, pillanatképek (hálózat nélkül tesztelhető)
-src/game/sim/match.ts    a meccs szabályai: létszámok a pálya méretéből, életek, kiesés, győztes
+src/game/sim/match.ts    a meccs szabályai: játékmód, létszámok a pálya méretéből, játékidő, győztes
 src/game/net/
   protocol.ts    az üzenetek típusai és tömörítése
   NetClient.ts   a kliens kapcsolata a szerverrel
   ClientWorld.ts a szerverállapot tükre a kliensen, a saját tank előrejelzésével
+  LocalGame.ts   egyjátékos mód: a szobakezelő a böngészőben fut, szerver nélkül
 ```

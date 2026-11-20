@@ -124,6 +124,11 @@ export class Sfx {
     this.tone('triangle', 990, 1020, 0.16, 0.3, 0.09);
   }
 
+  /** új tanktípus: négy emelkedő hang */
+  fanfare(): void {
+    [523, 659, 784, 1047].forEach((f, i) => this.tone('triangle', f, f * 1.01, i === 3 ? 0.34 : 0.13, 0.32, i * 0.11));
+  }
+
   ricochet(volume = 1): void {
     this.tone('sine', 2400, 700, 0.18, 0.25 * volume);
   }
@@ -138,6 +143,20 @@ export class Sfx {
   overheat(): void {
     this.burst(0.6, 5000, 900, 0.3);
     this.tone('sawtooth', 520, 140, 0.45, 0.16);
+  }
+
+  /** autóduda: két rövid, kéthangú jelzés */
+  honk(volume = 1): void {
+    for (const delay of [0, 0.26]) {
+      this.tone('square', 392, 388, 0.18, 0.11 * volume, delay);
+      this.tone('square', 494, 490, 0.18, 0.09 * volume, delay);
+    }
+  }
+
+  /** összelapuló jármű: recsegő fém */
+  crunch(volume = 1): void {
+    this.burst(0.3, 1800, 160, 0.7 * volume);
+    this.tone('sawtooth', 160, 50, 0.25, 0.2 * volume);
   }
 
   /** megcsúszás az olajon */

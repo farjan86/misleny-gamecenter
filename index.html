@@ -25,6 +25,13 @@
           <span class="btn danger" id="hud-info-leave" role="button">Kilépés a meccsből</span>
         </div>
       </div>
+      <!-- visszaszámláló óra és az állás -->
+      <div id="hud-clock" class="panel" role="button" title="Eredménytábla (Tab)">
+        <div id="hud-clock-time">0:00</div>
+        <div id="hud-clock-score"></div>
+      </div>
+      <!-- eredménytábla: a Tab nyomva tartására vagy az órára kattintva jelenik meg -->
+      <div id="hud-scores" class="panel hidden"></div>
       <div id="hud-toast" class="panel"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
@@ -44,6 +51,7 @@
             <span class="btn big" id="auth-login" role="button">Belépés</span>
             <span class="btn big" id="auth-register" role="button">Regisztráció</span>
           </div>
+          <div class="buttons"><span class="btn" id="auth-single" role="button">Egyjátékos (szerver nélkül)</span></div>
           <p class="note">
             Regisztrációhoz csak egy játékosnév (3–18 karakter) és egy jelszó (legalább 6 karakter) kell. E-mail-címet nem kérünk, ezért az elfelejtett jelszót nem tudjuk visszaállítani.
           </p>
@@ -53,6 +61,7 @@
           <p class="big-note" id="user-greeting"></p>
           <div class="buttons column">
             <span class="btn big" id="main-multiplayer" role="button">Multiplayer</span>
+            <span class="btn big" id="main-single" role="button">Egyjátékos</span>
             <span class="btn big" id="main-settings" role="button">Beállítások</span>
             <span class="btn" id="main-logout" role="button">Kijelentkezés</span>
           </div>
@@ -77,6 +86,14 @@
         <h2>Multiplayer – játékok</h2>
         <p class="sub" id="lobby-status">Kapcsolódás a szerverhez…</p>
         <div id="room-list"></div>
+        <!-- privát játék: a belépéshez kód kell -->
+        <div id="code-box" class="hidden">
+          <label class="field"><span id="code-title">Belépőkód</span><input id="code-input" maxlength="16" autocomplete="off" spellcheck="false" /></label>
+          <div class="buttons">
+            <span class="btn big" id="code-ok" role="button">Belépés</span>
+            <span class="btn" id="code-cancel" role="button">Mégsem</span>
+          </div>
+        </div>
         <div class="buttons">
           <span class="btn big" id="lobby-create" role="button">Új játék</span>
           <span class="btn" id="lobby-back" role="button">Vissza</span>
@@ -84,7 +101,7 @@
       </div>
 
       <div class="screen hidden wide" id="screen-create">
-        <h2>Új játék</h2>
+        <h2 id="create-title">Új játék</h2>
         <div class="split">
           <div>
             <p class="sub">Pálya: húzd az egeret a térképen a játéktér kijelöléséhez</p>
@@ -92,11 +109,17 @@
             <p class="note" id="area-text"></p>
           </div>
           <div class="sliders">
-            <label class="field">A játék neve<input id="create-name" maxlength="28" autocomplete="off" spellcheck="false" /></label>
-            <label class="slider">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
-            <label class="slider">Életek <b id="val-lives"></b><input type="range" id="sl-lives" min="0" max="2" step="1" /></label>
+            <label class="field" id="create-name-field">A játék neve<input id="create-name" maxlength="28" autocomplete="off" spellcheck="false" /></label>
+            <label class="field" id="create-code-field"
+              >Belépőkód – privát játékhoz (üresen hagyva bárki beléphet)<input id="create-code" maxlength="16" autocomplete="off" spellcheck="false" placeholder="pl. tankcsata7"
+            /></label>
+            <label class="slider" id="create-players-field">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
+            <label class="slider">Játékidő <b id="val-minutes"></b><input type="range" id="sl-minutes" min="5" max="30" step="5" /></label>
             <label class="slider">Botok <b id="val-bots"></b><input type="range" id="sl-bots" min="0" max="5" step="1" /></label>
+            <label class="slider">Botok ügyessége <b id="val-skill"></b><input type="range" id="sl-skill" min="1" max="5" step="1" /></label>
+            <label class="slider">Botok agresszivitása <b id="val-aggression"></b><input type="range" id="sl-aggression" min="1" max="5" step="1" /></label>
             <label class="slider">Felvehető tárgyak <b id="val-pickups"></b><input type="range" id="sl-pickups" min="0" max="5" step="1" /></label>
+            <label class="slider">Forgalom (autók, buszok) <b id="val-traffic"></b><input type="range" id="sl-traffic" min="0" max="5" step="1" /></label>
             <label class="slider">Időjárás <b id="val-weather"></b><input type="range" id="sl-weather" min="0" max="2" step="1" /></label>
             <div class="buttons">
               <span class="btn big" id="create-ok" role="button">Létrehozás</span>
@@ -109,6 +132,7 @@
       <div class="screen hidden" id="screen-room">
         <h2 id="room-title">Játék</h2>
         <p class="sub" id="room-summary"></p>
+        <p class="big-note hidden" id="room-code"></p>
         <div id="room-players"></div>
         <p class="big-note" id="room-state"></p>
         <div class="buttons">

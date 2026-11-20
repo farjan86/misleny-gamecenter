@@ -56,7 +56,7 @@ const setSlider = (page, id, value) =>
 await setSlider(a, 'sl-players', 2);
 await setSlider(a, 'sl-bots', 3);
 await setSlider(a, 'sl-pickups', 4);
-await setSlider(a, 'sl-lives', 1);
+await setSlider(a, 'sl-minutes', 5);
 await setSlider(a, 'sl-weather', weather);
 await shot(a, '05-create');
 await a.click('#create-ok');

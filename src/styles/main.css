@@ -208,9 +208,112 @@ body {
   margin-top: 10px;
 }
 
+#hud-clock {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 96px;
+  padding: 3px 14px 4px;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#hud-clock:hover {
+  border-color: #ffd84a;
+}
+
+#hud-scores {
+  /* a pályán lévő feliratok fölött */
+  z-index: 5;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 420px;
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+  padding: 12px 18px 14px;
+}
+
+#hud-scores h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: #ffd84a;
+  text-align: center;
+}
+
+#hud-scores table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+#hud-scores th {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: normal;
+  color: #aab4c0;
+  text-align: right;
+}
+
+#hud-scores td {
+  padding: 4px 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+#hud-scores th.name,
+#hud-scores td.name {
+  text-align: left;
+}
+
+#hud-scores tr.me td {
+  color: #ffd84a;
+  font-weight: bold;
+}
+
+#hud-scores tr.gone td {
+  color: #7c8794;
+}
+
+#hud-scores .small {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #aab4c0;
+  text-align: center;
+}
+
+#hud-clock-time {
+  font-size: 26px;
+  font-weight: bold;
+  line-height: 1.1;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+#hud-clock-score {
+  font-size: 12px;
+  color: #ffd84a;
+  white-space: nowrap;
+}
+
+#hud-clock.ending #hud-clock-time {
+  color: #ff5a4a;
+  animation: clock-pulse 1s infinite;
+}
+
+@keyframes clock-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
 #hud-toast {
   position: absolute;
-  top: 12px;
+  top: 74px;
   left: 50%;
   transform: translate(-50%, -8px);
   font-size: 16px;
@@ -445,6 +548,23 @@ body {
 
 .room .state.full {
   color: #f0a040;
+}
+
+.room .lock {
+  font-weight: normal;
+}
+
+/* privát játék: a belépőkód bekérése a lista alatt */
+#code-box {
+  max-width: 420px;
+  margin: 10px auto 4px;
+  padding: 6px 14px 10px;
+  border: 2px solid #ffd84a;
+  background: #1a1f28;
+}
+
+#room-code {
+  color: #ffd84a;
 }
 
 .empty {

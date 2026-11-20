@@ -7,8 +7,10 @@ import Phaser from 'phaser';
 import { FireLayer } from '../entities/FireLayer';
 import { createGameTextures, GTEX, PICKUP_ICON_SIZE } from '../entities/gameTextures';
 import { PICKUP_STYLE, pickupTexture } from '../entities/pickupStyle';
+import { tankTex, TIER_NAMES, TURRET_PIVOT, TURRET_SIZE } from '../entities/tankTextures';
 import { TankView } from '../entities/TankView';
 import { TrackLayer } from '../entities/TrackLayer';
+import { VehicleLayer } from '../entities/VehicleLayer';
 import { createTextures, TEX } from '../entities/textures';
 import { WeatherLayer } from '../entities/WeatherLayer';
 import { ChunkLayer } from '../maps/ChunkLayer';
@@ -18,7 +20,7 @@ import type { ClientWorld } from '../net/ClientWorld';
 import { BASE_PPM } from '../quality';
 import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
-import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
+import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankSize, tankTier, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { toggleFullscreen } from '../ui/fullscreen';
 import { Hud, type HudFrame, type LoadoutItem } from '../ui/Hud';
@@ -38,6 +40,8 @@ const ROOF_FIRE: Record<ShotKind, { size: number; life: number }> = {
 };
 /** A kilőtt tank roncsa ennyi ideig ég (mp). */
 const WRECK_FIRE = { size: 2.4, life: 45 };
+/** A felrobbanó jármű robbanásának mérete és a roncs tüze. */
+const VEHICLE_BLAST = { car: 2.6, truck: 3.1, bus: 3.9 } as const;
 /** Ennél messzebbi események hangja nem hallatszik (m). */
 const HEARING = 140;
 const WEATHER_LABEL = { day: 'nappal', rain: 'eső', night: 'este' } as const;
@@ -64,6 +68,7 @@ export class GameScene extends Phaser.Scene {
   private fires!: FireLayer;
   private weather!: WeatherLayer;
   private tracks!: TrackLayer;
+  private vehicles!: VehicleLayer;
   private readonly debrisPool: Phaser.GameObjects.Image[] = [];
   private readonly shockPool: Phaser.GameObjects.Image[] = [];
   private roadLabels!: RoadLabelLayer;
@@ -84,7 +89,7 @@ export class GameScene extends Phaser.Scene {
   private readonly beamPool: Phaser.GameObjects.Image[] = [];
   private readonly smokePool: Phaser.GameObjects.Image[] = [];
   // képkockánként újrahasznált objektumok (ne keletkezzen fölösleges szemét)
-  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false };
+  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false };
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
@@ -95,12 +100,18 @@ export class GameScene extends Phaser.Scene {
   private pointerMoved = false;
   /** az olajfolt lerakását kérő leütés, amíg el nem megy a szervernek */
   private dropLatch = false;
+  /** az ágyú telepítését kérő leütés, ugyanígy */
+  private deployLatch = false;
+  /** a saját szintlépés szövege: a kilövés üzenetéhez fűzve jelenik meg (a két esemény együtt érkezik) */
+  private levelNote = '';
   private ready = false;
   private startedAt = 0;
   private frame = 0;
   private camX = 0;
   private camY = 0;
-  private wasOut = false;
+  /** a legutóbb kiírt hátralévő idő (mp) és állás – csak változáskor frissül a kijelző */
+  private shownClock = -1;
+  private shownScore = '';
   private readonly listeners: [EventTarget, string, EventListener][] = [];
   /** a tárgyak ikonjai képként (adat-URL), a felső sáv számára */
   private readonly iconUrls = new Map<PickupKind, string>();
@@ -128,15 +139,17 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     createTextures(this);
     createGameTextures(this);
-    // A kamera csak a kijelölt játékteret járja be: ami azon kívül van, az nem látszik.
-    const area = this.map.bounds ?? { minX: 0, minY: 0, maxX: this.map.width, maxY: this.map.height };
-    this.cameras.main.setBounds(area.minX * this.ppm, area.minY * this.ppm, (area.maxX - area.minX) * this.ppm, (area.maxY - area.minY) * this.ppm);
+    this.fitCamera();
     this.cameras.main.setRoundPixels(true);
 
     this.ground = new ChunkLayer(this, this.map, this.ppm);
     this.fires = new FireLayer(this, this.ppm);
     this.weather = new WeatherLayer(this, this.map, this.ppm, this.world.room.settings.weather);
     this.tracks = new TrackLayer(this, this.map, this.ppm, this.world.room.settings.weather);
+    this.vehicles = new VehicleLayer(this, this.ppm, this.world.room.settings.weather, this.world.myId, (kind, px, py) => {
+      if (kind === 'smoke') this.smoke(px, py);
+      else this.puff(px, py, 0xc8d4e0, 0.6, 320); // vízpermet az esőben
+    });
     this.hud = new Hud(this.map, this.ppm);
     this.hud.onLeave(() => this.onLeave());
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
@@ -153,12 +166,18 @@ export class GameScene extends Phaser.Scene {
       else if (action === 'info') this.hud.toggleInfo();
       else if (action === 'fullscreen') toggleFullscreen();
       else if (action === 'oil') this.dropLatch = true;
+      else if (action === 'deploy') this.deployLatch = true;
+      else if (action === 'scores') this.hud.holdScores(true);
     }) as EventListener);
     this.listen(window, 'keyup', ((ev: KeyboardEvent) => {
       this.down.delete(ev.code);
+      if (!this.held('scores')) this.hud.holdScores(false);
     }) as EventListener);
     // ha az ablak elveszti a fókuszt, a lenyomva maradt gombok ne ragadjanak be
-    this.listen(window, 'blur', () => this.down.clear());
+    this.listen(window, 'blur', () => {
+      this.down.clear();
+      this.hud.holdScores(false);
+    });
     this.input.on('pointerdown', () => this.sfx.unlock());
     this.input.on('pointermove', () => {
       this.pointerMoved = true;
@@ -169,7 +188,12 @@ export class GameScene extends Phaser.Scene {
     const stale = (): void => {
       this.canvasRectStale = true;
     };
-    this.scale.on(Phaser.Scale.Events.RESIZE, stale);
+    // a vászon mérete az ablak képarányát követi: a képernyőt fedő rétegek (eső, sötétség) is igazodnak
+    this.scale.on(Phaser.Scale.Events.RESIZE, (size: Phaser.Structs.Size) => {
+      this.canvasRectStale = true;
+      this.weather.resize(size.width, size.height);
+      this.fitCamera();
+    });
     this.listen(window, 'resize', stale);
     this.listen(document, 'fullscreenchange', stale);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -183,7 +207,22 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.centerOn(this.camX, this.camY);
     }
     const s = this.world.room.settings;
-    this.hud.toast(`${s.name} – ${s.lives} élet, ${WEATHER_LABEL[s.weather]}. Az utolsó életben maradó nyer!`);
+    this.hud.toast(`${s.name} – ${s.minutes} perc, ${WEATHER_LABEL[s.weather]}. Az nyer, aki a legtöbb tankot lövi ki!`);
+  }
+
+  /**
+   * A kamera csak a kijelölt játékteret járja be: ami azon kívül van, az nem
+   * látszik. Ha a játéktér kisebb a képnél (nagyon kis pálya, széles monitor),
+   * a kép közepére kerül.
+   */
+  private fitCamera(): void {
+    const cam = this.cameras.main;
+    const area = this.map.bounds ?? { minX: 0, minY: 0, maxX: this.map.width, maxY: this.map.height };
+    const w = (area.maxX - area.minX) * this.ppm;
+    const h = (area.maxY - area.minY) * this.ppm;
+    const bw = Math.max(w, cam.width);
+    const bh = Math.max(h, cam.height);
+    cam.setBounds(Math.round(area.minX * this.ppm - (bw - w) / 2), Math.round(area.minY * this.ppm - (bh - h) / 2), bw, bh);
   }
 
   private actionOf(code: string): Action | null {
@@ -210,6 +249,7 @@ export class GameScene extends Phaser.Scene {
     input.fire = this.held('fire') || pointer.leftButtonDown();
     input.boost = this.held('boost');
     input.drop = this.dropLatch || pointer.rightButtonDown();
+    input.deploy = this.deployLatch;
     return input;
   }
 
@@ -229,6 +269,7 @@ export class GameScene extends Phaser.Scene {
           this.tankViews.delete(id);
         } else if (id !== world.myId) view.rebase(tank);
       }
+      this.vehicles.rebase(world.vehicles, world.turrets);
     }
     for (const ev of world.events) this.handleEvent(ev);
     world.events.length = 0;
@@ -241,6 +282,7 @@ export class GameScene extends Phaser.Scene {
       if (own && ownView) ownView.remember(own);
       world.input(this.readInput());
       this.dropLatch = false;
+      this.deployLatch = false;
       this.accumulator -= SIM_DT;
     }
 
@@ -271,7 +313,8 @@ export class GameScene extends Phaser.Scene {
     this.fires.update(view, dt);
     this.tracks.update(world.tanks, view, seconds);
     if (this.frame % 5 === 0) this.dust(view);
-    this.weather.update(view, world.tanks, this.fires, dt);
+    this.vehicles.render(netAlpha, view, seconds, dt);
+    this.weather.update(view, world.tanks, this.fires, dt, this.vehicles);
     this.syncPickups(view, seconds);
     world.listsChanged = false;
 
@@ -309,15 +352,19 @@ export class GameScene extends Phaser.Scene {
     this.hud.update(f);
 
     // a saját tank fölött: a gyorsító hőfoka és az életek
-    if (own) this.tankViews.get(own.id)?.setOwnStatus(own.heat / BOOSTER.duration, own.overheated, own.lives);
+    if (own) this.tankViews.get(own.id)?.setOwnStatus(own.heat / BOOSTER.duration, own.overheated, -1);
 
     if (this.frame % 6 === 0) this.hud.setLoadout(this.loadoutOf(own));
 
-    if (own?.out && !this.wasOut) {
-      this.wasOut = true;
-      this.hud.toast('Kiestél! Nézőként követed a játékot.');
+    // visszaszámláló óra és az állás
+    const score = this.scoreText();
+    if (world.timeLeft !== this.shownClock || score !== this.shownScore) {
+      this.shownClock = world.timeLeft;
+      this.shownScore = score;
+      this.hud.setClock(world.timeLeft, score);
     }
     if (this.frame % 20 === 0 && this.hud.infoOpen) this.hud.setInfo(this.infoHtml());
+    if (this.hud.scoresOpen && this.frame % 10 === 0) this.hud.setScores(this.scoresHtml());
   }
 
   private iconUrl(kind: PickupKind): string {
@@ -329,13 +376,49 @@ export class GameScene extends Phaser.Scene {
     return url;
   }
 
+  /** Az eredménytábla: minden játékos kilövései és halálai, a helyezés sorrendjében. */
+  private scoresHtml(): string {
+    const world = this.world;
+    const s = world.room.settings;
+    // ugyanaz a sorrend, mint a végeredménynél: kilövések, aztán kevesebb halál; a kilépettek a végén
+    const list = [...world.standings].sort((a, b) => Number(a.gone) - Number(b.gone) || b.kills - a.kills || a.deaths - b.deaths);
+    let place = 0;
+    const rows = list.map((p, i) => {
+      const prev = list[i - 1];
+      if (!prev || prev.gone !== p.gone || prev.kills !== p.kills || prev.deaths !== p.deaths) place = i + 1;
+      const level = world.tank(p.tank)?.level ?? 1;
+      const cls = [p.tank === world.myId ? 'me' : '', p.gone ? 'gone' : ''].join(' ').trim();
+      return (
+        `<tr class="${cls}"><td>${place}.</td><td class="name">${escapeHtml(p.name)}${p.gone ? ' (kilépett)' : ''}</td>` +
+        `<td>${p.kills}</td><td>${p.deaths}</td><td>${level}.</td></tr>`
+      );
+    });
+    const bots = world.room.plan.bots ? ` · ${world.room.plan.bots} bot a pályán` : '';
+    return (
+      `<h3>${escapeHtml(s.name)}</h3>` +
+      `<table><tr><th></th><th class="name">Játékos</th><th>Kilövés</th><th>Halál</th><th>Szint</th></tr>${rows.join('')}</table>` +
+      `<p class="small">A legtöbb kilövés nyer${bots}</p>`
+    );
+  }
+
+  /** Az óra alatti sor: a saját kilövések száma, többjátékos meccsben a helyezés is. */
+  private scoreText(): string {
+    const world = this.world;
+    const mine = world.standings.find((p) => p.tank === world.myId);
+    if (!mine) return '';
+    const rivals = world.standings.filter((p) => !p.gone);
+    if (rivals.length < 2) return `${mine.kills} kilövés`;
+    const place = 1 + rivals.filter((p) => p.kills > mine.kills || (p.kills === mine.kills && p.deaths < mine.deaths)).length;
+    return `${mine.kills} kilövés · ${place}. hely`;
+  }
+
   /** Ami éppen a tanknál van: a fegyver, a megmaradó képességek, majd a fogyó és az időre szóló tárgyak. */
   private loadoutOf(own: TankState | undefined): LoadoutItem[] {
     const items = this.loadout;
     items.length = 0;
     if (!own) return items;
     // a sáv elején mindig a tank szintje áll (ikon nélkül)
-    items.push({ icon: '', label: `★ ${own.level}. szint`, count: own.level >= LEVEL.max ? 'max' : '' });
+    items.push({ icon: '', label: `★ ${own.level}. szint · ${TIER_NAMES[tankTier(own.level)]}`, count: own.level >= LEVEL.max ? 'max' : '' });
     if (!own.alive) return items;
     const add = (kind: PickupKind, count = ''): void => {
       items.push({ icon: this.iconUrl(kind), label: PICKUP_STYLE[kind].label, count });
@@ -345,8 +428,16 @@ export class GameScene extends Phaser.Scene {
     if (own.tripleShots > 0) add('triple', `${own.tripleShots} lövés`);
     if (own.shield > 0) add('shield', `×${own.shield}`);
     if (own.oil > 0) add('oil', `×${own.oil}`);
+    if (own.turrets > 0) add('turret', `×${own.turrets}`);
     for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) add(kind, `${Math.ceil(own.effects[kind])} mp`);
     return items;
+  }
+
+  /** A szint és a tank típusa; ha van még erősebb típus, az is, hogy hányadik szinttől jár. */
+  private levelText(level: number): string {
+    const tier = tankTier(level);
+    const next = LEVEL.tiers[tier + 1];
+    return `${level}. – ${TIER_NAMES[tier]}` + (next ? ` (a ${next}. szinttől: ${TIER_NAMES[tier + 1]})` : '');
   }
 
   /** Az információs panel tartalma: irányítás, a tank állapota, a játékosok, forrásmegjelölés. */
@@ -358,7 +449,7 @@ export class GameScene extends Phaser.Scene {
     controls.splice(4, 0, ['Egér', 'célzás – bal gomb: lövés, jobb gomb: olajfolt']);
     const state: [string, string][] = [];
     if (own) {
-      state.push(['Életerő', `${Math.ceil(own.hp)} / ${tankMaxHp(own)}`], ['Szint', String(own.level)], ['Életek', own.out ? 'kiestél' : String(own.lives)]);
+      state.push(['Életerő', `${Math.ceil(own.hp)} / ${tankMaxHp(own)}`], ['Szint', this.levelText(own.level)], ['Kilövés / halál', `${own.kills} / ${own.deaths}`]);
       state.push(['Fegyver', own.weapon ? PICKUP_STYLE[own.weapon].label : 'alaplövedék']);
       const extras: string[] = [];
       if (own.ricochet) extras.push(PICKUP_STYLE.ricochet.label);
@@ -366,15 +457,16 @@ export class GameScene extends Phaser.Scene {
       for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) extras.push(`${PICKUP_STYLE[kind].label} (${Math.ceil(own.effects[kind])} mp)`);
       if (own.shield > 0) extras.push(`${PICKUP_STYLE.shield.label} ×${own.shield}`);
       if (own.oil > 0) extras.push(`${PICKUP_STYLE.oil.label} ×${own.oil}`);
+      if (own.turrets > 0) extras.push(`${PICKUP_STYLE.turret.label} ×${own.turrets}`);
       if (extras.length) state.push(['Nálad van', extras.join(', ')]);
     }
-    const players: [string, string][] = this.world.standings.map((p) => [escapeHtml(p.name), p.out ? 'kiesett' : `${p.lives} élet · ${p.kills} kilövés`]);
+    const players: [string, string][] = this.world.standings.map((p) => [escapeHtml(p.name), `${p.kills} kilövés · ${p.deaths} halál${p.gone ? ' (kilépett)' : ''}`]);
     const extra = this.map.data.meta.extraAttribution ? ` · ${this.map.data.meta.extraAttribution}` : '';
     return (
       `<h3>Irányítás</h3>${rows(controls)}` +
       `<h3>A tankod</h3>${rows(state)}` +
       `<h3>Játékosok – ${escapeHtml(s.name)}</h3>${rows(players)}` +
-      `<p class="small">Időjárás: ${WEATHER_LABEL[s.weather]} · botok: ${this.world.room.plan.bots} · válaszidő: ${this.world.pingMs} ms<br />` +
+      `<p class="small">Időjárás: ${WEATHER_LABEL[s.weather]} · játékidő: ${s.minutes} perc · botok: ${this.world.room.plan.bots} · járművek: ${this.world.room.plan.traffic} · válaszidő: ${this.world.pingMs} ms<br />` +
       `Térképadat: <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap közreműködők</a> (ODbL)${extra}</p>`
     );
   }
@@ -469,17 +561,11 @@ export class GameScene extends Phaser.Scene {
         this.sfx.explosion(Math.max(0.4, this.loudness(ev.x, ev.y)) * 1.6);
         if (mine) {
           this.cameras.main.shake(400, 0.009);
-          const left = (world.me?.lives ?? 1) - 1;
-          this.hud.toast(left > 0 ? `Kilőttek! Még ${left} életed van – mindjárt újraéledsz…` : 'Kilőttek!');
+          this.hud.toast('Kilőttek! Mindjárt újraéledsz…');
         } else if (ev.by === myId) {
           const name = world.nameOf(ev.tank);
-          this.hud.toast(name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`);
-        }
-        break;
-      case 'eliminated':
-        if (!mine) {
-          const left = world.standings.filter((p) => !p.out && p.tank !== ev.tank).length;
-          this.hud.toast(`${world.nameOf(ev.tank)} kiesett – még ${left} játékos van játékban`);
+          this.hud.toast((name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
+          this.levelNote = '';
         }
         break;
       case 'felled': {
@@ -507,11 +593,58 @@ export class GameScene extends Phaser.Scene {
           this.hud.toast('Túlmelegedett a gyorsító – le kell hűlnie');
         }
         break;
-      case 'levelup':
+      case 'levelup': {
+        // osztályváltáskor a tank új típus lesz: ezt mindenki látja, aki a közelben van
+        const tier = tankTier(ev.level);
+        const promoted = LEVEL.tiers[tier] === ev.level;
+        const tank = world.tank(ev.tank);
+        if (promoted && tank && this.loudness(tank.x, tank.y) > 0) this.flare(tank.x * ppm, tank.y * ppm, tankSize(tank));
         if (mine) {
-          this.sfx.pickup();
-          this.hud.toast(`${ev.level}. szint: nagyobb, szívósabb tank, erősebb lövedék!`);
+          if (promoted) this.sfx.fanfare();
+          else this.sfx.pickup();
+          // a szintlépést kiváltó kilövés eseménye közvetlenül ezután jön: az üzenete ezzel a szöveggel egészül ki
+          this.levelNote = promoted ? `${ev.level}. szint – új tank: ${TIER_NAMES[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`;
+          this.hud.toast(this.levelNote);
         }
+        break;
+      }
+      case 'blast': {
+        // felrobbant egy jármű: nagy robbanás, a roncsa ég
+        const size = VEHICLE_BLAST[ev.kind];
+        this.boom(ev.x, ev.y, size);
+        this.scar(ev.x, ev.y, size * 0.9);
+        this.fires.ignite(ev.x, ev.y, 1.6 + size * 0.3, 32);
+        this.weather.flash(ev.x, ev.y, ev.radius * 2.4, 0.5);
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume > 0) {
+          this.sfx.explosion(Math.max(0.3, volume) * 1.5);
+          this.cameras.main.shake(260, 0.006 * volume);
+        }
+        break;
+      }
+      case 'crushed': {
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume > 0) this.sfx.crunch(volume);
+        this.burst(ev.x * ppm, ev.y * ppm, 0.9);
+        break;
+      }
+      case 'honk': {
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume > 0) this.sfx.honk(volume);
+        break;
+      }
+      case 'deploy':
+        if (mine) {
+          this.sfx.bump();
+          this.hud.toast('Ágyú telepítve – lő minden ellenségre a közelében');
+        }
+        break;
+      case 'turretDown':
+        this.boom(ev.x, ev.y, 1.9);
+        this.scar(ev.x, ev.y, 1.5);
+        this.weather.flash(ev.x, ev.y, 16, 0.4);
+        if (this.loudness(ev.x, ev.y) > 0) this.sfx.explosion(Math.max(0.3, this.loudness(ev.x, ev.y)));
+        if (ev.owner === myId) this.hud.toast('Megsemmisült az egyik ágyúd!');
         break;
       case 'respawn': {
         const tank = world.tank(ev.tank);
@@ -570,8 +703,13 @@ export class GameScene extends Phaser.Scene {
       let parts = this.wreckViews.get(w.id);
       if (!parts) {
         parts = [
-          this.add.image(x, y, GTEX.wreckHull).setRotation(w.hullAngle).setScale(this.spriteScale).setDepth(5),
-          this.add.image(x, y, GTEX.wreckTurret).setOrigin(0.25, 0.5).setRotation(w.turretAngle + 0.5).setScale(this.spriteScale).setDepth(6),
+          this.add.image(x, y, tankTex.wreckHull(tankTier(w.level))).setRotation(w.hullAngle).setScale(this.spriteScale * tankSize(w)).setDepth(5),
+          this.add
+            .image(x, y, tankTex.wreckTurret(tankTier(w.level)))
+            .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
+            .setRotation(w.turretAngle + 0.5)
+            .setScale(this.spriteScale * tankSize(w))
+            .setDepth(6),
         ];
         this.wreckViews.set(w.id, parts);
       }
@@ -653,6 +791,27 @@ export class GameScene extends Phaser.Scene {
       });
     }
     for (let i = 0; i < 3; i++) this.time.delayedCall(90 + i * 110, () => this.puff(px + (i - 1) * 9 * scale * size, py - i * 7 * scale, 0x4a4642, 1.1 * size, 900));
+  }
+
+  /** Új tanktípus: két táguló, aranyszínű fénygyűrű a tank körül. */
+  private flare(px: number, py: number, size: number): void {
+    const scale = this.spriteScale * size;
+    for (let i = 0; i < 2; i++) {
+      const ring = this.shockPool.pop() ?? this.add.image(0, 0, GTEX.shock).setDepth(18).setBlendMode(Phaser.BlendModes.ADD);
+      ring.setPosition(px, py).setScale(scale * 0.4).setAlpha(0).setTint(0xffd84a).setVisible(true);
+      this.tweens.add({
+        targets: ring,
+        scale: scale * (2.2 + i * 0.9),
+        alpha: { from: 0.95, to: 0 },
+        delay: i * 140,
+        duration: 620,
+        ease: 'Cubic.easeOut',
+        onComplete: () => {
+          ring.setVisible(false).clearTint();
+          this.shockPool.push(ring);
+        },
+      });
+    }
   }
 
   /** A terepen gyorsan haladó tankok port vernek fel (esőben sarat). */
@@ -841,8 +1000,11 @@ export class GameScene extends Phaser.Scene {
       hp: p.hp ?? 0,
       alive: p.alive ?? false,
       level: p.level ?? 0,
-      lives: p.lives ?? 0,
-      out: p.out ?? false,
+      kills: p.kills ?? 0,
+      deaths: p.deaths ?? 0,
+      timeLeft: this.world.timeLeft,
+      viewWidth: Math.round(this.cameras.main.width / this.ppm),
+      viewHeight: Math.round(this.cameras.main.height / this.ppm),
       heat: p.heat ?? 0,
       tick: this.world.tick,
       ready: this.ready,
@@ -851,6 +1013,10 @@ export class GameScene extends Phaser.Scene {
       bots: this.world.tanks.filter((t) => t.bot).length,
       pickups: this.world.pickups.length,
       wrecks: this.world.wrecks.length,
+      vehicles: this.world.vehicles.length,
+      vehicleViews: this.vehicles.count,
+      turrets: this.world.turrets.length,
+      turretCharges: p.turrets ?? 0,
       fires: this.fires.count,
       scars: this.map.scars.length / 3,
       fallen: this.map.fellables.fallen.reduce((n, f) => n + f, 0),

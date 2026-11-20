@@ -10,16 +10,18 @@
 //     képkocka alatt, simán tűnik el.
 
 import type { GameMap } from '../maps/GameMap';
+import type { TurretState, VehicleState } from '../sim/vehicles';
 import { SIM_DT, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
-import type { NetClient } from './NetClient';
-import { blankTank, packInput, unpackBullet, unpackOil, unpackPickup, unpackTank, unpackWreck, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
+import type { GameLink } from './LocalGame';
+import { blankTank, packInput, unpackBullet, unpackOil, unpackPickup, unpackTank, unpackTurret, unpackVehicle, unpackWreck, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
 
 export interface PlayerStanding {
   tank: number;
   name: string;
-  lives: number;
   kills: number;
-  out: boolean;
+  deaths: number;
+  /** kilépett a meccsből */
+  gone: boolean;
 }
 
 /** Ennél nagyobb eltérésnél (m) a tank a helyére ugrik, nem csúszik oda (pl. újraéledés). */
@@ -32,6 +34,8 @@ export class ClientWorld {
   pickups: PickupState[] = [];
   oils: OilState[] = [];
   wrecks: WreckState[] = [];
+  vehicles: VehicleState[] = [];
+  turrets: TurretState[] = [];
   /** a legutóbbi kiolvasás óta érkezett események */
   events: SimEvent[] = [];
   tick = 0;
@@ -40,6 +44,8 @@ export class ClientWorld {
   /** a tank, amelyet a kamera követ (kiesés után egy másik játékosé) */
   viewId: number;
   standings: PlayerStanding[] = [];
+  /** a hátralévő játékidő másodpercben */
+  timeLeft: number;
   /** az utolsó pillanatkép érkezésének ideje és a pillanatképek közötti (simított) idő, ms */
   snapAt = 0;
   snapInterval = 50;
@@ -60,19 +66,20 @@ export class ClientWorld {
 
   constructor(
     map: GameMap,
-    private readonly net: NetClient,
+    private readonly net: GameLink,
     readonly room: RoomInfo,
     readonly myId: number,
     players: readonly PlayerInfo[],
   ) {
     this.viewId = myId;
+    this.timeLeft = room.settings.minutes * 60;
     for (const p of players) this.names.set(p.tank, p.name);
     // Az előrejelzés világa: ugyanaz a pálya, de a fák és az épületek állapotát nem
     // változtatja (azt csak a szerver eseményei módosítják).
     this.predict = new World(
       { width: map.width, height: map.height, walls: map.walls, bounds: map.bounds, speedFactor: (x, y) => map.speedFactor(x, y) },
       1,
-      { weather: room.settings.weather },
+      { weather: room.settings.weather, mirror: true },
     );
     this.ptank = this.predict.addTank(0, 0, 0);
   }
@@ -102,7 +109,7 @@ export class ClientWorld {
 
   /** Egy szimulációs lépésnyi bemenet: elküldi a szervernek, és helyben is lejátssza. */
   input(input: TankInput): void {
-    const copy: TankInput = { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: input.fire, drop: input.drop, boost: input.boost };
+    const copy: TankInput = { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: input.fire, drop: input.drop, boost: input.boost, deploy: input.deploy };
     const s = ++this.seq;
     this.net.send({ t: 'input', s, i: packInput(copy) });
     if (!this.predicting) return;
@@ -118,8 +125,8 @@ export class ClientWorld {
   private readonly predictInputs = new Map<number, TankInput>();
 
   private stepPrediction(input: TankInput): void {
-    // a lövést és az olajat csak a szerver hajtja végre
-    this.predictInputs.set(this.ptank.id, { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: false, drop: false, boost: input.boost });
+    // a lövést, az olajat és az ágyú telepítését csak a szerver hajtja végre
+    this.predictInputs.set(this.ptank.id, { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: false, drop: false, boost: input.boost, deploy: false });
     this.predict.step(this.predictInputs, SIM_DT);
     this.predict.bullets.length = 0;
   }
@@ -177,8 +184,11 @@ export class ClientWorld {
     this.pickups = snap.P.map(unpackPickup);
     this.oils = snap.O.map(unpackOil);
     this.wrecks = snap.W.map(unpackWreck);
+    this.vehicles = snap.V.map(unpackVehicle);
+    this.turrets = snap.U.map(unpackTurret);
     this.listsChanged = true;
-    this.standings = snap.S.map(([tank, lives, kills, out]) => ({ tank, name: this.nameOf(tank), lives, kills, out: out === 1 }));
+    this.standings = snap.S.map(([tank, kills, deaths, gone]) => ({ tank, name: this.nameOf(tank), kills, deaths, gone: gone === 1 }));
+    this.timeLeft = snap.r;
 
     this.reconcile(snap);
   }
@@ -215,6 +225,11 @@ export class ClientWorld {
     // a roncsok az előrejelzésben is akadályok
     this.predict.wrecks.length = 0;
     this.predict.wrecks.push(...this.wrecks);
+    // … és a járművek meg az ágyúk is (a tükörvilág nem mozgatja és nem sebzi őket)
+    this.predict.vehicles.length = 0;
+    this.predict.vehicles.push(...this.vehicles);
+    this.predict.turrets.length = 0;
+    this.predict.turrets.push(...this.turrets);
 
     while (this.pending.length && this.pending[0].s <= snap.a) this.pending.shift();
     for (const p of this.pending) this.stepPrediction(p.input);

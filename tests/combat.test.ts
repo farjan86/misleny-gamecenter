@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { GameMap, pointInPolygon } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
-import { BOT, BotBrain, BotManager } from '../src/game/sim/bots';
+import { BOT, BotBrain, BotManager, botTuning } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
 import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET } from '../src/game/sim/pickups';
 import { FELLABLE, Fellables } from '../src/game/sim/props';
@@ -18,9 +18,11 @@ import {
   tankMaxHp,
   tankRadius,
   tankSize,
+  tankTier,
   TEAM,
   World,
   WRECK,
+  wreckRadius,
   type SimEvent,
   type TankInput,
   type Terrain,
@@ -604,7 +606,7 @@ describe('roncsok', () => {
 
   it('a roncs akadály: a tank nem megy át rajta, a lövedék megáll benne', () => {
     const world = new World(arena());
-    world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, age: 0 });
+    world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, level: 1, age: 0 });
     const tank = world.addTank(120, 200, 0);
     const events = [...run(world, { [tank.id]: { fire: true, aim: 0 } }, 2), ...run(world, {}, 40)];
     const impact = events.find((e) => e.type === 'impact');
@@ -624,6 +626,7 @@ describe('szintek', () => {
     expect(shooter.level).toBe(2);
     expect(events.some((e) => e.type === 'levelup' && e.tank === shooter.id && e.level === 2)).toBe(true);
     expect(tankSize(shooter)).toBeGreaterThan(tankSize(target));
+    expect(tankTier(shooter.level)).toBe(0);
     expect(tankRadius(shooter)).toBeCloseTo(TANK.radius * (1 + LEVEL.size), 5);
     expect(tankMaxHp(shooter)).toBe(TANK.maxHp + LEVEL.hp);
 
@@ -637,6 +640,63 @@ describe('szintek', () => {
     run(world, { [shooter.id]: { fire: true, aim: 0 } }, 2);
     run(world, {}, 40);
     expect(fresh.hp).toBeCloseTo(TANK.maxHp - DAMAGE.shell * (1 + LEVEL.damage), 5);
+  });
+
+  it('a kilőtt tank a szintjét megtartja: újraéledve ugyanazon a szinten folytatja, csak a felszerelése vész el', () => {
+    const world = new World(arena());
+    const veteran = world.addTank(140, 200, Math.PI, { team: TEAM.player });
+    const shooter = world.addTank(100, 200, 0, { team: TEAM.bots });
+    veteran.level = 7;
+    veteran.hp = 20;
+    veteran.weapon = 'rocket';
+    veteran.tripleShots = 4;
+    veteran.ricochet = true;
+    veteran.oil = 2;
+    veteran.turrets = 1;
+    veteran.effects.rapid = 30;
+    veteran.kills = 6;
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(veteran.alive).toBe(false);
+    // a roncs akkora, amekkora a kilőtt tank volt
+    expect(world.wrecks[0].level).toBe(7);
+    expect(wreckRadius(world.wrecks[0])).toBeCloseTo(WRECK.radius * tankSize({ level: 7 }), 5);
+    const events = run(world, {}, seconds(TANK.respawnDelay + 0.5));
+    expect(events.some((e) => e.type === 'respawn' && e.tank === veteran.id)).toBe(true);
+    expect(veteran.alive).toBe(true);
+    expect(veteran.level).toBe(7);
+    expect(veteran.kills).toBe(6);
+    expect(veteran.deaths).toBe(1);
+    // a szintjéhez járó teljes életerővel éled újra
+    expect(veteran.hp).toBe(tankMaxHp({ level: 7 }));
+    expect(veteran.hp).toBe(TANK.maxHp + 6 * LEVEL.hp);
+    // a fegyverzet és a képességek elvesznek
+    expect(veteran.weapon).toBeNull();
+    expect(veteran.tripleShots).toBe(0);
+    expect(veteran.ricochet).toBe(false);
+    expect(veteran.shield).toBe(0);
+    expect(veteran.oil).toBe(0);
+    expect(veteran.turrets).toBe(0);
+    expect(veteran.effects.rapid).toBe(0);
+    // és a következő kilövéssel onnan lép tovább
+    const victim = world.addTank(veteran.x + 30, veteran.y, 0, { team: TEAM.bots });
+    victim.hp = 1;
+    run(world, { [veteran.id]: { fire: true, aim: 0 } }, seconds(1.5));
+    expect(veteran.level).toBe(8);
+  });
+
+  it('a szintek hat osztályba tartoznak; osztályváltáskor a tank mérete ugrik', () => {
+    expect(LEVEL.tiers).toHaveLength(6);
+    expect(LEVEL.tiers[0]).toBe(1);
+    expect(LEVEL.tiers[LEVEL.tiers.length - 1]).toBeLessThanOrEqual(LEVEL.max);
+    expect([1, 2, 3, 5, 6, 8, 9, 11, 12, 15, 16, 20].map(tankTier)).toEqual([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+    for (let level = 2; level <= LEVEL.max; level++) {
+      const step = tankSize({ level }) - tankSize({ level: level - 1 });
+      // osztályon belül egyenletesen nő, osztályváltáskor nagyobbat
+      expect(step).toBeCloseTo(LEVEL.tiers.includes(level as never) ? LEVEL.size + LEVEL.tierSize : LEVEL.size, 5);
+    }
+    // a legnagyobb tank jóval nagyobb a kezdőnél, de még elfér egy utcában
+    expect(tankSize({ level: LEVEL.max })).toBeGreaterThan(1.7);
+    expect(tankRadius({ level: LEVEL.max })).toBeLessThan(3.5);
   });
 
   it('a botok nem lépnek szintet', () => {
@@ -836,5 +896,63 @@ describe('megmaradó fegyverek', () => {
     const felled = events.filter((e) => e.type === 'felled');
     expect(felled.find((e) => e.type === 'felled' && e.index === 0)).toMatchObject({ shot: true });
     expect(felled.find((e) => e.type === 'felled' && e.index === 1)).toMatchObject({ shot: false });
+  });
+});
+
+describe('a botok ügyessége és agresszivitása', () => {
+  it('a 3-as szint az alapérték; az ügyesség a célzást és a reakciót, az agresszivitás az észlelést szabja meg', () => {
+    expect(botTuning()).toMatchObject({ sight: BOT.sight, aimError: BOT.aimError, reaction: BOT.reaction, fireInterval: BOT.fireInterval, hunt: 0 });
+    const weak = botTuning(1, 3);
+    const sharp = botTuning(5, 3);
+    expect(weak.aimError).toBeGreaterThan(sharp.aimError * 4);
+    expect(weak.reaction).toBeGreaterThan(sharp.reaction * 3);
+    expect(weak.fireInterval).toBeGreaterThan(sharp.fireInterval);
+    const calm = botTuning(3, 1);
+    const fierce = botTuning(3, 5);
+    expect(calm.sight).toBeLessThan(BOT.sight);
+    expect(fierce.sight).toBeGreaterThan(BOT.sight);
+    expect(fierce.chaseTime).toBeGreaterThan(calm.chaseTime * 3);
+    expect(fierce.keepDistance).toBeLessThan(calm.keepDistance);
+    expect(calm.hunt).toBe(0);
+    expect(fierce.hunt).toBeGreaterThan(1000);
+    // a határokon kívüli érték a legközelebbi szintre kerül
+    expect(botTuning(99, -4)).toEqual(botTuning(5, 1));
+  });
+
+  it('az ügyes bot hamarabb és pontosabban talál, mint a kezdő', () => {
+    const damageAfter = (skill: number): number => {
+      const world = new World(arena(), 5);
+      const player = world.addTank(200, 200, 0, { team: TEAM.player });
+      const bot = world.addTank(160, 200, 0, { team: TEAM.bots, bot: true });
+      const brain = new BotBrain(world, bot.id, botTuning(skill, 3));
+      const inputs = new Map<number, TankInput>();
+      for (let i = 0; i < seconds(1.6); i++) {
+        inputs.set(bot.id, brain.update(SIM_DT));
+        world.step(inputs);
+      }
+      return TANK.maxHp - player.hp;
+    };
+    // 1,6 másodperc alatt a mesterlövész már többször talált, a kezdő még nem is lőtt
+    expect(damageAfter(5)).toBeGreaterThanOrEqual(DAMAGE.shell);
+    expect(damageAfter(1)).toBe(0);
+  });
+
+  it('az agresszív bot akkor is a játékos felé tart, ha nem látja; a békés nem', () => {
+    const approach = (aggression: number): number => {
+      // a játékos messze van, jóval a látótávolságon túl
+      const world = new World(arena(2000), 9);
+      const player = world.addTank(1500, 1000, 0, { team: TEAM.player });
+      const bot = world.addTank(500, 1000, Math.PI, { team: TEAM.bots, bot: true });
+      const brain = new BotBrain(world, bot.id, botTuning(3, aggression));
+      const inputs = new Map<number, TankInput>();
+      const before = Math.hypot(player.x - bot.x, player.y - bot.y);
+      for (let i = 0; i < seconds(20); i++) {
+        inputs.set(bot.id, brain.update(SIM_DT));
+        world.step(inputs);
+      }
+      return before - Math.hypot(player.x - bot.x, player.y - bot.y);
+    };
+    expect(approach(5)).toBeGreaterThan(150); // közeledett
+    expect(approach(1)).toBeLessThan(0); // a másik irányba járőrözött tovább
   });
 });
