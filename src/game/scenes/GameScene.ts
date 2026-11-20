@@ -1344,7 +1344,9 @@ export class GameScene extends Phaser.Scene {
       if (!view) {
         // megjelenítő csak akkor készül, amikor a tank először a kép közelébe kerül
         if (!onScreen) continue;
-        view = new TankView(this, this.ppm, tank, tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival');
+        // a többi játékos tankja fölött ott a neve; a sajátunkon és a botokon nincs felirat
+        const kind = tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival';
+        view = new TankView(this, this.ppm, tank, kind, kind === 'rival' ? this.world.nameOf(tank.id) : '');
         this.tankViews.set(tank.id, view);
       }
       if (onScreen) view.render(tank, tank.id === myId ? ownAlpha : netAlpha, seconds);

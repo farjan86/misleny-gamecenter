@@ -43,6 +43,8 @@ export class TankView {
   private aura: Phaser.GameObjects.Image | null = null;
   /** a szupertárgy lüktető lila fénye */
   private power: Phaser.GameObjects.Image | null = null;
+  /** a játékos neve az életerősáv fölött (csak a többi játékos tankján; a sajátunkon és a botokon nincs) */
+  private readonly label: Phaser.GameObjects.Text | null;
   /** szintjelvény az életerősáv elején (a 2. szinttől) */
   private badge: Phaser.GameObjects.Text | null = null;
   private hullFrames: readonly string[] = [];
@@ -71,6 +73,8 @@ export class TankView {
     tank: TankState,
     /** a saját tank zöld, a botok vörösek, a többi játékos kék */
     private readonly kind: TankPaint,
+    /** a tank fölé írt név (üres: nincs felirat) */
+    name = '',
   ) {
     const scale = ppm / BASE_PPM;
     this.scale = scale;
@@ -95,6 +99,14 @@ export class TankView {
     // életerősáv (a lombréteg fölött, hogy fa alatt is látsszon)
     this.barBack = scene.add.image(0, 0, GTEX.px).setDepth(17).setTint(0x101418).setAlpha(0.85);
     this.barFill = scene.add.image(0, 0, GTEX.px).setDepth(18).setOrigin(0, 0.5);
+    // a név kicsi, halvány felirat: látszik, ki az ellenfél, de nem takar
+    this.label = name
+      ? scene.add
+          .text(0, 0, name, { fontFamily: 'Consolas, "Lucida Console", monospace', fontStyle: 'bold', fontSize: `${Math.round(13 * scale)}px`, color: '#f4f0e0', stroke: '#101418', strokeThickness: Math.max(2, Math.round(3 * scale)) })
+          .setOrigin(0.5, 1)
+          .setAlpha(0.85)
+          .setDepth(18)
+      : null;
     this.prev = { x: tank.x, y: tank.y, hull: tank.hullAngle, turret: tank.turretAngle };
     this.render(tank, 1, 0);
   }
@@ -162,6 +174,7 @@ export class TankView {
     this.aura?.setVisible(visible);
     this.power?.setVisible(visible);
     this.badge?.setVisible(visible);
+    this.label?.setVisible(visible);
     this.hullDamage.setVisible(visible && this.stage > 0);
     this.turretDamage.setVisible(visible && this.stage > 0);
     this.flame.setVisible(visible && this.stage === 3);
@@ -292,6 +305,7 @@ export class TankView {
     const top = y - BAR.above * size;
     this.barBack.setPosition(x, top);
     this.badge?.setPosition(x - this.barWidth / 2 - 4 * this.scale, top);
+    this.label?.setPosition(x, top - 6 * this.scale);
     this.barFill
       .setPosition(x - this.barWidth / 2, top)
       .setDisplaySize(Math.max(1, this.barWidth * ratio), BAR.height * this.scale)
@@ -323,6 +337,7 @@ export class TankView {
     this.aura?.destroy();
     this.power?.destroy();
     this.badge?.destroy();
+    this.label?.destroy();
     this.marker?.destroy();
   }
 }

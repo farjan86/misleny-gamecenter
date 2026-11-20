@@ -22,6 +22,8 @@ if not exist "node_modules\" (
 )
 
 echo A játék és a szerver előkészítése, néhány másodperc...
+rem A verziószám magától nő, ha a játék forrása megváltozott az előző összeállítás óta.
+call node scripts/version.mjs
 call npx vite build --logLevel warn
 if errorlevel 1 (
   echo A játék összeállítása nem sikerült.

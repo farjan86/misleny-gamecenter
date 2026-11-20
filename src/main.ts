@@ -13,7 +13,12 @@ import type { ServerMessage } from './game/net/protocol';
 import { pickPpm, canvasSize } from './game/quality';
 import { GameScene, type GameSceneData } from './game/scenes/GameScene';
 import { loadSettings } from './game/settings';
+import { VERSION } from './game/version';
 import { Menu } from './game/ui/Menu';
+
+// a verziószám a sarokban: ebből látszik, hogy a böngésző a legfrissebb játékot tölti-e be
+const versionBox = document.getElementById('version');
+if (versionBox) versionBox.textContent = `v${VERSION}`;
 
 async function start(): Promise<void> {
   const map = await loadGameMap(mapUrl);

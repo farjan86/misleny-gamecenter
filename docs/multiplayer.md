@@ -80,6 +80,20 @@ Előfeltétel: Node.js 20 vagy újabb.
 Amíg a gép és a `szerver.bat` ablaka fut, a játék elérhető; ha leáll, a futó
 meccsek megszakadnak.
 
+### Verziószám
+
+A játék verziója a `version.json` fájlban van, és **magától nő**: az
+összeállítás előtt (`szerver.bat`, `inditas.bat`, `npm run build`) lefut a
+`scripts/version.mjs`, amely ujjlenyomatot számol a játék forrásáról (`src/`,
+`server/`, `index.html`, a feldolgozott pálya). Ha ez eltér a legutóbb
+eltárolttól, a verzió második száma eggyel nő (1.0 → 1.1 → … → 1.9 → 1.10);
+ha a forrás nem változott, a verzió marad. A leírások és a tesztek módosítása
+nem számít. Az első számot kézzel lehet átírni a `version.json`-ban.
+
+A verzió a játék bal alsó sarkában látszik, a szerver induláskor kiírja, és a
+`/status` cím is visszaadja. A `version.json` a verziókezelés része: a
+`commit.bat` a kóddal együtt elmenti.
+
 ### Elérés az internetről – ideiglenes cím (domain nélkül)
 
 1. Telepítsd a `cloudflared` programot:

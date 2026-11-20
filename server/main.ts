@@ -17,6 +17,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { MapData } from '../src/game/maps/types';
 import { Accounts } from './accounts';
 import { Gate } from './gate';
+import { VERSION } from '../src/game/version';
 import { Lobby } from './lobby';
 
 const PORT = Number(process.env.PORT) || 8787;
@@ -48,7 +49,7 @@ const http = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/status') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ...lobby.stats, accounts: accounts.count }));
+    res.end(JSON.stringify({ version: VERSION, ...lobby.stats, accounts: accounts.count }));
     return;
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -92,7 +93,7 @@ wss.on('connection', (socket: WebSocket) => {
 setInterval(() => lobby.tick(performance.now()), 4);
 
 http.listen(PORT, HOST, () => {
-  console.log(`TANK MISLENY szerver fut: http://localhost:${PORT}/`);
+  console.log(`TANK MISLENY ${VERSION} – a szerver fut: http://localhost:${PORT}/`);
   console.log(`  pálya: ${path.relative(ROOT, MAP_FILE)} (${mapData.meta.width} × ${mapData.meta.height} m)`);
   console.log(`  oldal: ${path.relative(ROOT, WEB_ROOT) || '.'}   állapot: http://localhost:${PORT}/status`);
   console.log(`  fiókok: ${path.relative(ROOT, ACCOUNTS_FILE)} (${accounts.count} regisztrált játékos)`);

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && npm run server:build",
+    "version": "node scripts/version.mjs",
+    "build": "node scripts/version.mjs && tsc --noEmit && vite build && npm run server:build",
     "test": "vitest run",
     "map:fetch": "node scripts/fetch-osm.mjs",
     "map:buildings": "node scripts/fetch-buildings.mjs",

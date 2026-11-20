@@ -103,6 +103,10 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
 - **Honnan lőnek:** ha találat ér, a tankod körül piros ív mutatja egy
   másodpercig, melyik irányból jött.
 - A tájékozódási pontok (hivatal, templom, rendőrség…) felirata a pályán marad.
+- **A többi játékos neve** a tankja fölött látszik, kis, halvány felirattal
+  (a saját tankod és a botok fölött nincs név). Füstben a név sem látszik.
+- **Verziószám** a bal alsó sarokban (a menüben és játék közben is), pl. „v1.0”.
+  Ebből látszik, hogy a böngésző a legfrissebb játékot tölti-e be.
 
 ### Szabályok
 
