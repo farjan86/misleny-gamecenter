@@ -25,6 +25,13 @@ export const GTEX = {
   oil: 'oil-slick',
   ring: 'fx-ring',
   smoke: 'fx-smoke',
+  /** lerakott akna, gázpalack (felülről), füstfelhő */
+  mine: 'fx-mine',
+  barrel: 'fx-barrel',
+  cloud: 'fx-cloud',
+  /** jobbra mutató nyíl (a bosszú és a szupertárgy irányához), és a találat irányát jelző ív */
+  arrow: 'fx-arrow',
+  hitArc: 'fx-hit-arc',
   /** 2×2-es fehér négyzet: életerősávokhoz és lézersugárhoz nyújtva használjuk */
   px: 'px',
 } as const;
@@ -280,6 +287,116 @@ export function createGameTextures(scene: Phaser.Scene): void {
     g.addColorStop(1, 'rgba(160,160,160,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 28, 28);
+  });
+
+  // akna: sötét tányér tüskékkel, közepén piros gyújtó
+  canvasTexture(scene, GTEX.mine, 28, 28, (ctx) => {
+    ctx.strokeStyle = '#15130f';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(14 + Math.cos(a) * 7, 14 + Math.sin(a) * 7);
+      ctx.lineTo(14 + Math.cos(a) * 12, 14 + Math.sin(a) * 12);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#3d3a2c';
+    ctx.beginPath();
+    ctx.arc(14, 14, 8.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#15130f';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.fillStyle = '#6a6548';
+    ctx.beginPath();
+    ctx.arc(12.5, 12.5, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff3a2a';
+    ctx.beginPath();
+    ctx.arc(14, 14, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // gázpalack felülről: piros henger világos peremmel, szeleppel, figyelmeztető jellel
+  canvasTexture(scene, GTEX.barrel, 28, 28, (ctx) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.arc(16, 16, 10.5, 0, Math.PI * 2);
+    ctx.fill();
+    const g = ctx.createRadialGradient(11, 11, 1, 14, 14, 11);
+    g.addColorStop(0, '#ff7a5a');
+    g.addColorStop(0.6, '#d8322c');
+    g.addColorStop(1, '#8a1a16');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(14, 14, 10.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#3a0c0a';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,220,200,0.7)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(14, 14, 7.2, 0, Math.PI * 2);
+    ctx.stroke();
+    // sárga figyelmeztető háromszög és a szelep
+    ctx.fillStyle = '#ffd84a';
+    ctx.beginPath();
+    ctx.moveTo(14, 9);
+    ctx.lineTo(19, 18);
+    ctx.lineTo(9, 18);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#1a1a14';
+    ctx.fillRect(13.2, 12, 1.6, 3.6);
+    ctx.fillRect(13.2, 16.2, 1.6, 1.2);
+  });
+
+  // füstfelhő: sok egymásra rajzolt, lágy szélű pamacs (a közepe átlátszatlan)
+  canvasTexture(scene, GTEX.cloud, 256, 256, (ctx) => {
+    for (let i = 0; i < 46; i++) {
+      const a = i * 2.399963; // aranyszög: egyenletes szórás
+      const d = Math.sqrt(i / 46) * 84;
+      const x = 128 + Math.cos(a) * d;
+      const y = 128 + Math.sin(a) * d;
+      const r = 34 + ((i * 37) % 22);
+      const shade = 150 + ((i * 53) % 70);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `rgba(${shade},${shade + 4},${shade + 10},0.95)`);
+      g.addColorStop(0.6, `rgba(${shade},${shade + 4},${shade + 10},0.6)`);
+      g.addColorStop(1, `rgba(${shade},${shade + 4},${shade + 10},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+  });
+
+  // jobbra mutató nyíl (fehér: a színt a tint adja)
+  canvasTexture(scene, GTEX.arrow, 44, 44, (ctx) => {
+    ctx.beginPath();
+    ctx.moveTo(40, 22);
+    ctx.lineTo(8, 5);
+    ctx.lineTo(16, 22);
+    ctx.lineTo(8, 39);
+    ctx.closePath();
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#101418';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  });
+
+  // a találat irányát jelző piros ív (jobbra néz)
+  canvasTexture(scene, GTEX.hitArc, 64, 140, (ctx) => {
+    ctx.lineCap = 'round';
+    for (const [width, color] of [[14, 'rgba(120,10,10,0.55)'], [8, 'rgba(255,60,40,0.95)'], [3, 'rgba(255,200,180,0.9)']] as const) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.arc(-70, 70, 120, -0.5, 0.5);
+      ctx.stroke();
+    }
   });
 
   canvasTexture(scene, GTEX.px, 2, 2, (ctx) => {

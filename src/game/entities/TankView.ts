@@ -1,13 +1,15 @@
 // Egy tank megjelenítése: a szimuláció állapotát (méter) képernyőre (világpixel) teszi.
 // A saját tank zöld, a botoké vörös, a többi játékosé kék; fölötte életerősáv,
 // körülötte a pajzs és a sebezhetetlenség gyűrűje. A tank kinézete a szintjének
-// osztályát követi (felderítő … titán), a mérete a szintjét.
+// osztályát követi (felderítő … titán), a mérete a szintjét. Ahogy fogy az
+// életereje, egyre sérültebbnek látszik: karcok és belövések, aztán korom és
+// repedések, végül kiszakadt, izzó páncél és láng a testén.
 
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
 import { angleDiff, LEVEL, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
-import { GTEX } from './gameTextures';
-import { tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
+import { FIRE_FRAMES, GTEX } from './gameTextures';
+import { damageStage, tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
 import { TEX } from './textures';
 
 interface Snapshot {
@@ -25,6 +27,13 @@ export class TankView {
   private readonly shadow: Phaser.GameObjects.Image;
   private readonly hull: Phaser.GameObjects.Image;
   private readonly turret: Phaser.GameObjects.Image;
+  /** a sérülések rajza a test és a torony fölött, és a súlyosan sérült tankon égő láng */
+  private readonly hullDamage: Phaser.GameObjects.Image;
+  private readonly turretDamage: Phaser.GameObjects.Image;
+  private readonly flame: Phaser.GameObjects.Image;
+  /** a kirajzolt sérülés fokozata (0: ép); a GameScene ebből tudja, mennyire füstöl a tank */
+  stage = 0;
+  private stageKey = '';
   /** a lombréteg fölött látszó jelölő, ha a (saját) tank fa alatt áll */
   private readonly marker: Phaser.GameObjects.Image | null;
   private readonly ring: Phaser.GameObjects.Image;
@@ -32,6 +41,8 @@ export class TankView {
   private readonly barFill: Phaser.GameObjects.Image;
   /** a magasabb osztályú tank alatt lüktető fény */
   private aura: Phaser.GameObjects.Image | null = null;
+  /** a szupertárgy lüktető lila fénye */
+  private power: Phaser.GameObjects.Image | null = null;
   /** szintjelvény az életerősáv elején (a 2. szinttől) */
   private badge: Phaser.GameObjects.Text | null = null;
   private hullFrames: readonly string[] = [];
@@ -72,6 +83,13 @@ export class TankView {
       .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
       .setDepth(11)
       .setScale(scale);
+    this.hullDamage = scene.add.image(0, 0, tankTex.damageHull(0, 1)).setDepth(10.5).setVisible(false);
+    this.turretDamage = scene.add
+      .image(0, 0, tankTex.damageTurret(0, 1))
+      .setOrigin(TURRET_PIVOT.x / TURRET_SIZE.w, TURRET_PIVOT.y / TURRET_SIZE.h)
+      .setDepth(11.5)
+      .setVisible(false);
+    this.flame = scene.add.image(0, 0, GTEX.fire, 0).setDepth(11.7).setVisible(false);
     this.ring = scene.add.image(0, 0, GTEX.ring).setDepth(12).setScale(scale).setVisible(false);
     this.marker = enemy ? null : scene.add.image(0, 0, TEX.marker).setDepth(16).setAlpha(0).setScale(scale);
     // életerősáv (a lombréteg fölött, hogy fa alatt is látsszon)
@@ -142,7 +160,11 @@ export class TankView {
     this.shown = visible;
     for (const part of [this.shadow, this.hull, this.turret, this.barBack, this.barFill]) part.setVisible(visible);
     this.aura?.setVisible(visible);
+    this.power?.setVisible(visible);
     this.badge?.setVisible(visible);
+    this.hullDamage.setVisible(visible && this.stage > 0);
+    this.turretDamage.setVisible(visible && this.stage > 0);
+    this.flame.setVisible(visible && this.stage === 3);
     if (!visible) {
       this.ring.setVisible(false);
       this.marker?.setAlpha(0);
@@ -202,6 +224,15 @@ export class TankView {
       const pulse = 0.5 + 0.5 * Math.sin(time * 3.2);
       this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(strong ? 0.3 + 0.16 * pulse : 0.14 + 0.1 * pulse);
     }
+    // szupertárgy: amíg tart, a tank körül erős lila fény lüktet (mindenki látja)
+    if (tank.effects.super > 0) {
+      this.power ??= this.scene.add.image(0, 0, GTEX.light).setDepth(9.5).setTint(0xb45cff).setBlendMode(Phaser.BlendModes.ADD);
+      const pulse = 0.5 + 0.5 * Math.sin(time * 11);
+      this.power.setPosition(x, y).setScale(size * (1.15 + 0.2 * pulse)).setAlpha(0.6 + 0.3 * pulse);
+    } else if (this.power) {
+      this.power.destroy();
+      this.power = null;
+    }
     const off = 6 * size;
     this.shadow.setPosition(x + off, y + off).setRotation(hull);
     this.hull.setPosition(x, y).setRotation(hull);
@@ -214,6 +245,34 @@ export class TankView {
     }
     this.turret.setPosition(x, y).setRotation(turret);
     this.marker?.setPosition(x, y).setRotation(hull);
+
+    // életerő és sérülések: minél kevesebb az életerő, annál roncsoltabb a tank
+    const ratio = Math.max(0, Math.min(1, tank.hp / tankMaxHp(tank)));
+    const stage = damageStage(ratio);
+    const stageKey = `${this.tier}-${stage}`;
+    if (stageKey !== this.stageKey) {
+      this.stageKey = stageKey;
+      this.stage = stage;
+      this.hullDamage.setVisible(stage > 0);
+      this.turretDamage.setVisible(stage > 0);
+      this.flame.setVisible(stage === 3);
+      if (stage > 0) {
+        this.hullDamage.setTexture(tankTex.damageHull(this.tier, stage));
+        this.turretDamage.setTexture(tankTex.damageTurret(this.tier, stage));
+      }
+    }
+    if (stage > 0) {
+      this.hullDamage.setPosition(x, y).setRotation(hull).setScale(size);
+      this.turretDamage.setPosition(x, y).setRotation(turret).setScale(size);
+    }
+    if (stage === 3) {
+      // láng a motortér fölött (a test hátulján), a tankkal együtt fordul
+      const back = -15 * size;
+      this.flame
+        .setPosition(x + Math.cos(hull) * back, y + Math.sin(hull) * back)
+        .setFrame(Math.floor(time * 14) % FIRE_FRAMES)
+        .setScale(size * (0.5 + 0.35 * (1 - ratio / 0.25)));
+    }
 
     // gyűrű: arany villogás sebezhetetlenségnél, kék a pajzstöltetek szerint
     const invulnerable = tank.effects.invulnerable > 0;
@@ -230,7 +289,6 @@ export class TankView {
     }
 
     // életerősáv
-    const ratio = Math.max(0, Math.min(1, tank.hp / tankMaxHp(tank)));
     const top = y - BAR.above * size;
     this.barBack.setPosition(x, top);
     this.badge?.setPosition(x - this.barWidth / 2 - 4 * this.scale, top);
@@ -259,10 +317,11 @@ export class TankView {
   }
 
   destroy(): void {
-    for (const part of [this.shadow, this.hull, this.turret, this.ring, this.barBack, this.barFill, ...this.pips]) part.destroy();
+    for (const part of [this.shadow, this.hull, this.turret, this.hullDamage, this.turretDamage, this.flame, this.ring, this.barBack, this.barFill, ...this.pips]) part.destroy();
     this.heatBack?.destroy();
     this.heatFill?.destroy();
     this.aura?.destroy();
+    this.power?.destroy();
     this.badge?.destroy();
     this.marker?.destroy();
   }

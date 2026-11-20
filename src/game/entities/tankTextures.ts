@@ -33,9 +33,17 @@ export const tankTex = {
   hull: (paint: TankPaint, tier: number, frame: number): string => `tank-${paint}-hull-${tier}-${frame}`,
   /** marks: hány szintet lépett a tank az osztályán belül (0 … TANK_MARKS − 1) */
   turret: (paint: TankPaint, tier: number, marks = 0): string => `tank-${paint}-turret-${tier}-${Math.max(0, Math.min(TANK_MARKS - 1, marks))}`,
+  /** sérülésréteg a test, illetve a torony fölé (stage: 1 … DAMAGE_STAGES) */
+  damageHull: (tier: number, stage: number): string => `tank-damage-hull-${tier}-${stage}`,
+  damageTurret: (tier: number, stage: number): string => `tank-damage-turret-${tier}-${stage}`,
   wreckHull: (tier: number): string => `wreck-hull-${tier}`,
   wreckTurret: (tier: number): string => `wreck-turret-${tier}`,
 } as const;
+
+/** A sérülés fokozatai: 1 – karcos, lyuggatott; 2 – kormos, repedt; 3 – szétlőtt, izzó. */
+export const DAMAGE_STAGES = 3;
+/** A sérülés fokozata a megmaradt életerő arányából (0: ép). */
+export const damageStage = (ratio: number): number => (ratio > 0.75 ? 0 : ratio > 0.5 ? 1 : ratio > 0.25 ? 2 : 3);
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -633,6 +641,110 @@ function char(ctx: Ctx, w: number, h: number): void {
   ctx.putImageData(image, 0, 0);
 }
 
+/** Rögzített magú véletlen: a sérülések minden betöltéskor ugyanoda kerülnek. */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Sérülések rajza egy téglalapba (cx, cy közép, rx, ry félméret): karcok,
+ * belövések, koromfoltok, repedések, a legsúlyosabb fokozatnál kiszakadt,
+ * belül izzó lyukak. A fokozatok egymásra épülnek: ami az 1. fokozatban
+ * megvan, az a 2.-ban és a 3.-ban is ugyanott látszik.
+ */
+function drawDamage(ctx: Ctx, stage: number, seed: number, cx: number, cy: number, rx: number, ry: number): void {
+  const rnd = seeded(seed);
+  const at = (): [number, number] => [cx + (rnd() * 2 - 1) * rx, cy + (rnd() * 2 - 1) * ry];
+  // minden fajtából a legtöbbet sorsoljuk ki, és a fokozat szerinti első néhányat rajzoljuk meg
+  const scorches = Array.from({ length: 7 }, () => ({ p: at(), r: 5 + rnd() * 6 }));
+  const cracks = Array.from({ length: 5 }, () => {
+    let [x, y] = at();
+    let angle = rnd() * Math.PI * 2;
+    const pts = [x, y];
+    for (let i = 0; i < 5; i++) {
+      angle += (rnd() - 0.5) * 1.6;
+      const len = 2.5 + rnd() * 3.5;
+      x += Math.cos(angle) * len;
+      y += Math.sin(angle) * len;
+      pts.push(x, y);
+    }
+    return pts;
+  });
+  const scratches = Array.from({ length: 16 }, () => ({ p: at(), a: rnd() * Math.PI, len: 3 + rnd() * 7 }));
+  const holes = Array.from({ length: 9 }, () => ({ p: at(), r: 1.4 + rnd() * 1.3 }));
+  const tears = Array.from({ length: 3 }, () => ({ p: at(), r: 3.2 + rnd() * 2.2, a: rnd() * Math.PI * 2 }));
+
+  // a súlyosan sérült tank egésze megfeketedik
+  if (stage >= 2) {
+    ctx.fillStyle = stage === 3 ? 'rgba(12,10,8,0.34)' : 'rgba(12,10,8,0.15)';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  for (const s of scorches.slice(0, [0, 2, 4, 7][stage])) {
+    const r = s.r * (stage === 3 ? 1.35 : 1);
+    const g = ctx.createRadialGradient(s.p[0], s.p[1], 0, s.p[0], s.p[1], r);
+    g.addColorStop(0, `rgba(8,7,6,${[0, 0.55, 0.7, 0.85][stage]})`);
+    g.addColorStop(0.6, `rgba(14,12,10,${[0, 0.3, 0.42, 0.55][stage]})`);
+    g.addColorStop(1, 'rgba(14,12,10,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(s.p[0] - r, s.p[1] - r, r * 2, r * 2);
+  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  for (const pts of cracks.slice(0, [0, 0, 3, 5][stage])) {
+    for (const [color, width, shift] of [['rgba(225,228,232,0.55)', 0.8, 0.8], ['#0b0b0d', 1.5, 0]] as const) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(pts[0] + shift, pts[1] + shift);
+      for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i] + shift, pts[i + 1] + shift);
+      ctx.stroke();
+    }
+  }
+  for (const s of scratches.slice(0, [0, 7, 11, 16][stage])) {
+    const dx = Math.cos(s.a) * s.len;
+    const dy = Math.sin(s.a) * s.len;
+    for (const [color, shift] of [['rgba(10,10,12,0.6)', 0.7], ['rgba(222,226,230,0.8)', 0]] as const) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(s.p[0] + shift, s.p[1] + shift);
+      ctx.lineTo(s.p[0] + dx + shift, s.p[1] + dy + shift);
+      ctx.stroke();
+    }
+  }
+  for (const h of holes.slice(0, [0, 3, 6, 9][stage])) {
+    disc(ctx, h.p[0], h.p[1], h.r + 0.9, 'rgba(200,205,210,0.75)');
+    disc(ctx, h.p[0], h.p[1], h.r, '#08080a');
+  }
+  if (stage === 3) {
+    // kiszakadt páncél: szabálytalan, belül izzó lyukak
+    for (const t of tears) {
+      const pts: number[] = [];
+      for (let i = 0; i < 7; i++) {
+        const a = t.a + (i / 7) * Math.PI * 2;
+        const r = t.r * (0.6 + rnd() * 0.6);
+        pts.push(t.p[0] + Math.cos(a) * r, t.p[1] + Math.sin(a) * r);
+      }
+      poly(ctx, pts, '#070608', 'rgba(205,210,214,0.7)', 0.9);
+      const g = ctx.createRadialGradient(t.p[0], t.p[1], 0, t.p[0], t.p[1], t.r * 0.7);
+      g.addColorStop(0, 'rgba(255,214,120,0.95)');
+      g.addColorStop(0.5, 'rgba(255,110,30,0.75)');
+      g.addColorStop(1, 'rgba(160,30,10,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(t.p[0], t.p[1], t.r * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
 export function createTankTextures(scene: Phaser.Scene): void {
   const ox = (HULL_SIZE.w - BODY.w) / 2;
   const oy = (HULL_SIZE.h - BODY.h) / 2;
@@ -651,7 +763,18 @@ export function createTankTextures(scene: Phaser.Scene): void {
       });
       variant(tankTex.hull('bot', tier, frame), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
       variant(tankTex.hull('rival', tier, frame), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
-      if (frame === 0) variant(tankTex.wreckHull(tier), own, char);
+      if (frame === 0) {
+        variant(tankTex.wreckHull(tier), own, char);
+        // sérülésrétegek: a rajz csak ott látszik, ahol a tank teste van
+        for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
+          canvasTexture(scene, tankTex.damageHull(tier, stage), HULL_SIZE.w, HULL_SIZE.h, (ctx) => {
+            drawDamage(ctx, stage, 101 + tier * 17, HULL_SIZE.w / 2, HULL_SIZE.h / 2, 27 + tier * 2.2, 16 + tier * 2.6);
+            ctx.globalCompositeOperation = 'destination-in';
+            ctx.drawImage(own, 0, 0);
+            ctx.globalCompositeOperation = 'source-over';
+          });
+        }
+      }
     }
     for (let marks = 0; marks < TANK_MARKS; marks++) {
       const own = canvasTexture(scene, tankTex.turret('own', tier, marks), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
@@ -661,7 +784,17 @@ export function createTankTextures(scene: Phaser.Scene): void {
       });
       variant(tankTex.turret('bot', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'red'));
       variant(tankTex.turret('rival', tier, marks), own, (ctx, w, h) => recolor(ctx, w, h, 'blue'));
-      if (marks === 0) variant(tankTex.wreckTurret(tier), own, char);
+      if (marks === 0) {
+        variant(tankTex.wreckTurret(tier), own, char);
+        for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
+          canvasTexture(scene, tankTex.damageTurret(tier, stage), TURRET_SIZE.w, TURRET_SIZE.h, (ctx) => {
+            drawDamage(ctx, stage, 503 + tier * 29, TURRET_PIVOT.x + 8, TURRET_PIVOT.y, 26, 9 + tier * 1.2);
+            ctx.globalCompositeOperation = 'destination-in';
+            ctx.drawImage(own, 0, 0);
+            ctx.globalCompositeOperation = 'source-over';
+          });
+        }
+      }
     }
   }
 }

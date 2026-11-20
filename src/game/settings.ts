@@ -6,7 +6,7 @@ import type { MatchSettings } from './sim/match';
 const STORAGE_KEY = 'tank-misleny.settings.v2';
 
 /** A billentyűvel kiváltható műveletek. */
-export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'deploy', 'scores', 'map', 'fullscreen', 'info'] as const;
+export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'deploy', 'mine', 'smoke', 'strike', 'scores', 'map', 'fullscreen', 'info'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -18,6 +18,9 @@ export const ACTION_LABEL: Record<Action, string> = {
   boost: 'Gyorsító',
   oil: 'Olajfolt lerakása',
   deploy: 'Ágyú telepítése',
+  mine: 'Akna lerakása',
+  smoke: 'Füst',
+  strike: 'Tüzérségi csapás a célkeresztre',
   scores: 'Eredménytábla (amíg nyomva van)',
   map: 'Nagy térkép',
   fullscreen: 'Teljes képernyő',
@@ -36,11 +39,16 @@ export const DEFAULT_KEYS: KeyBindings = {
   boost: ['ShiftLeft', 'ShiftRight'],
   oil: ['KeyE'],
   deploy: ['KeyQ'],
+  mine: ['KeyR'],
+  smoke: ['KeyC'],
+  strike: ['KeyX'],
   scores: ['Tab'],
   map: ['KeyM'],
   fullscreen: ['KeyF'],
   info: ['KeyH'],
 };
+
+export const DEFAULT_VOLUME = 80;
 
 export interface Settings {
   /** az utoljára használt játékosnév (a belépési űrlap ezzel töltődik ki) */
@@ -48,6 +56,8 @@ export interface Settings {
   /** a belépve maradás kulcsa (a szervertől kapjuk); üres, ha nincs belépve */
   token: string;
   keys: KeyBindings;
+  /** a hangerő százalékban (0: néma) */
+  volume: number;
   /** az utoljára létrehozott játék beállításai (a következő létrehozásnál ezek az alapértékek) */
   lastMatch: Partial<MatchSettings> | null;
 }
@@ -63,7 +73,8 @@ function sanitize(raw: Partial<Settings> | null): Settings {
   }
   const name = typeof raw?.name === 'string' ? raw.name.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 18) : '';
   const token = typeof raw?.token === 'string' && raw.token.length < 200 ? raw.token : '';
-  return { name, token, keys, lastMatch: raw?.lastMatch && typeof raw.lastMatch === 'object' ? raw.lastMatch : null };
+  const volume = typeof raw?.volume === 'number' && Number.isFinite(raw.volume) ? Math.max(0, Math.min(100, Math.round(raw.volume))) : DEFAULT_VOLUME;
+  return { name, token, keys, volume, lastMatch: raw?.lastMatch && typeof raw.lastMatch === 'object' ? raw.lastMatch : null };
 }
 
 export function loadSettings(): Settings {

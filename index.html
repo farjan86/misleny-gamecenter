@@ -32,6 +32,8 @@
       </div>
       <!-- eredménytábla: a Tab nyomva tartására vagy az órára kattintva jelenik meg -->
       <div id="hud-scores" class="panel hidden"></div>
+      <!-- kilövési értesítő: ki kit lőtt ki -->
+      <div id="hud-feed"></div>
       <div id="hud-toast" class="panel"></div>
       <div id="labels"></div>
       <div id="loading">Pálya betöltése…</div>
@@ -73,6 +75,7 @@
 
       <div class="screen hidden" id="screen-settings">
         <h2>Beállítások</h2>
+        <label class="slider" id="volume-field">Hangerő <b id="val-volume"></b><input type="range" id="sl-volume" min="0" max="100" step="5" /></label>
         <p class="sub">Billentyűk – kattints egy mezőre, majd nyomd meg az új billentyűt (Esc: mégsem, Delete: törlés)</p>
         <div id="key-table"></div>
         <p class="note">Az egér mindig céloz; a bal gomb lő, a jobb gomb olajfoltot rak le.</p>

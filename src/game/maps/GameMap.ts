@@ -214,6 +214,8 @@ export class GameMap implements Terrain {
   /** a közutak a hosszukkal, a véletlen helyek kisorsolásához (első használatkor épül fel) */
   private spotRoads: { road: RoadFeature; length: number }[] | null = null;
   private spotTotal = 0;
+  /** a játéktérbe eső épületek sorszámai (a gázpalackok helyéhez) */
+  private barrelHouses: number[] | null = null;
   /** a tárgyaknak, születési helynek használható utak játéktérbe eső hossza (m) */
   private spotInside = 0;
 
@@ -474,6 +476,43 @@ export class GameMap implements Terrain {
     return null;
   }
 
+  /**
+   * Véletlen hely egy ház fala mellett, a játéktéren belül (gázpalacknak,
+   * üzemanyaghordónak): a fal külső oldalán, nem úttesten. null, ha a kisorsolt
+   * hely nem használható.
+   */
+  barrelSpot(rnd: () => number): { x: number; y: number } | null {
+    const area = this.bounds;
+    if (!this.barrelHouses) {
+      this.barrelHouses = [];
+      this.buildingBoxes.forEach((box, n) => {
+        if (area && (box[0] < area.minX + 4 || box[1] < area.minY + 4 || box[2] > area.maxX - 4 || box[3] > area.maxY - 4)) return;
+        this.barrelHouses!.push(n);
+      });
+    }
+    if (this.barrelHouses.length === 0) return null;
+    const pts = this.data.buildings[this.barrelHouses[Math.floor(rnd() * this.barrelHouses.length)]].pts;
+    const edges = pts.length / 2;
+    const e = Math.floor(rnd() * edges);
+    const ax = pts[e * 2];
+    const ay = pts[e * 2 + 1];
+    const bx = pts[((e + 1) % edges) * 2];
+    const by = pts[((e + 1) % edges) * 2 + 1];
+    const len = Math.hypot(bx - ax, by - ay);
+    if (len < 3) return null;
+    const t = 0.2 + rnd() * 0.6;
+    for (const side of [1, -1]) {
+      const x = ax + (bx - ax) * t - ((by - ay) / len) * 1.5 * side;
+      const y = ay + (by - ay) * t + ((bx - ax) / len) * 1.5 * side;
+      if (pointInPolygon(x, y, pts)) continue;
+      if (this.walls.resolveCircle(x, y, 1).hit || this.speedFactor(x, y) >= 1) return null;
+      // egy szomszédos (összeépült) ház belsejébe sem kerülhet
+      for (const n of this.buildingIndex.query(x, y, x, y)) if (pointInPolygon(x, y, this.data.buildings[n].pts)) return null;
+      return { x, y };
+    }
+    return null;
+  }
+
   /** A járművel járható közutak (a forgalom úthálózatához). */
   driveRoads(): NetRoad[] {
     return this.data.roads.filter((r) => DRIVABLE.has(r.kind) && !r.kind.startsWith('motorway')).map((r) => ({ pts: r.pts, width: r.width, main: MAIN_ROADS.has(r.kind) }));
@@ -520,6 +559,7 @@ export class GameMap implements Terrain {
   setArea(area: { minX: number; minY: number; maxX: number; maxY: number } | null): void {
     this.walls.setOwnerEnabled(this.borderOwner, false);
     this.bounds = area;
+    this.barrelHouses = null;
     this.spotRoads = null;
     this.spotInside = 0;
     if (!area) return;

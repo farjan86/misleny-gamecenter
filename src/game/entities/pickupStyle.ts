@@ -262,6 +262,61 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
       ctx.restore();
     },
   },
+  mine: {
+    label: 'Akna',
+    hint: 'R: lerakás a tank mögé – az ellenfél alatt robban (2 db)',
+    color: '#5a4a2e',
+    icon: (ctx) => {
+      // tányérakna felülről: korong tüskékkel, közepén gyújtó
+      stroke(ctx, 3);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        path(ctx, [24 + Math.cos(a) * 9, 24 + Math.sin(a) * 9, 24 + Math.cos(a) * 15, 24 + Math.sin(a) * 15]);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(24, 24, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#d8322c';
+      ctx.beginPath();
+      ctx.arc(24, 24, 4, 0, Math.PI * 2);
+      ctx.fill();
+    },
+  },
+  smoke: {
+    label: 'Füst',
+    hint: 'C: füstfelhő a tank köré – eltakar, a botok és az ágyúk nem látnak be (2 db)',
+    color: '#6a7480',
+    icon: (ctx) => {
+      // gomolygó felhő
+      ctx.fillStyle = '#ffffff';
+      for (const [x, y, r] of [[17, 27, 7], [26, 21, 8.5], [32, 28, 6.5], [23, 30, 6]]) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    },
+  },
+  super: {
+    label: 'Szupertárgy',
+    hint: 'teljes javítás, tele pajzs és 20 másodpercig háromszoros sebzés!',
+    color: '#8a2be2',
+    icon: (ctx) => {
+      // ötágú csillag
+      ctx.fillStyle = '#ffd84a';
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        const r = i % 2 === 0 ? 14 : 6;
+        ctx.lineTo(24 + Math.cos(a) * r, 24 + Math.sin(a) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+      stroke(ctx, 1.5, '#ffffff');
+      ctx.stroke();
+    },
+  },
 };
 
 export const pickupTexture = (kind: PickupKind): string => `pickup-${kind}`;

@@ -19,12 +19,15 @@ import { RoadLabelLayer } from '../maps/RoadLabelLayer';
 import type { ClientWorld } from '../net/ClientWorld';
 import { BASE_PPM } from '../quality';
 import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
+import { BARREL, SMOKE, STRIKE } from '../sim/gadgets';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
 import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankSize, tankTier, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { toggleFullscreen } from '../ui/fullscreen';
-import { Hud, type HudFrame, type LoadoutItem } from '../ui/Hud';
+import { Hud, type HudFrame, type LoadoutItem, type MapMark } from '../ui/Hud';
 
+/** Aki kilőtt, az újraéledés után ennyi ideig jelölve látszik (mp). */
+const REVENGE_SECONDS = 25;
 /** Ha a térkép ennyi idő alatt sem készül el, a töltőképernyő akkor is eltűnik. */
 const LOADING_TIMEOUT_MS = 8000;
 /** A robbanás mérete a találat fajtája szerint. */
@@ -51,6 +54,8 @@ export interface GameSceneData {
   ppm: number;
   world: ClientWorld;
   keys: KeyBindings;
+  /** a hangerő 0 és 1 között */
+  volume: number;
   /** a játékos a „Kilépés a meccsből” gombra kattintott */
   onLeave: () => void;
 }
@@ -81,6 +86,22 @@ export class GameScene extends Phaser.Scene {
   private readonly bulletViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly pickupViews = new Map<number, Phaser.GameObjects.Image>();
   private readonly oilViews = new Map<number, Phaser.GameObjects.Image>();
+  private readonly mineViews = new Map<number, Phaser.GameObjects.Image>();
+  private readonly barrelViews = new Map<number, Phaser.GameObjects.Image>();
+  /** a füstfelhők: két, ellentétesen forgó réteg */
+  private readonly smokeViews = new Map<number, Phaser.GameObjects.Image[]>();
+  /** felröppenő sebzésszámok és a találat irányát jelző ívek (újrahasznált objektumok) */
+  private readonly numberPool: Phaser.GameObjects.Text[] = [];
+  private readonly arcPool: Phaser.GameObjects.Image[] = [];
+  /** bosszú: aki kilőtt – az újraéledés után egy ideig jelölve látszik (live: már újraéledtem) */
+  private revenge: { id: number; until: number; live: boolean } | null = null;
+  private revengeArrow: Phaser.GameObjects.Image | null = null;
+  /** a bejelentett vagy már kint lévő szupertárgy helye */
+  private superMark: { x: number; y: number; here: boolean; since: number } | null = null;
+  private superArrow: Phaser.GameObjects.Image | null = null;
+  /** a folyamatban lévő tüzérségi csapások helye (a térképhez) */
+  private readonly strikeMarks: { x: number; y: number; until: number }[] = [];
+  private readonly marks: MapMark[] = [];
   /** a roncsok képei: test és torony */
   private readonly wreckViews = new Map<number, Phaser.GameObjects.Image[]>();
   /** a nemrég megsérült épületek életerősávjai (az épület sorszáma szerint) */
@@ -91,11 +112,11 @@ export class GameScene extends Phaser.Scene {
   private readonly beamPool: Phaser.GameObjects.Image[] = [];
   private readonly smokePool: Phaser.GameObjects.Image[] = [];
   // képkockánként újrahasznált objektumok (ne keletkezzen fölösleges szemét)
-  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false };
+  private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false, mine: false, smoke: false, strike: null };
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
-    tanks: [], pickups: null, focusId: 0,
+    tanks: [], pickups: null, focusId: 0, smokes: [], marks: [],
   };
   private canvasRectStale = true;
   private accumulator = 0;
@@ -104,8 +125,16 @@ export class GameScene extends Phaser.Scene {
   private dropLatch = false;
   /** az ágyú telepítését kérő leütés, ugyanígy */
   private deployLatch = false;
+  /** akna, füst és a tüzérségi csapás célpontja, ugyanígy */
+  private mineLatch = false;
+  private smokeLatch = false;
+  private strikeLatch: { x: number; y: number } | null = null;
   /** a saját szintlépés szövege: a kilövés üzenetéhez fűzve jelenik meg (a két esemény együtt érkezik) */
   private levelNote = '';
+  /** az előző képkocka állapota a hangokhoz: gyorsított-e a tank, kevés volt-e az életereje, hány másodpercet mutatott az óra */
+  private wasBoosting = false;
+  private wasLow = false;
+  private lastSecond = -1;
   private ready = false;
   private startedAt = 0;
   private frame = 0;
@@ -129,6 +158,7 @@ export class GameScene extends Phaser.Scene {
     this.spriteScale = data.ppm / BASE_PPM;
     this.world = data.world;
     this.bindings = data.keys;
+    this.sfx.setVolume(data.volume);
     this.onLeave = data.onLeave;
     this.startedAt = performance.now();
   }
@@ -154,6 +184,10 @@ export class GameScene extends Phaser.Scene {
     });
     this.hud = new Hud(this.map, this.ppm);
     this.hud.onLeave(() => this.onLeave());
+    // a nagy térképre kattintva a tüzérségi csapás a pálya bármely pontjára kérhető
+    this.hud.onMapClick((x, y) => {
+      if (this.requestStrike(x, y)) this.hud.toggleMap();
+    });
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
 
     // A billentyűket közvetlenül a böngésző eseményeiből követjük, a beállított kiosztás szerint.
@@ -169,6 +203,9 @@ export class GameScene extends Phaser.Scene {
       else if (action === 'fullscreen') toggleFullscreen();
       else if (action === 'oil') this.dropLatch = true;
       else if (action === 'deploy') this.deployLatch = true;
+      else if (action === 'mine') this.mineLatch = true;
+      else if (action === 'smoke') this.smokeLatch = true;
+      else if (action === 'strike') this.requestStrike();
       else if (action === 'scores') this.hud.holdScores(true);
     }) as EventListener);
     this.listen(window, 'keyup', ((ev: KeyboardEvent) => {
@@ -209,6 +246,7 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.centerOn(this.camX, this.camY);
     }
     const s = this.world.room.settings;
+    this.sfx.ambience(s.weather);
     this.hud.toast(`${s.name} – ${s.minutes} perc, ${WEATHER_LABEL[s.weather]}. Az nyer, aki a legtöbb tankot lövi ki!`);
   }
 
@@ -252,6 +290,9 @@ export class GameScene extends Phaser.Scene {
     input.boost = this.held('boost');
     input.drop = this.dropLatch || pointer.rightButtonDown();
     input.deploy = this.deployLatch;
+    input.mine = this.mineLatch;
+    input.smoke = this.smokeLatch;
+    input.strike = this.strikeLatch;
     return input;
   }
 
@@ -285,6 +326,9 @@ export class GameScene extends Phaser.Scene {
       world.input(this.readInput());
       this.dropLatch = false;
       this.deployLatch = false;
+      this.mineLatch = false;
+      this.smokeLatch = false;
+      this.strikeLatch = null;
       this.accumulator -= SIM_DT;
     }
 
@@ -292,11 +336,19 @@ export class GameScene extends Phaser.Scene {
     this.syncTanks(this.accumulator / SIM_DT, netAlpha, seconds, this.view);
     this.syncBullets((now - world.snapAt) / 1000);
     if (world.listsChanged) this.syncOils();
+    this.syncGadgets(seconds);
     this.syncWrecks(this.view);
 
     const own = world.own;
     const focus = world.focus;
-    this.sfx.engine(own && own.alive ? (Math.abs(own.speed) / TANK.maxSpeed) * (own.boosting ? 1.15 : 1) : 0);
+    // a kilőtt tank motorja hallgat; a nagyobb tanké mélyebben és hangosabban szól
+    this.sfx.engine(own && own.alive ? (Math.abs(own.speed) / TANK.maxSpeed) * (own.boosting ? 1.15 : 1) : -1, own ? tankSize(own) : 1);
+    const boosting = !!own && own.alive && own.boosting;
+    if (boosting && !this.wasBoosting) this.sfx.boost();
+    this.wasBoosting = boosting;
+    const low = !!own && own.alive && own.hp / tankMaxHp(own) <= 0.25;
+    if (low && !this.wasLow) this.sfx.lowHp();
+    this.wasLow = low;
 
     // a kamera a saját tankot követi (kiesés után egy másik játékosét); ha kilőtték, ott marad, ahol történt
     const focusView = focus ? this.tankViews.get(focus.id) : undefined;
@@ -351,6 +403,9 @@ export class GameScene extends Phaser.Scene {
     f.focusId = focus.id;
     const own = world.own;
     f.pickups = own && own.effects.radar > 0 ? world.pickups : null;
+    f.smokes = world.smokes;
+    f.marks = this.updateMarks(view);
+    this.hud.setAiming(!!own && own.alive && own.strikes > 0);
     this.hud.update(f);
 
     // a saját tank fölött: a gyorsító hőfoka és az életek
@@ -364,6 +419,16 @@ export class GameScene extends Phaser.Scene {
       this.shownClock = world.timeLeft;
       this.shownScore = score;
       this.hud.setClock(world.timeLeft, score);
+      // az óra hangjai: figyelmeztetés egy és fél perccel a vége előtt, kattogás az utolsó tíz másodpercben
+      const second = Math.ceil(world.timeLeft);
+      if (second !== this.lastSecond) {
+        if (this.lastSecond > 0) {
+          if (second === 60 || second === 30) this.sfx.warning();
+          else if (second === 0) this.sfx.finish();
+          else if (second <= 10) this.sfx.tick(second <= 3);
+        }
+        this.lastSecond = second;
+      }
     }
     if (this.frame % 20 === 0 && this.hud.infoOpen) this.hud.setInfo(this.infoHtml());
     if (this.hud.scoresOpen && this.frame % 10 === 0) this.hud.setScores(this.scoresHtml());
@@ -431,6 +496,9 @@ export class GameScene extends Phaser.Scene {
     if (own.shield > 0) add('shield', `×${own.shield}`);
     if (own.oil > 0) add('oil', `×${own.oil}`);
     if (own.turrets > 0) add('turret', `×${own.turrets}`);
+    if (own.mines > 0) add('mine', `×${own.mines}`);
+    if (own.smokes > 0) add('smoke', `×${own.smokes}`);
+    if (own.strikes > 0) items.push({ icon: '', label: `✦ Tüzérség (${keysText(this.bindings, 'strike')})`, count: `×${own.strikes}` });
     for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) add(kind, `${Math.ceil(own.effects[kind])} mp`);
     return items;
   }
@@ -460,6 +528,10 @@ export class GameScene extends Phaser.Scene {
       if (own.shield > 0) extras.push(`${PICKUP_STYLE.shield.label} ×${own.shield}`);
       if (own.oil > 0) extras.push(`${PICKUP_STYLE.oil.label} ×${own.oil}`);
       if (own.turrets > 0) extras.push(`${PICKUP_STYLE.turret.label} ×${own.turrets}`);
+      if (own.mines > 0) extras.push(`${PICKUP_STYLE.mine.label} ×${own.mines}`);
+      if (own.smokes > 0) extras.push(`${PICKUP_STYLE.smoke.label} ×${own.smokes}`);
+      if (own.strikes > 0) extras.push(`tüzérségi csapás ×${own.strikes}`);
+      state.push(['Sorozat', `${own.streak} kilövés halál nélkül (minden ${STRIKE.every}. után tüzérségi csapás jár)`]);
       if (extras.length) state.push(['Nálad van', extras.join(', ')]);
     }
     const players: [string, string][] = this.world.standings.map((p) => [escapeHtml(p.name), `${p.kills} kilövés · ${p.deaths} halál${p.gone ? ' (kilépett)' : ''}`]);
@@ -490,9 +562,14 @@ export class GameScene extends Phaser.Scene {
       case 'shot': {
         const volume = mine ? 1 : this.loudness(ev.x, ev.y) * 0.7;
         if (volume > 0) {
+          // a nagyobb tank ágyúja mélyebben szól; a telepített ágyúnak (nincs tankja) saját hangja van
+          const gunner = world.tank(ev.tank);
+          const size = gunner ? tankSize(gunner) : 1;
           if (ev.kind === 'laser') this.sfx.laser(volume);
           else if (ev.kind === 'rocket') this.sfx.rocket(volume);
-          else this.sfx.shot(volume);
+          else if (ev.kind === 'heavy') this.sfx.heavyShot(volume, size);
+          else if (ev.tank === 0) this.sfx.turretShot(volume);
+          else this.sfx.shot(volume, size);
         }
         if (ev.kind !== 'laser') {
           const flash = this.flashPool.pop() ?? this.add.image(0, 0, TEX.flash).setOrigin(0.15, 0.5).setDepth(12);
@@ -510,7 +587,7 @@ export class GameScene extends Phaser.Scene {
       }
       case 'impact': {
         const volume = this.loudness(ev.x, ev.y);
-        if (volume > 0 && ev.kind !== 'laser') this.sfx.explosion(Math.max(0.15, volume) * (ev.kind === 'shell' ? 1 : 1.3));
+        if (volume > 0) this.sfx.impact(ev.kind, Math.max(0.15, volume));
         this.boom(ev.x, ev.y, BLAST[ev.kind]);
         this.scar(ev.x, ev.y, SCAR[ev.kind]);
         this.weather.flash(ev.x, ev.y, 8 + BLAST[ev.kind] * 5, 0.3);
@@ -530,12 +607,12 @@ export class GameScene extends Phaser.Scene {
       case 'pickup':
         if (mine) {
           const style = PICKUP_STYLE[ev.kind];
-          this.sfx.pickup();
+          this.sfx.pickup(ev.kind);
           this.hud.toast(`${style.label} – ${style.hint}`);
         }
         break;
       case 'oil':
-        if (mine) this.sfx.bump();
+        if (mine) this.sfx.oilDrop();
         break;
       case 'slip':
         if (mine) {
@@ -550,11 +627,16 @@ export class GameScene extends Phaser.Scene {
         }
         break;
       case 'hit':
+        // felröppenő sebzésszám: piros, ha engem ért; sárga, ha én okoztam; különben fehér
+        if (ev.amount > 0) this.damageNumber(ev.x, ev.y, ev.amount, mine ? '#ff5a4a' : ev.by === myId ? '#ffd84a' : '#f0f0f0');
         if (mine) {
           this.sfx.hit(ev.absorbed !== null);
           this.cameras.main.shake(140, ev.absorbed ? 0.002 : 0.005);
+          // honnan jött: a támadó felé mutató piros ív (ha nem látszik a támadó, a becsapódás iránya)
+          const attacker = world.tank(ev.by);
+          this.hitFrom(attacker ? attacker.x : ev.x, attacker ? attacker.y : ev.y);
         } else if (ev.by === myId) {
-          this.sfx.hit(ev.absorbed !== null);
+          this.sfx.hitMarker(ev.absorbed !== null);
         }
         break;
       case 'destroyed':
@@ -562,13 +644,20 @@ export class GameScene extends Phaser.Scene {
         this.scar(ev.x, ev.y, 3);
         this.fires.ignite(ev.x, ev.y, WRECK_FIRE.size, WRECK_FIRE.life);
         this.weather.flash(ev.x, ev.y, 26, 0.5);
-        this.sfx.explosion(Math.max(0.4, this.loudness(ev.x, ev.y)) * 1.6);
+        this.sfx.tankDestroyed(Math.max(0.4, this.loudness(ev.x, ev.y)));
+        if (ev.by === myId && !mine) this.sfx.kill();
+        this.killFeed(ev.tank, ev.by);
+        // bosszú: aki kilőtt, az újraéledésem után egy ideig jelölve lesz; ha őt lövik ki, a jel megszűnik
+        const avenged = this.revenge !== null && this.revenge.live && this.revenge.id === ev.tank && ev.by === myId;
+        if (this.revenge && this.revenge.id === ev.tank) this.revenge = null;
+        if (mine && ev.by > 0 && ev.by !== myId) this.revenge = { id: ev.by, until: 0, live: false };
         if (mine) {
+          this.sfx.death();
           this.cameras.main.shake(400, 0.009);
           this.hud.toast('Kilőttek! Mindjárt újraéledsz…');
         } else if (ev.by === myId) {
           const name = world.nameOf(ev.tank);
-          this.hud.toast((name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
+          this.hud.toast((avenged ? 'Bosszú! ' : '') + (name === 'Bot' ? 'Bot kilőve!' : `Kilőtted: ${name}!`) + (this.levelNote ? ` ${this.levelNote}` : ''));
           this.levelNote = '';
         }
         break;
@@ -620,7 +709,7 @@ export class GameScene extends Phaser.Scene {
         if (promoted && tank && this.loudness(tank.x, tank.y) > 0) this.flare(tank.x * ppm, tank.y * ppm, tankSize(tank));
         if (mine) {
           if (promoted) this.sfx.fanfare();
-          else this.sfx.pickup();
+          else this.sfx.levelUp();
           // a szintlépést kiváltó kilövés eseménye közvetlenül ezután jön: az üzenete ezzel a szöveggel egészül ki
           this.levelNote = promoted ? `${ev.level}. szint – új tank: ${TIER_NAMES[tier]}!` : `${ev.level}. szint: nagyobb, erősebb tank.`;
           this.hud.toast(this.levelNote);
@@ -636,7 +725,7 @@ export class GameScene extends Phaser.Scene {
         this.weather.flash(ev.x, ev.y, ev.radius * 2.4, 0.5);
         const volume = this.loudness(ev.x, ev.y);
         if (volume > 0) {
-          this.sfx.explosion(Math.max(0.3, volume) * 1.5);
+          this.sfx.vehicleBlast(Math.max(0.3, volume), size / 2.4);
           this.cameras.main.shake(260, 0.006 * volume);
         }
         break;
@@ -654,20 +743,93 @@ export class GameScene extends Phaser.Scene {
       }
       case 'deploy':
         if (mine) {
-          this.sfx.bump();
+          this.sfx.deploy();
           this.hud.toast('Ágyú telepítve – lő minden ellenségre a közelében');
         }
+        break;
+      case 'mine':
+        if (mine) {
+          this.sfx.mineLay();
+          this.hud.toast('Akna lerakva – az ellenfél alatt robban');
+        }
+        break;
+      case 'smoke': {
+        const volume = mine ? 1 : this.loudness(ev.x, ev.y);
+        if (volume > 0) this.sfx.smokeHiss(volume);
+        break;
+      }
+      case 'strike': {
+        // figyelmeztető kör a földön, amíg a lövedékek hullanak; a térképen is látszik
+        const length = ev.delay + STRIKE.shells * STRIKE.interval + 0.4;
+        this.strikeMarks.push({ x: ev.x, y: ev.y, until: this.time.now / 1000 + length });
+        const ring = this.add
+          .image(ev.x * ppm, ev.y * ppm, GTEX.ring)
+          .setDepth(8.5)
+          .setTint(0xff3a2a)
+          .setScale((ev.radius * ppm) / 48)
+          .setAlpha(0.9);
+        this.tweens.add({ targets: ring, alpha: 0.35, duration: 220, yoyo: true, repeat: -1 });
+        this.time.delayedCall(length * 1000, () => ring.destroy());
+        const volume = mine ? 1 : this.loudness(ev.x, ev.y);
+        if (volume > 0) this.sfx.incoming(Math.max(0.4, volume));
+        const own = world.own;
+        if (mine) this.hud.toast('Tüzérségi csapás úton!');
+        else if (own && own.alive && Math.hypot(own.x - ev.x, own.y - ev.y) < ev.radius + 12) this.hud.toast('Tüzérségi csapás érkezik – ki a piros körből!');
+        break;
+      }
+      case 'boom': {
+        // akna, gázpalack vagy tüzérségi lövedék robbanása
+        const size = ev.kind === 'barrel' ? 3 : ev.kind === 'mine' ? 2.5 : 2.7;
+        this.boom(ev.x, ev.y, size);
+        this.scar(ev.x, ev.y, size * 0.9);
+        this.weather.flash(ev.x, ev.y, ev.radius * 2.4, 0.45);
+        if (ev.kind === 'barrel') this.fires.ignite(ev.x, ev.y, 1.9, 16);
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume > 0) {
+          if (ev.kind === 'barrel') this.sfx.vehicleBlast(Math.max(0.3, volume), 1.1);
+          else this.sfx.explosion(Math.max(0.3, volume) * 1.2, ev.kind === 'shell' ? 1.5 : 1.2);
+          this.cameras.main.shake(220, 0.006 * volume);
+        }
+        break;
+      }
+      case 'streak':
+        if (mine) {
+          this.sfx.streak();
+          // a kilövés üzenete után jelenik meg, hogy ne írja felül
+          const text = `${ev.streak} kilövés egyhuzamban – tüzérségi csapás jár! ${keysText(this.bindings, 'strike')}: a célkeresztre, vagy kattints a nagy térképen`;
+          this.time.delayedCall(1700, () => this.hud.toast(text));
+        }
+        break;
+      case 'superSoon':
+        this.superMark = { x: ev.x, y: ev.y, here: false, since: this.time.now / 1000 };
+        this.sfx.announce();
+        this.hud.toast(`Szupertárgy érkezik ${ev.seconds} másodperc múlva – a térképen lila jel mutatja!`);
+        break;
+      case 'superHere':
+        this.superMark = { x: ev.x, y: ev.y, here: true, since: this.time.now / 1000 };
+        this.sfx.announce();
+        this.hud.toast('Megjelent a szupertárgy – aki felveszi, háromszorosat sebez!');
         break;
       case 'turretDown':
         this.boom(ev.x, ev.y, 1.9);
         this.scar(ev.x, ev.y, 1.5);
         this.weather.flash(ev.x, ev.y, 16, 0.4);
-        if (this.loudness(ev.x, ev.y) > 0) this.sfx.explosion(Math.max(0.3, this.loudness(ev.x, ev.y)));
+        if (this.loudness(ev.x, ev.y) > 0) this.sfx.turretDown(Math.max(0.3, this.loudness(ev.x, ev.y)));
         if (ev.owner === myId) this.hud.toast('Megsemmisült az egyik ágyúd!');
         break;
       case 'respawn': {
         const tank = world.tank(ev.tank);
         if (tank) this.tankViews.get(ev.tank)?.snap(tank);
+        if (mine) {
+          this.sfx.respawn();
+          if (this.revenge && !this.revenge.live) {
+            this.revenge.live = true;
+            this.revenge.until = this.time.now / 1000 + REVENGE_SECONDS;
+            const name = world.nameOf(this.revenge.id);
+            this.sfx.revenge();
+            this.hud.toast(`Bosszú: ${name === 'Bot' ? 'a bot, amelyik kilőtt,' : name} ${REVENGE_SECONDS} másodpercig jelölve van!`);
+          }
+        }
         break;
       }
     }
@@ -699,6 +861,220 @@ export class GameScene extends Phaser.Scene {
     this.structureBars.delete(index);
   }
 
+  /**
+   * Tüzérségi csapás kérése: a megadott helyre, különben oda, ahová az egér mutat.
+   * Igazat ad, ha a kérés elment.
+   */
+  private requestStrike(x?: number, y?: number): boolean {
+    const own = this.world.own;
+    if (!own || !own.alive) return false;
+    if (own.strikes <= 0) {
+      this.hud.toast(`Nincs kérhető tüzérségi csapás – ${STRIKE.every} kilövés kell hozzá halál nélkül`);
+      return false;
+    }
+    if (x === undefined || y === undefined) {
+      const pointer = this.input.activePointer;
+      pointer.updateWorldPoint(this.cameras.main);
+      x = pointer.worldX / this.ppm;
+      y = pointer.worldY / this.ppm;
+    }
+    this.strikeLatch = { x, y };
+    this.sfx.radio();
+    return true;
+  }
+
+  /** Új sor a kilövési értesítőbe: ki kit lőtt ki (a saját nevem kiemelve). */
+  private killFeed(victimId: number, killerId: number): void {
+    const world = this.world;
+    const tag = (id: number): string => {
+      const name = world.nameOf(id);
+      const cls = id === world.myId ? 'me' : name === 'Bot' ? 'bot' : '';
+      return `<span class="${cls}">${escapeHtml(name)}</span>`;
+    };
+    const victimBot = world.nameOf(victimId) === 'Bot';
+    if (killerId > 0 && killerId !== victimId) {
+      this.hud.feed(`${tag(killerId)}<span class="x">✖</span>${tag(victimId)}`);
+    } else if (!victimBot) {
+      // senkinek nem jár érte pont: a saját robbanásában (gázpalack, jármű) halt meg
+      this.hud.feed(`<span class="x">✖</span>${tag(victimId)} felrobbant`);
+    }
+  }
+
+  /** Felröppenő sebzésszám a találat helyén. */
+  private damageNumber(x: number, y: number, amount: number, color: string): void {
+    const px = x * this.ppm;
+    const py = y * this.ppm;
+    const v = this.view;
+    if (px < v.x || px > v.right || py < v.y || py > v.bottom) return;
+    const scale = this.spriteScale;
+    const text =
+      this.numberPool.pop() ??
+      this.add
+        .text(0, 0, '', { fontFamily: 'Consolas, "Lucida Console", monospace', fontStyle: 'bold', fontSize: `${Math.round(18 * scale)}px`, stroke: '#101418', strokeThickness: Math.max(3, Math.round(4 * scale)) })
+        .setOrigin(0.5)
+        .setDepth(19.6);
+    const jitter = (((this.frame * 13 + amount * 7) % 21) - 10) * scale;
+    text
+      .setText(String(amount))
+      .setColor(color)
+      .setPosition(px + jitter, py - 16 * scale)
+      .setScale(amount >= 50 ? 1.35 : 1)
+      .setAlpha(1)
+      .setVisible(true);
+    this.tweens.add({
+      targets: text,
+      y: py - 56 * scale,
+      alpha: 0,
+      duration: 850,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        text.setVisible(false);
+        this.numberPool.push(text);
+      },
+    });
+  }
+
+  /** Piros ív a saját tank körül abban az irányban, ahonnan a találat jött. */
+  private hitFrom(sx: number, sy: number): void {
+    const own = this.world.own;
+    const view = own ? this.tankViews.get(own.id) : undefined;
+    if (!own || !view) return;
+    const dx = sx - own.x;
+    const dy = sy - own.y;
+    if (Math.hypot(dx, dy) < 1.5) return;
+    const angle = Math.atan2(dy, dx);
+    // a textúrán az ív középpontja 102 pixellel a kép közepe mögött van: így az ív a tank köré esik
+    const r = 102 * this.spriteScale;
+    const arc = this.arcPool.pop() ?? this.add.image(0, 0, GTEX.hitArc).setDepth(19.4);
+    arc
+      .setPosition(view.px + Math.cos(angle) * r, view.py + Math.sin(angle) * r)
+      .setRotation(angle)
+      .setScale(this.spriteScale)
+      .setAlpha(0.95)
+      .setVisible(true);
+    this.tweens.add({
+      targets: arc,
+      alpha: 0,
+      duration: 1100,
+      ease: 'Quad.easeIn',
+      onComplete: () => {
+        arc.setVisible(false);
+        this.arcPool.push(arc);
+      },
+    });
+  }
+
+  /** Nyíl a célpont fölött, vagy – ha nincs a képen – a kép szélén, a célpont felé mutatva. */
+  private pointAt(arrow: Phaser.GameObjects.Image, wx: number, wy: number, view: Phaser.Geom.Rectangle): void {
+    const px = wx * this.ppm;
+    const py = wy * this.ppm;
+    const pad = 54 * this.spriteScale;
+    const bob = Math.sin(this.time.now / 160) * 5 * this.spriteScale;
+    if (px > view.x + pad && px < view.right - pad && py > view.y + pad * 2 && py < view.bottom - pad) {
+      arrow.setPosition(px, py - 62 * this.spriteScale + bob).setRotation(Math.PI / 2);
+    } else {
+      const dx = px - view.centerX;
+      const dy = py - view.centerY;
+      const k = Math.min((view.width / 2 - pad) / Math.max(1, Math.abs(dx)), (view.height / 2 - pad) / Math.max(1, Math.abs(dy)));
+      const angle = Math.atan2(dy, dx);
+      arrow.setPosition(view.centerX + dx * k + Math.cos(angle) * bob, view.centerY + dy * k + Math.sin(angle) * bob).setRotation(angle);
+    }
+    arrow.setVisible(true);
+  }
+
+  /** A térkép külön jelei és a képernyőn a hozzájuk tartozó nyilak: bosszú, szupertárgy, tüzérségi csapás. */
+  private updateMarks(view: Phaser.Geom.Rectangle): MapMark[] {
+    const world = this.world;
+    const now = this.time.now / 1000;
+    const marks = this.marks;
+    marks.length = 0;
+    for (let i = this.strikeMarks.length - 1; i >= 0; i--) {
+      if (this.strikeMarks[i].until < now) this.strikeMarks.splice(i, 1);
+      else marks.push({ kind: 'strike', x: this.strikeMarks[i].x, y: this.strikeMarks[i].y });
+    }
+
+    // szupertárgy: a bejelentéstől a felvételéig látszik (ha a bejelentésről lemaradtunk, a tárgyból is kiderül)
+    const item = world.pickups.find((p) => p.kind === 'super');
+    if (!this.superMark && item) this.superMark = { x: item.x, y: item.y, here: true, since: now - 5 };
+    if (this.superMark && this.superMark.here && !item && now - this.superMark.since > 1.5) this.superMark = null;
+    if (this.superMark) {
+      marks.push({ kind: this.superMark.here ? 'super' : 'superSoon', x: this.superMark.x, y: this.superMark.y });
+      this.superArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xb45cff).setScale(this.spriteScale);
+      this.superArrow.setAlpha(this.superMark.here ? 1 : 0.6);
+      this.pointAt(this.superArrow, this.superMark.x, this.superMark.y, view);
+    } else this.superArrow?.setVisible(false);
+
+    // bosszú: aki kilőtt, az újraéledés után egy ideig jelölve van
+    const revenge = this.revenge;
+    const target = revenge && revenge.live ? world.tank(revenge.id) : undefined;
+    if (revenge && revenge.live && now > revenge.until) this.revenge = null;
+    if (this.revenge && target && target.alive && !world.smokes.some((k) => Math.hypot(target.x - k.x, target.y - k.y) < SMOKE.radius)) {
+      marks.push({ kind: 'revenge', x: target.x, y: target.y });
+      this.revengeArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff3a2a).setScale(this.spriteScale);
+      this.pointAt(this.revengeArrow, target.x, target.y, view);
+    } else this.revengeArrow?.setVisible(false);
+    return marks;
+  }
+
+  /** A szerverállapot egy listájához tartozó álló képek egyeztetése (azonosító szerint). */
+  private syncStatic<T extends { id: number }>(views: Map<number, Phaser.GameObjects.Image>, items: readonly T[], make: (item: T) => Phaser.GameObjects.Image): void {
+    for (const item of items) if (!views.has(item.id)) views.set(item.id, make(item));
+    for (const [id, view] of views) {
+      if (!items.some((item) => item.id === id)) {
+        view.destroy();
+        views.delete(id);
+      }
+    }
+  }
+
+  /** Aknák, gázpalackok és füstfelhők. */
+  private syncGadgets(seconds: number): void {
+    const world = this.world;
+    const ppm = this.ppm;
+    if (world.listsChanged) {
+      // a saját akna jól látszik, az ellenfélé alig
+      this.syncStatic(this.mineViews, world.mines, (m) =>
+        this.add
+          .image(m.x * ppm, m.y * ppm, GTEX.mine)
+          .setDepth(3)
+          .setScale(this.spriteScale * (m.owner === world.myId ? 1 : 0.85))
+          .setAlpha(m.owner === world.myId ? 1 : 0.3),
+      );
+      this.syncStatic(this.barrelViews, world.barrels, (b) =>
+        this.add
+          .image(b.x * ppm, b.y * ppm, GTEX.barrel)
+          .setDepth(4)
+          .setScale((BARREL.radius * 1.2 * ppm) / 10.5)
+          .setRotation((b.id * 2.3) % 6.28),
+      );
+      for (const smoke of world.smokes) {
+        if (this.smokeViews.has(smoke.id)) continue;
+        // a tankok és az életerősávok fölött: ami a füstben van, az nem látszik
+        const layer = (): Phaser.GameObjects.Image => this.add.image(smoke.x * ppm, smoke.y * ppm, GTEX.cloud).setDepth(18.6).setAlpha(0);
+        this.smokeViews.set(smoke.id, [layer(), layer()]);
+      }
+      for (const [id, layers] of this.smokeViews) {
+        if (!world.smokes.some((s) => s.id === id)) {
+          for (const layer of layers) layer.destroy();
+          this.smokeViews.delete(id);
+        }
+      }
+    }
+    if (this.smokeViews.size === 0) return;
+    const own = world.own;
+    const base = (SMOKE.radius * ppm) / 104;
+    for (const smoke of world.smokes) {
+      const layers = this.smokeViews.get(smoke.id);
+      if (!layers) continue;
+      // gyorsan felgomolyog, a végén lassan oszlik el; aki benne áll, az a saját közelét halványan látja
+      const fade = Math.max(0, Math.min(1, (SMOKE.life - smoke.life) / 0.7, smoke.life / 1.6));
+      const inside = !!own && own.alive && Math.hypot(own.x - smoke.x, own.y - smoke.y) < SMOKE.radius * 0.9;
+      const alpha = fade * (inside ? 0.5 : 0.98);
+      layers[0].setAlpha(alpha).setRotation(seconds * 0.07 + smoke.id).setScale(base * (0.9 + 0.1 * fade));
+      layers[1].setAlpha(alpha * 0.85).setRotation(-seconds * 0.05 + smoke.id * 2).setScale(base * (0.8 + 0.06 * Math.sin(seconds * 0.9 + smoke.id)));
+    }
+  }
+
   /** Épület összedőlése: a pályán rom lesz belőle (át lehet hajtani rajta), porfelhő és tűz kíséri. */
   private collapse(index: number): void {
     const building = this.map.data.buildings[index];
@@ -724,7 +1100,7 @@ export class GameScene extends Phaser.Scene {
     this.weather.flash(cx, cy, size + 12, 0.6);
     const volume = this.loudness(cx, cy);
     if (volume > 0) {
-      this.sfx.explosion(Math.max(0.3, volume) * 1.8);
+      this.sfx.collapse(Math.max(0.3, volume));
       this.cameras.main.shake(300, 0.004 * volume + 0.002);
     }
   }
@@ -863,10 +1239,18 @@ export class GameScene extends Phaser.Scene {
   private dust(view: Phaser.Geom.Rectangle): void {
     const rain = this.world.room.settings.weather === 'rain';
     for (const tank of this.world.tanks) {
-      if (!tank.alive || Math.abs(tank.speed) < 2) continue;
+      if (!tank.alive) continue;
       const px = tank.x * this.ppm;
       const py = tank.y * this.ppm;
       if (px < view.x || px > view.right || py < view.y || py > view.bottom) continue;
+      // a sérült tank füstöl: félig sérülten szürkén, súlyosan sérülten sűrű, fekete füsttel (állva is)
+      const stage = this.tankViews.get(tank.id)?.stage ?? 0;
+      if (stage >= 2 && (stage === 3 || (this.frame / 5) % 2 === 0)) {
+        const size = tankSize(tank);
+        const jitter = (((this.frame * 7 + tank.id * 13) % 9) - 4) * 0.25 * size * this.ppm;
+        this.puff(px - Math.cos(tank.hullAngle) * 1.2 * size * this.ppm + jitter, py - Math.sin(tank.hullAngle) * 1.2 * size * this.ppm - jitter * 0.6, stage === 3 ? 0x1c1a18 : 0x6a6660, (stage === 3 ? 1.15 : 0.8) * size, stage === 3 ? 900 : 700);
+      }
+      if (Math.abs(tank.speed) < 2) continue;
       // a nehéz tanktól fölfelé a kipufogó sötét füstöt ereget
       const tier = tankTier(tank.level);
       if (tier >= 2 && (this.frame / 5) % 2 === 0) {
@@ -1059,6 +1443,13 @@ export class GameScene extends Phaser.Scene {
       level: p.level ?? 0,
       kills: p.kills ?? 0,
       deaths: p.deaths ?? 0,
+      streak: p.streak ?? 0,
+      strikes: p.strikes ?? 0,
+      mineCharges: p.mines ?? 0,
+      smokeCharges: p.smokes ?? 0,
+      mines: this.world.mines.length,
+      smokes: this.world.smokes.length,
+      barrels: this.world.barrels.length,
       timeLeft: this.world.timeLeft,
       viewWidth: Math.round(this.cameras.main.width / this.ppm),
       viewHeight: Math.round(this.cameras.main.height / this.ppm),

@@ -16,6 +16,9 @@ export const PICKUP_KINDS = [
   'invulnerable',
   'radar',
   'turret',
+  'mine',
+  'smoke',
+  'super',
 ] as const;
 export type PickupKind = (typeof PICKUP_KINDS)[number];
 /**
@@ -34,10 +37,10 @@ export type AmmoKind = 'triple';
  */
 export type AbilityKind = 'ricochet';
 /** Töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
-export type ChargeKind = 'shield' | 'oil' | 'repair' | 'turret';
+export type ChargeKind = 'shield' | 'oil' | 'repair' | 'turret' | 'mine' | 'smoke';
 /** Az időzített hatások. */
 export type TimedKind = Exclude<PickupKind, ChargeKind | WeaponKind | AmmoKind | AbilityKind>;
-export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair' && k !== 'turret');
+export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair' && k !== 'turret' && k !== 'mine' && k !== 'smoke');
 
 /**
  * duration: a hatás ideje másodpercben (csak az időzített tárgyaknál; a
@@ -59,8 +62,8 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
   laser: { duration: 0, weight: 9 },
   /** olajfolt: lerakható töltetek; aki ráhajt, megcsúszik */
   oil: { duration: 0, weight: 10 },
-  /** javítókészlet: azonnal visszaad PICKUP.repairAmount életerőt */
-  repair: { duration: 0, weight: 14 },
+  /** javítókészlet: azonnal visszaad PICKUP.repairAmount életerőt; a leggyakoribb tárgy (kb. minden ötödik) */
+  repair: { duration: 0, weight: 34 },
   /** turbó: nagyobb végsebesség és gyorsulás */
   speed: { duration: 12, weight: 12 },
   /** terepjáró lánctalp: terepen sem lassul a tank, és olajon sem csúszik meg */
@@ -73,10 +76,19 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
   radar: { duration: 30, weight: 8 },
   /** telepíthető ágyú: lerakható töltet; az ágyú magától lő a közeli ellenséges tankokra */
   turret: { duration: 0, weight: 6 },
+  /** akna: lerakható töltetek; az ellenséges tank alatt robban */
+  mine: { duration: 0, weight: 9 },
+  /** füst: lerakható töltetek; a felhő eltakarja, ami benne van */
+  smoke: { duration: 0, weight: 7 },
+  /**
+   * szupertárgy: teljes javítás, tele pajzs, és amíg tart, többszörös sebzés. Véletlenül nem
+   * kerül a pályára (a súlya 0): időnként a pálya közepén jelenik meg, előre bejelentve.
+   */
+  super: { duration: 20, weight: 0 },
 };
 
 /** Az ellátó teherautó rakománya: fegyverek és képességek. */
-export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret'];
+export const CARGO_KINDS: readonly PickupKind[] = ['heavy', 'rocket', 'laser', 'ricochet', 'triple', 'shield', 'invulnerable', 'turret', 'mine'];
 
 export const PICKUP = {
   /** a tárgy sugara méterben (a tank érintésre veszi fel) */

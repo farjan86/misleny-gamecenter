@@ -10,10 +10,11 @@
 //     képkocka alatt, simán tűnik el.
 
 import type { GameMap } from '../maps/GameMap';
+import type { BarrelState, MineState, SmokeState } from '../sim/gadgets';
 import type { TurretState, VehicleState } from '../sim/vehicles';
 import { SIM_DT, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
 import type { GameLink } from './LocalGame';
-import { blankTank, packInput, unpackBullet, unpackOil, unpackPickup, unpackTank, unpackTurret, unpackVehicle, unpackWreck, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
+import { blankTank, packInput, unpackBarrel, unpackBullet, unpackMine, unpackOil, unpackPickup, unpackSmoke, unpackTank, unpackTurret, unpackVehicle, unpackWreck, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
 
 export interface PlayerStanding {
   tank: number;
@@ -36,6 +37,9 @@ export class ClientWorld {
   wrecks: WreckState[] = [];
   vehicles: VehicleState[] = [];
   turrets: TurretState[] = [];
+  mines: MineState[] = [];
+  smokes: SmokeState[] = [];
+  barrels: BarrelState[] = [];
   /** a legutóbbi kiolvasás óta érkezett események */
   events: SimEvent[] = [];
   tick = 0;
@@ -111,7 +115,8 @@ export class ClientWorld {
   input(input: TankInput): void {
     const copy: TankInput = { throttle: input.throttle, turn: input.turn, aim: input.aim, fire: input.fire, drop: input.drop, boost: input.boost, deploy: input.deploy };
     const s = ++this.seq;
-    this.net.send({ t: 'input', s, i: packInput(copy) });
+    // az aknát, a füstöt és a tüzérségi csapást csak a szerver hajtja végre: az előrejelzésbe nem kerülnek be
+    this.net.send({ t: 'input', s, i: packInput({ ...copy, mine: input.mine, smoke: input.smoke, strike: input.strike }) });
     if (!this.predicting) return;
     this.pending.push({ s, input: copy });
     if (this.pending.length > MAX_PENDING) this.pending.splice(0, this.pending.length - MAX_PENDING);
@@ -186,6 +191,9 @@ export class ClientWorld {
     this.wrecks = snap.W.map(unpackWreck);
     this.vehicles = snap.V.map(unpackVehicle);
     this.turrets = snap.U.map(unpackTurret);
+    this.mines = snap.M.map(unpackMine);
+    this.smokes = snap.K.map(unpackSmoke);
+    this.barrels = snap.G.map(unpackBarrel);
     this.listsChanged = true;
     this.standings = snap.S.map(([tank, kills, deaths, gone]) => ({ tank, name: this.nameOf(tank), kills, deaths, gone: gone === 1 }));
     this.timeLeft = snap.r;

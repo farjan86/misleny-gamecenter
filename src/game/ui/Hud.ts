@@ -7,6 +7,7 @@
 import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import { PICKUP_STYLE } from '../entities/pickupStyle';
+import { SMOKE, STRIKE, type SmokeState } from '../sim/gadgets';
 import type { PickupState, TankState } from '../sim/world';
 
 /** A térképkép felbontása: pixel / méter. */
@@ -111,6 +112,16 @@ export interface HudFrame {
   focusId: number;
   /** a felvehető tárgyak, ha a radar aktív; különben null */
   pickups: readonly PickupState[] | null;
+  /** a füstfelhők: a bennük lévő ellenfél a térképen sem látszik */
+  smokes: readonly SmokeState[];
+  /** külön jelek a térképen: bosszú (aki kilőtt), szupertárgy (érkezik / kint van), tüzérségi csapás */
+  marks: readonly MapMark[];
+}
+
+export interface MapMark {
+  kind: 'revenge' | 'super' | 'superSoon' | 'strike';
+  x: number;
+  y: number;
 }
 
 function el<T extends HTMLElement>(id: string): T {
@@ -137,6 +148,9 @@ export class Hud {
   private miniAngle = NaN;
   private miniDirty = true;
   private readonly toastBox = el<HTMLDivElement>('hud-toast');
+  private readonly feedBox = el<HTMLDivElement>('hud-feed');
+  private mapClick: ((x: number, y: number) => void) | null = null;
+  private aiming = false;
   private readonly clock = el<HTMLDivElement>('hud-clock');
   private readonly clockTime = el<HTMLDivElement>('hud-clock-time');
   private readonly clockScore = el<HTMLDivElement>('hud-clock-score');
@@ -178,6 +192,14 @@ export class Hud {
     el<HTMLDivElement>('hud').classList.remove('hidden');
     el<HTMLDivElement>('hud-info-button').onclick = () => this.toggleInfo();
     el<HTMLSpanElement>('hud-info-close').onclick = () => this.toggleInfo();
+    // nagy térképen (ha van kérhető csapás) a kattintás helye a pályán
+    this.mini.addEventListener('click', (ev) => {
+      if (!this.bigMap || !this.aiming || !this.mapClick) return;
+      const rect = this.mini.getBoundingClientRect();
+      const px = ((ev.clientX - rect.left) / rect.width) * this.mini.width;
+      const py = ((ev.clientY - rect.top) / rect.height) * this.mini.height;
+      this.mapClick((this.crop.x + px) / MINI_SCALE, (this.crop.y + py) / MINI_SCALE);
+    });
     this.clock.onclick = () => {
       this.scoresPinned = !this.scoresPinned;
       this.syncScores();
@@ -210,7 +232,33 @@ export class Hud {
     this.labels.push({ el: node, x, y, visible: false, left: NaN, top: NaN });
   }
 
-  /** Rövid értesítés a képernyő tetején (pl. felvett tárgy). */
+  /** A nagy térképre kattintás kezelője (tüzérségi csapás kérése a pálya adott pontjára). */
+  onMapClick(callback: (x: number, y: number) => void): void {
+    this.mapClick = callback;
+  }
+
+  /** Kattintható-e most a nagy térkép (van kérhető csapás): ilyenkor célkereszt a kurzor. */
+  setAiming(aiming: boolean): void {
+    if (aiming === this.aiming) return;
+    this.aiming = aiming;
+    this.miniPanel.classList.toggle('aim', aiming);
+  }
+
+  get mapOpen(): boolean {
+    return this.bigMap;
+  }
+
+  /** Új sor a kilövési értesítőbe (HTML); néhány másodperc múlva elhalványul. */
+  feed(html: string): void {
+    const item = document.createElement('div');
+    item.className = 'feed-item';
+    item.innerHTML = html;
+    this.feedBox.appendChild(item);
+    while (this.feedBox.children.length > 5) this.feedBox.firstElementChild?.remove();
+    window.setTimeout(() => item.classList.add('old'), 5200);
+    window.setTimeout(() => item.remove(), 5900);
+  }
+
   /** Az eredménytábla megjelenítése, amíg a billentyűje nyomva van. */
   holdScores(held: boolean): void {
     this.scoresHeld = held;
@@ -330,7 +378,7 @@ export class Hud {
     // a minitérképet csak akkor rajzoljuk újra, ha a tank érdemben elmozdult vagy elfordult
     const moved = !(Math.abs(f.x - this.miniX) < 0.5 && Math.abs(f.y - this.miniY) < 0.5 && Math.abs(f.angle - this.miniAngle) < 0.03);
     // ha vannak ellenfelek vagy aktív a radar, a térkép folyamatosan frissül
-    if (f.tanks.length > 1 || f.pickups) this.miniDirty = true;
+    if (f.tanks.length > 1 || f.pickups || f.marks.length) this.miniDirty = true;
     if (moved || this.miniDirty) {
       this.miniX = f.x;
       this.miniY = f.y;
@@ -423,9 +471,41 @@ export class Hud {
       }
     }
 
-    // ellenséges tankok: piros pont
+    // külön jelek: tüzérségi csapás köre, szupertárgy, bosszú
+    const blink = Math.floor(performance.now() / 300) % 2 === 0;
+    for (const mark of f.marks) {
+      const mx = mark.x * s;
+      const my = mark.y * s;
+      if (mark.kind === 'strike') {
+        ctx.strokeStyle = blink ? '#ff3a2a' : '#ffd84a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(mx, my, STRIKE.spread * s, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (mark.kind === 'revenge') {
+        ctx.strokeStyle = blink ? '#ff3a2a' : '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(mx - 8, my - 8, 16, 16);
+      } else {
+        // szupertárgy: lila rombusz arany szegéllyel (amíg csak bejelentve van, üres)
+        ctx.beginPath();
+        ctx.moveTo(mx, my - 10);
+        ctx.lineTo(mx + 10, my);
+        ctx.lineTo(mx, my + 10);
+        ctx.lineTo(mx - 10, my);
+        ctx.closePath();
+        ctx.fillStyle = mark.kind === 'super' ? '#a040ff' : 'rgba(16,20,24,0.7)';
+        ctx.fill();
+        ctx.strokeStyle = blink ? '#ffd84a' : '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
+    }
+
+    // ellenséges tankok: piros pont (ami füstben van, az a térképen sem látszik)
+    const hidden = (t: TankState): boolean => f.smokes.some((k) => Math.hypot(t.x - k.x, t.y - k.y) < SMOKE.radius);
     for (const t of f.tanks) {
-      if (!t.alive || t.id === f.focusId) continue;
+      if (!t.alive || t.id === f.focusId || (f.smokes.length > 0 && hidden(t))) continue;
       ctx.fillStyle = '#101418';
       ctx.fillRect(t.x * s - 4, t.y * s - 4, 8, 8);
       // a botok pirosak, a többi játékos narancssárga (nagyobb ponttal)

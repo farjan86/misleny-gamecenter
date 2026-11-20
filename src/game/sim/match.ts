@@ -8,6 +8,7 @@
 // tankot lövi ki. A mód a beállítások része, hogy később több is lehessen.
 
 import { BOT_LEVELS, BotManager, botTuning } from './bots';
+import { BARREL, SUPER } from './gadgets';
 import { Traffic } from './traffic';
 import { ANY_PLAYER, TEAM, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
 
@@ -132,6 +133,8 @@ export interface MatchPlan {
   pickups: number;
   /** a civil járművek száma */
   traffic: number;
+  /** a házak mellé kerülő gázpalackok száma */
+  barrels: number;
   /** a játékosok ennyire születnek egymástól (m) */
   spawnGap: number;
 }
@@ -150,7 +153,8 @@ export function matchPlan(settings: MatchSettings): MatchPlan {
   // minél kisebb a pálya és minél többen vannak, annál közelebb kell születniük
   const spawnGap = clamp(Math.sqrt((w * h) / Math.max(2, settings.maxPlayers)) * 0.6, 40, 220);
   const traffic = settings.traffic === 0 ? 0 : clamp(Math.round(settings.traffic * MATCH.trafficPerKm2 * km2), minTraffic, MATCH.maxTraffic);
-  return { km2, bots, pickups, traffic, spawnGap: Math.round(spawnGap) };
+  const barrels = clamp(Math.round(km2 * BARREL.perKm2), BARREL.min, BARREL.max);
+  return { km2, bots, pickups, traffic, barrels, spawnGap: Math.round(spawnGap) };
 }
 
 export interface MatchPlayer {
@@ -171,7 +175,24 @@ export interface MatchStanding {
   deaths: number;
   level: number;
   gone: boolean;
+  /** a leghosszabb kilövéssorozat halál nélkül */
+  streak: number;
+  /** ennyi épületet döntött össze */
+  wrecked: number;
+  /** a lövések pontossága százalékban (−1: nem lőtt) */
+  accuracy: number;
 }
+
+type Final = Pick<MatchStanding, 'kills' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy'>;
+
+const finalOf = (tank: TankState): Final => ({
+  kills: tank.kills,
+  deaths: tank.deaths,
+  level: tank.level,
+  streak: tank.bestStreak,
+  wrecked: tank.wrecked,
+  accuracy: tank.shots > 0 ? Math.min(100, Math.round((tank.hits / tank.shots) * 100)) : -1,
+});
 
 /** A játékosok csapatszáma: mindenki külön csapat (mindenki mindenki ellen). */
 const PLAYER_TEAM = 10;
@@ -188,7 +209,10 @@ export class Match {
   /** a győztes játékos azonosítója (null: nincs – döntetlen, egyedül játszott, vagy mindenki kilépett) */
   winner: string | null = null;
   private readonly inputs = new Map<number, TankInput>();
-  private readonly finals = new Map<string, { kills: number; deaths: number; level: number }>();
+  private readonly finals = new Map<string, Final>();
+  /** a következő szupertárgyig hátralévő idő (mp), és a helye, ha már be van jelentve */
+  private superIn: number = SUPER.every;
+  private superSpot: { x: number; y: number } | null = null;
 
   /**
    * `terrain`: a pálya, amelyen a játéktér (bounds) és az időjárás már be van
@@ -214,6 +238,7 @@ export class Match {
     this.bots = new BotManager(this.world, botTuning(settings.botSkill, settings.botAggression));
     this.bots.setCount(this.plan.bots, TEAM.bots, ANY_PLAYER);
     this.world.scatterPickups(this.plan.pickups);
+    this.world.scatterBarrels(this.plan.barrels);
     this.traffic = new Traffic(this.world, this.plan.traffic);
     this.world.traffic = this.traffic;
   }
@@ -237,11 +262,30 @@ export class Match {
     }
     this.bots.update(this.inputs, 1 / 60);
     this.world.step(this.inputs);
+    this.stepSuper(1 / 60);
     this.timeLeft -= 1 / 60;
     if (this.timeLeft <= 0) {
       this.timeLeft = 0;
       this.finish();
     }
+  }
+
+  /** A szupertárgy: időnként megjelenik a játéktér közepén; előtte bejelentés megy mindenkinek. */
+  private stepSuper(dt: number): void {
+    const { world } = this;
+    this.superIn -= dt;
+    if (!this.superSpot && this.superIn <= SUPER.warn) {
+      const { area } = this.settings;
+      this.superSpot = world.nearestSpot((area.minX + area.maxX) / 2, (area.minY + area.maxY) / 2);
+      world.events.push({ type: 'superSoon', x: this.superSpot.x, y: this.superSpot.y, seconds: SUPER.warn });
+    }
+    if (this.superIn > 0 || !this.superSpot) return;
+    // egyszerre csak egy van a pályán: a fel nem vett előző eltűnik
+    for (let i = world.pickups.length - 1; i >= 0; i--) if (world.pickups[i].kind === 'super') world.pickups.splice(i, 1);
+    world.addPickup('super', this.superSpot.x, this.superSpot.y).extra = true;
+    world.events.push({ type: 'superHere', x: this.superSpot.x, y: this.superSpot.y });
+    this.superSpot = null;
+    this.superIn = SUPER.every;
   }
 
   /** A játékos kilépett: a tankja eltűnik, az addigi eredménye megmarad. */
@@ -250,7 +294,7 @@ export class Match {
     if (!p || p.gone) return;
     p.gone = true;
     const tank = this.world.tank(p.tankId);
-    if (tank) this.finals.set(p.id, { kills: tank.kills, deaths: tank.deaths, level: tank.level });
+    if (tank) this.finals.set(p.id, finalOf(tank));
     this.world.removeTank(p.tankId);
     // ha egy többjátékos meccsben már csak egy játékos maradt (vagy senki), nincs kivel játszani: vége
     const present = this.players.filter((q) => !q.gone);
@@ -275,8 +319,9 @@ export class Match {
     const list = this.players
       .map((p) => {
         // a kilépett játékos tankja már nincs a világban: az utolsó állása számít
-        const tank = this.world.tank(p.tankId) ?? this.finals.get(p.id);
-        return { id: p.id, name: p.name, place: 0, kills: tank?.kills ?? 0, deaths: tank?.deaths ?? 0, level: tank?.level ?? 1, gone: p.gone };
+        const live = this.world.tank(p.tankId);
+        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1 };
+        return { id: p.id, name: p.name, place: 0, gone: p.gone, ...final };
       })
       // a kilépettek a bent lévők mögé kerülnek
       .sort((a, b) => Number(a.gone) - Number(b.gone) || b.kills - a.kills || a.deaths - b.deaths);

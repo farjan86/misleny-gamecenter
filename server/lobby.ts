@@ -8,9 +8,12 @@ import type { MapData } from '../src/game/maps/types';
 import {
   cleanCode,
   encode,
+  packBarrel,
   packBullet,
+  packMine,
   packOil,
   packPickup,
+  packSmoke,
   packTank,
   packTurret,
   packVehicle,
@@ -101,7 +104,7 @@ class Room {
 }
 
 /** A csak látványt adó események: ezek csak a közelben lévőknek mennek ki. */
-const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'ram', 'structure', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown']);
+const LOCAL_EVENTS = new Set<SimEvent['type']>(['shot', 'impact', 'laser', 'ricochet', 'oil', 'bump', 'ram', 'structure', 'hit', 'slip', 'pickup', 'respawn', 'blast', 'crushed', 'honk', 'deploy', 'turretDown', 'mine', 'smoke', 'strike', 'boom', 'streak']);
 
 function eventPosition(ev: SimEvent): { x: number; y: number } | null {
   if (ev.type === 'laser') return { x: ev.x1, y: ev.y1 };
@@ -414,11 +417,15 @@ export class Lobby {
       // a közeli tankok, és minden játékos (ők a térképen mindig látszanak)
       T: world.tanks.filter((t) => !t.bot || near(t, LIMITS.tankRange)).map(packTank),
       B: world.bullets.filter((b) => near(b, LIMITS.nearRange)).map(packBullet),
-      P: world.pickups.filter((p) => near(p, radar ? LIMITS.tankRange : LIMITS.nearRange)).map(packPickup),
+      // a szupertárgy mindenkinek látszik a térképen, bármilyen messze van
+      P: world.pickups.filter((p) => p.kind === 'super' || near(p, radar ? LIMITS.tankRange : LIMITS.nearRange)).map(packPickup),
       O: world.oils.filter((o) => near(o, LIMITS.nearRange)).map(packOil),
       W: world.wrecks.filter((w) => near(w, LIMITS.nearRange)).map(packWreck),
       V: world.vehicles.filter((v) => near(v, LIMITS.nearRange)).map(packVehicle),
       U: world.turrets.filter((t) => near(t, LIMITS.nearRange)).map(packTurret),
+      M: world.mines.filter((m) => near(m, LIMITS.nearRange)).map(packMine),
+      K: world.smokes.filter((s) => near(s, LIMITS.nearRange)).map(packSmoke),
+      G: world.barrels.filter((b) => near(b, LIMITS.nearRange)).map(packBarrel),
       S: match.players.map((p) => {
         const tank = world.tank(p.tankId);
         return [p.tankId, tank ? tank.kills : 0, tank ? tank.deaths : 0, p.gone ? 1 : 0];

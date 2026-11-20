@@ -233,6 +233,7 @@ export class BotBrain {
       const dist = Math.hypot(other.x - tank.x, other.y - tank.y);
       if (dist >= bestDist) continue;
       if (this.world.terrain.walls.raycast(tank.x, tank.y, other.x, other.y)) continue; // fal takarja
+      if (dist > 9 && this.world.inSmoke(other.x, other.y)) continue; // füst takarja
       best = other;
       bestDist = dist;
     }

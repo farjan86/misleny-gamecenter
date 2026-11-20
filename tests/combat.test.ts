@@ -7,7 +7,7 @@ import type { MapData } from '../src/game/maps/types';
 import { packBullet, unpackBullet } from '../src/game/net/protocol';
 import { BOT, BotBrain, BotManager, botTuning } from '../src/game/sim/bots';
 import { SegmentGrid } from '../src/game/sim/collision';
-import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET } from '../src/game/sim/pickups';
+import { BOOST, LASER, mulberry32, OIL, PICKUP, PICKUP_KINDS, pickKind, PICKUPS, ROCKET } from '../src/game/sim/pickups';
 import { FELLABLE, Fellables } from '../src/game/sim/props';
 import {
   BOOSTER,
@@ -119,7 +119,24 @@ describe('felvehető tárgyak', () => {
   });
 
   it('minden tárgytípushoz tartozik szabály', () => {
-    for (const kind of PICKUP_KINDS) expect(PICKUPS[kind].weight).toBeGreaterThan(0);
+    // a szupertárgy véletlenül nem kerül a pályára (a súlya 0): a meccs rakja ki időnként
+    for (const kind of PICKUP_KINDS) if (kind !== 'super') expect(PICKUPS[kind].weight).toBeGreaterThan(0);
+  });
+
+  it('a javítókészlet a leggyakoribb tárgy: nagyjából minden ötödik az', () => {
+    for (const kind of PICKUP_KINDS) if (kind !== 'repair') expect(PICKUPS.repair.weight).toBeGreaterThan(PICKUPS[kind].weight * 2);
+    const random = PICKUP_KINDS.filter((kind) => kind !== 'super');
+    const rnd = mulberry32(7);
+    const counts = new Map<string, number>();
+    for (let i = 0; i < 4000; i++) {
+      const kind = pickKind(rnd);
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+    const share = (counts.get('repair') ?? 0) / 4000;
+    expect(share).toBeGreaterThan(0.16);
+    expect(share).toBeLessThan(0.23);
+    // a többi tárgyból is marad
+    for (const kind of random) expect(counts.get(kind) ?? 0).toBeGreaterThan(60);
   });
 });
 

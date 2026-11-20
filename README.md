@@ -57,6 +57,8 @@ billentyűk a főmenü **Beállítások** pontjában átállíthatók; ezek az a
 | Shift | gyorsító: +30% sebesség legfeljebb 3 másodpercig, utána le kell hűlnie |
 | E | olajfolt lerakása (ha van töltet) |
 | Q | ágyú telepítése a tank mögé (ha van töltet) |
+| R / C | akna lerakása / füst (ha van töltet) |
+| X | tüzérségi csapás a célkeresztre (három kilövésenként jár, halál nélkül) |
 | Tab | eredménytábla, amíg nyomva van (vagy kattintás az órára) |
 | M | az egész város térképe utcanevekkel |
 | F | teljes képernyős mód |

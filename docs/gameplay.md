@@ -26,7 +26,8 @@ bekerülhessenek.
   játék (játéktér, játékidő, botok száma, ügyessége és agresszivitása, tárgyak,
   forgalom, időjárás), és azonnal indul. Az idő lejártáig tart; az eredmény a
   kilövéseid száma.
-- **Beállítások:** a billentyűkiosztás. Műveletenként két billentyű adható
+- **Beállítások:** a hangerő (0–100%, alapérték 80; a csúszka elengedésekor
+  próbahang szól) és a billentyűkiosztás. Műveletenként két billentyű adható
   meg; egy billentyű csak egy művelethez tartozhat. A beállítás a böngészőben
   megmarad.
 - **Multiplayer:** a nyitott játékok listája, belépés, új játék létrehozása
@@ -44,6 +45,9 @@ bekerülhessenek.
 | Shift | gyorsító |
 | E | olajfolt lerakása a tank mögé (ha van töltet) |
 | Q | ágyú telepítése a tank mögé (ha van töltet) |
+| R | akna lerakása a tank mögé (ha van töltet) |
+| C | füst a tank köré (ha van töltet) |
+| X | tüzérségi csapás oda, ahová az egér mutat (ha jár) |
 | Tab | eredménytábla, amíg nyomva van |
 | M | az egész város térképe utcanevekkel be/ki |
 | F | teljes képernyős mód be/ki |
@@ -65,6 +69,10 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
 - **Az óra** a hátralévő játékidőt mutatja (perc:másodperc), alatta a
   kilövéseid száma és – többjátékos meccsben – a helyezésed. Az utolsó fél
   percben pirosan villog.
+- **A végeredményben** játékosonként a legjobb kilövéssorozat, a ledöntött
+  házak száma és a lövések pontossága is szerepel; több játékosnál különdíj
+  jár a leghosszabb sorozatért, a legtöbb ledöntött házért és a legpontosabb
+  lövésért.
 - **Az eredménytábla** a Tab nyomva tartására jelenik meg (vagy az órára
   kattintva, akkor kint marad, amíg rá nem kattintasz): minden játékos
   helyezése, kilövései, halálai és szintje, a végeredmény sorrendjében.
@@ -84,6 +92,16 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   tárgyak), a játékosok állása, a forrásmegjelölés és a *Kilépés a meccsből* gomb.
 - A fontos események rövid értesítésként jelennek meg felül (felvett tárgy,
   kilövés, szintlépés).
+- **Kilövési értesítő** a térkép alatt: ki kit lőtt ki (a saját neved sárga,
+  a botok halványak). Néhány másodperc után elhalványul.
+- **Bosszú:** aki kilőtt, az az újraéledésed után 25 másodpercig jelölve van:
+  piros nyíl mutat rá (ha nincs a képen, a kép széléről felé), és a térképen
+  villogó keret jelzi. Ha közben kilövöd, „Bosszú!” üzenetet kapsz; ha más
+  lövi ki, vagy füstbe bújik, a jel eltűnik. Pont nem jár érte külön.
+- **Sebzésszámok:** a találat helyén felröppen a sebzés (piros: téged ért,
+  sárga: te okoztad, fehér: másoké).
+- **Honnan lőnek:** ha találat ér, a tankod körül piros ív mutatja egy
+  másodpercig, melyik irányból jött.
 - A tájékozódási pontok (hivatal, templom, rendőrség…) felirata a pályán marad.
 
 ### Szabályok
@@ -125,6 +143,18 @@ Játék közben állandóan a **térkép** (jobb felül), az **információ gomb
   nagyobb tank lövedéke és torkolattüze is nagyobb; a nehéz tanktól fölfelé a
   kipufogó füstöl, az ostromtank és a romboló alatt parázsló, a titán alatt
   kék fény lüktet, és a titán lövedéke kéken izzik.
+- **A sérülés látszik a tankon** (minden tankon, a megmaradt életerő aránya
+  szerint): 75% alatt karcok és belövések; 50% alatt korom, repedések, szürke
+  füst; 25% alatt megfeketedett, kiszakadt, belül izzó páncél, láng a testén
+  és sűrű fekete füst. A javítókészlet a sérüléseket is eltünteti. Ha a saját
+  tank életereje 25% alá esik, három rövid figyelmeztető hang szól.
+- **Hangok:** minden hang kódból készül. A lövés hangja a fegyvertől és a
+  tank méretétől függ (a nagyobb ágyú mélyebben szól), a motoré is. Külön
+  hangja van a becsapódásnak, a kilőtt tanknak, az összedőlő épületnek, a
+  felrobbanó járműnek, a találatnak (ha téged ér, illetve ha te találsz), a
+  kilövésnek, az újraéledésnek, a szintlépésnek, a gyorsítónak, a tárgyak
+  felvételének (fajtánként más) és az órának (figyelmeztetés 60 és 30
+  másodpercnél, kattogás az utolsó tízben, kürt a végén). Esőben az eső zúg.
 
   | Szint | Típus | Miről ismerhető fel |
   |---|---|---|
@@ -258,6 +288,45 @@ billentyű a tank mögé rakja le.
   már lerakott ágyúk megmaradnak.
 - A botok megtámadják az ellenséges ágyút. A civil járművekre az ágyú nem lő.
 
+### Kilövéssorozat és tüzérségi csapás
+
+- Minden harmadik kilövés után, amelyet halál nélkül érsz el, jár egy
+  **tüzérségi csapás** (egyszerre legfeljebb kettő lehet nálad; a botok nem
+  kapnak). A halál a sorozatot nullázza, a már megszerzett csapás megmarad.
+- **Kérése:** az **X** oda kéri, ahová az egér mutat; vagy nyisd meg a nagy
+  térképet (M) és kattints rá – így a pálya bármely pontjára kérhető.
+- 2,2 másodperc figyelmeztetés után (piros kör a földön és a térképen, süvítő
+  hang) nyolc lövedék hull a 13 méter sugarú körbe. Egy lövedék 7 méteres
+  körben legfeljebb 60-at sebez, a távolsággal gyengülve; az épületeket is
+  rombolja, a fákat kidönti. A kérőt és a saját ágyúit nem sebzi; a kilövés
+  neki számít.
+
+### Akna, füst, gázpalack
+
+- **Akna** (tárgy, 2 töltet, legfeljebb 4 lehet nálad): az **R** a tank mögé
+  rakja. 1,2 másodperc múlva élesedik, és az első ellenséges tank alatt
+  robban (6,5 méteres körben legfeljebb 70 sebzés). A sajátod jól látszik, az
+  ellenfélé alig. A lerakója alatt nem robban; egyszerre 6 lehet kint, 3 perc
+  után eltűnik. A kilövés a lerakóé.
+- **Füst** (tárgy, 2 töltet, legfeljebb 4): a **C** 13 méter sugarú felhőt
+  ereszt a tank köré 10 másodpercre. Ami benne van, az kívülről nem látszik
+  (a térképen sem), és a botok meg a telepített ágyúk sem látnak bele. Aki
+  benne áll, a közvetlen környezetét halványan látja.
+- **Gázpalackok** állnak a házak fala mellett (négyzetkilométerenként 30,
+  legalább 4, legfeljebb 140). Találattól vagy ráhajtástól felrobbannak
+  (8,5 méteres körben legfeljebb 55 sebzés), és a közeli palackokat, aknákat
+  is beindítják – láncreakció. Mindenkit sebez, azt is, aki beindította; a
+  saját robbanásáért senkinek nem jár pont. (A pálya adataiban nincs
+  benzinkút, ezért az nem került a játékba.)
+
+### Szupertárgy
+
+Percenként egyszer megjelenik a játéktér közepe táján egy **szupertárgy**;
+tíz másodperccel előtte mindenki értesítést kap, és a térképen lila jel, a
+képernyőn lila nyíl mutatja a helyét. Aki felveszi: teljes javítás, tele
+pajzs (3), és 20 másodpercig **háromszoros sebzés** – a tankja körül ez idő
+alatt lila fény lüktet, mindenki látja. Egyszerre csak egy van a pályán.
+
 ### Felvehető tárgyak
 
 A tárgyak a játéktér útjain vannak szétszórva (a számuk a „Felvehető tárgyak"
@@ -273,13 +342,16 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 | Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
 | Olajfolt | 3 lerakható folt; aki ráhajt, 1,7 mp-ig irányíthatatlanul pörög és sodródik | 3 töltet, a folt 45 mp-ig marad |
-| Javítókészlet | azonnal visszaad 50 életerőt | azonnali |
+| Javítókészlet | azonnal visszaad 50 életerőt; a leggyakoribb tárgy (kb. minden ötödik) | azonnali |
 | Turbó | 45%-kal nagyobb végsebesség, jobb gyorsulás | 12 mp |
 | Terepjáró lánctalp | terepen és sárban sem lassul a tank, olajon sem csúszik meg | 25 mp |
 | Pajzs | egy töltet egy találatot nyel el (legfeljebb 3) | töltet |
 | Sebezhetetlenség | semmi nem sebez, nem csúszik meg | 10 mp |
 | Radar | a térképen látszanak a felvehető tárgyak | 30 mp |
 | Telepíthető ágyú | lerakható (Q): magától lő a közeli ellenségre | töltet (legfeljebb 2), az ágyú a kilövéséig áll |
+| Akna | lerakható (R): az ellenséges tank alatt robban | 2 töltet (legfeljebb 4) |
+| Füst | lerakható (C): 13 méteres felhő, amely eltakar | 2 töltet (legfeljebb 4), a felhő 10 mp |
+| Szupertárgy | teljes javítás, tele pajzs, háromszoros sebzés (csak a pálya közepén jelenik meg, percenként) | 20 mp |
 
 Egyszerre egy fegyver lehet a tanknál: az újonnan felvett a régi helyére lép.
 

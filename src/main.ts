@@ -59,6 +59,7 @@ async function start(): Promise<void> {
       ppm,
       world,
       keys: loadSettings().keys,
+      volume: loadSettings().volume / 100,
       onLeave: () => link.send({ t: 'leave' }),
     };
     game.scene.add('game', GameScene, true, data);

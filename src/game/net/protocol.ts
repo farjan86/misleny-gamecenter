@@ -6,10 +6,11 @@
 
 import { PICKUP_KINDS } from '../sim/pickups';
 import type { MatchPlan, MatchSettings } from '../sim/match';
+import type { BarrelState, MineState, SmokeState } from '../sim/gadgets';
 import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehicles';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -49,10 +50,17 @@ export interface Standing {
   kills: number;
   deaths: number;
   level: number;
+  /** a leghosszabb kilövéssorozat, a ledöntött épületek száma, a pontosság százalékban (−1: nem lőtt) */
+  streak: number;
+  wrecked: number;
+  accuracy: number;
 }
 
-/** [gáz, forgatás, célzás (rad) vagy null, jelzők: 1 = tűz, 2 = olaj, 4 = gyorsító, 8 = ágyú telepítése] */
-export type PackedInput = [number, number, number | null, number];
+/**
+ * [gáz, forgatás, célzás (rad) vagy null, jelzők: 1 = tűz, 2 = olaj, 4 = gyorsító, 8 = ágyú telepítése,
+ * 16 = akna, 32 = füst; ha tüzérségi csapást kér: a célpont x, y koordinátája]
+ */
+export type PackedInput = [number, number, number | null, number, number?, number?];
 
 export type ClientMessage =
   // belépés: regisztráció, név + jelszó, vagy a böngészőben megőrzött kulcs
@@ -75,7 +83,7 @@ export type MeState = TankState;
 
 /** [id, x, y, test szöge, torony szöge, sebesség, életerő, szint, jelzők, csapat, megtett út] */
 export type PackedTank = number[];
-export const TANK_FLAG = { alive: 1, bot: 2, boosting: 4, invulnerable: 8, shield: 16, out: 32 } as const;
+export const TANK_FLAG = { alive: 1, bot: 2, boosting: 4, invulnerable: 8, shield: 16, out: 32, super: 64 } as const;
 
 export interface Snapshot {
   t: 'snap';
@@ -100,6 +108,10 @@ export interface Snapshot {
   V: number[][];
   /** telepített ágyúk: [id, lerakó tank, csapat, x, y, szög, életerő] */
   U: number[][];
+  /** aknák: [id, lerakó tank, csapat, x, y]; füstfelhők: [id, x, y, hátralévő idő]; gázpalackok: [id, x, y] */
+  M: number[][];
+  K: number[][];
+  G: number[][];
   /** játékosok állása: [tank, kilövések, halálok, kilépett-e] */
   S: number[][];
   /** a hátralévő játékidő (mp) */
@@ -125,12 +137,15 @@ export type ServerMessage =
 // --- tömörítés ------------------------------------------------------------------
 
 export function packInput(input: TankInput): PackedInput {
-  return [input.throttle, input.turn, input.aim === null ? null : Math.round(input.aim * 1000) / 1000, (input.fire ? 1 : 0) | (input.drop ? 2 : 0) | (input.boost ? 4 : 0) | (input.deploy ? 8 : 0)];
+  const flags = (input.fire ? 1 : 0) | (input.drop ? 2 : 0) | (input.boost ? 4 : 0) | (input.deploy ? 8 : 0) | (input.mine ? 16 : 0) | (input.smoke ? 32 : 0);
+  const packed: PackedInput = [input.throttle, input.turn, input.aim === null ? null : Math.round(input.aim * 1000) / 1000, flags];
+  if (input.strike) packed.push(Math.round(input.strike.x * 10) / 10, Math.round(input.strike.y * 10) / 10);
+  return packed;
 }
 
 export function unpackInput(packed: unknown): TankInput | null {
   if (!Array.isArray(packed) || packed.length < 4) return null;
-  const [throttle, turn, aim, flags] = packed as unknown[];
+  const [throttle, turn, aim, flags, sx, sy] = packed as unknown[];
   if (typeof throttle !== 'number' || typeof turn !== 'number' || typeof flags !== 'number') return null;
   if (!Number.isFinite(throttle) || !Number.isFinite(turn)) return null;
   return {
@@ -141,6 +156,9 @@ export function unpackInput(packed: unknown): TankInput | null {
     drop: (flags & 2) !== 0,
     boost: (flags & 4) !== 0,
     deploy: (flags & 8) !== 0,
+    mine: (flags & 16) !== 0,
+    smoke: (flags & 32) !== 0,
+    strike: typeof sx === 'number' && typeof sy === 'number' && Number.isFinite(sx) && Number.isFinite(sy) ? { x: sx, y: sy } : null,
   };
 }
 
@@ -151,7 +169,8 @@ export function packTank(t: TankState): PackedTank {
     (t.boosting ? TANK_FLAG.boosting : 0) |
     (t.effects.invulnerable > 0 ? TANK_FLAG.invulnerable : 0) |
     (t.shield > 0 ? TANK_FLAG.shield : 0) |
-    (t.out ? TANK_FLAG.out : 0);
+    (t.out ? TANK_FLAG.out : 0) |
+    (t.effects.super > 0 ? TANK_FLAG.super : 0);
   return [t.id, t.x, t.y, t.hullAngle, t.turretAngle, t.speed, t.hp, t.level, flags, t.team, t.odometer];
 }
 
@@ -181,13 +200,21 @@ export function blankTank(id: number): TankState {
     homeX: 0,
     homeY: 0,
     homeAngle: 0,
-    effects: { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0 },
+    effects: { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0, super: 0 },
     weapon: null,
     tripleShots: 0,
     ricochet: false,
     shield: 0,
     oil: 0,
     turrets: 0,
+    mines: 0,
+    smokes: 0,
+    strikes: 0,
+    streak: 0,
+    bestStreak: 0,
+    shots: 0,
+    hits: 0,
+    wrecked: 0,
     dropCooldown: 0,
     slip: 0,
     slideAngle: 0,
@@ -212,6 +239,7 @@ export function unpackTank(p: PackedTank, into: TankState): TankState {
   into.boosting = (flags & TANK_FLAG.boosting) !== 0;
   into.effects.invulnerable = flags & TANK_FLAG.invulnerable ? 1 : 0;
   into.shield = flags & TANK_FLAG.shield ? 1 : 0;
+  into.effects.super = flags & TANK_FLAG.super ? 1 : 0;
   into.out = (flags & TANK_FLAG.out) !== 0;
   into.team = p[9];
   into.odometer = p[10];
@@ -232,6 +260,13 @@ export const packVehicle = (v: VehicleState): number[] => [v.id, VEHICLE_KINDS.i
 export const unpackVehicle = (p: number[]): VehicleState => ({ id: p[0], kind: VEHICLE_KINDS[p[1]] ?? 'car', look: p[2], x: p[3], y: p[4], angle: p[5], speed: p[6], hp: 1, state: p[7], timer: 0, by: 0 });
 export const packTurret = (t: TurretState): number[] => [t.id, t.owner, t.team, t.x, t.y, t.angle, t.hp];
 export const unpackTurret = (p: number[]): TurretState => ({ id: p[0], owner: p[1], team: p[2], x: p[3], y: p[4], angle: p[5], hp: p[6], cooldown: 0, target: -1 });
+
+export const packMine = (m: MineState): number[] => [m.id, m.owner, m.team, m.x, m.y];
+export const unpackMine = (p: number[]): MineState => ({ id: p[0], owner: p[1], team: p[2], x: p[3], y: p[4], arm: 0, life: 1, fuse: -1 });
+export const packSmoke = (s: SmokeState): number[] => [s.id, s.x, s.y, s.life];
+export const unpackSmoke = (p: number[]): SmokeState => ({ id: p[0], x: p[1], y: p[2], life: p[3] });
+export const packBarrel = (b: BarrelState): number[] => [b.id, b.x, b.y];
+export const unpackBarrel = (p: number[]): BarrelState => ({ id: p[0], x: p[1], y: p[2], fuse: -1, by: 0 });
 
 /** JSON-kódolás a számok kerekítésével (a pillanatképek így jóval kisebbek). */
 export function encode(message: ServerMessage | ClientMessage): string {

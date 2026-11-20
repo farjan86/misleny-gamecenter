@@ -196,11 +196,11 @@ töltse újra az oldalt.
 |---|---|---|
 | kliens → szerver | `register`, `login`, `resume`, `logout` | belépés névvel és jelszóval, vagy megőrzött kulccsal |
 | kliens → szerver | `create`, `join`, `leave` | szoba létrehozása (beállításokkal, privát játéknál belépőkóddal), belépés (privát szobába a kóddal), kilépés |
-| kliens → szerver | `input` | sorszám és a bemenet (gáz, forgatás, célzás, tűz, olaj, gyorsító, ágyú telepítése) |
+| kliens → szerver | `input` | sorszám és a bemenet (gáz, forgatás, célzás, tűz, olaj, gyorsító, ágyú telepítése, akna, füst, a tüzérségi csapás célpontja) |
 | szerver → kliens | `auth`, `authError` | a belépés eredménye |
 | szerver → kliens | `rooms`, `room`, `left` | a szobalista, a váró állapota (visszaszámlálással), kilépés |
 | szerver → kliens | `start` | a meccs beállításai, a saját tank azonosítója, a játékosok |
-| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank teljes állapota, a közeli elemek (tankok, lövedékek, tárgyak, járművek, ágyúk), a játékosok állása, a hátralévő játékidő |
+| szerver → kliens | `snap` | pillanatkép: lépésszám, nyugtázott bemenet, a saját tank teljes állapota, a közeli elemek (tankok, lövedékek, tárgyak, járművek, ágyúk, aknák, füst, gázpalackok), a játékosok állása, a hátralévő játékidő |
 | szerver → kliens | `ev` | a szimuláció eseményei |
 | szerver → kliens | `over` | a győztes és az eredménytábla |
 

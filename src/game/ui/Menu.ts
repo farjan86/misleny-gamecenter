@@ -6,7 +6,8 @@ import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import type { NetClient, NetStatus } from '../net/NetClient';
 import { cleanCode, ROOM_CODE, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
-import { ACTION_LABEL, ACTIONS, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
+import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
+import { Sfx } from '../systems/audio';
 import { areaOfCells, gridSize, MATCH, matchPlan, sanitizeSettings, WEATHERS, type MatchSettings } from '../sim/match';
 
 type Screen = 'main' | 'settings' | 'lobby' | 'create' | 'room' | 'results';
@@ -234,9 +235,29 @@ export class Menu {
       this.listening = null;
       this.show('main');
     };
+    // hangerő: a csúszka elengedésekor egy próbahang szól az új hangerőn
+    const volume = el<HTMLInputElement>('sl-volume');
+    const preview = new Sfx();
+    const showVolume = (): void => {
+      volume.value = String(this.settings.volume);
+      el('val-volume').textContent = this.settings.volume === 0 ? 'néma' : `${this.settings.volume}%`;
+    };
+    showVolume();
+    volume.addEventListener('input', () => {
+      this.settings.volume = Number(volume.value);
+      showVolume();
+    });
+    volume.addEventListener('change', () => {
+      this.save();
+      preview.unlock();
+      preview.setVolume(this.settings.volume / 100);
+      preview.shot();
+    });
     el('settings-reset').onclick = () => {
       this.settings.keys = defaultKeys();
+      this.settings.volume = DEFAULT_VOLUME;
       this.save();
+      showVolume();
       this.renderKeys();
     };
     window.addEventListener(
@@ -582,8 +603,25 @@ export class Menu {
     for (const s of standings) {
       const row = document.createElement('div');
       row.className = s === me ? 'player-row me' : 'player-row';
-      row.innerHTML = `<span>${s.place}. ${esc(s.name)}</span><span>${s.kills} kilövés · ${s.deaths} halál · ${s.level}. szint</span>`;
+      const accuracy = s.accuracy >= 0 ? ` · ${s.accuracy}% pontosság` : '';
+      row.innerHTML =
+        `<span>${s.place}. ${esc(s.name)}</span>` +
+        `<span>${s.kills} kilövés · ${s.deaths} halál · ${s.level}. szint<br /><span class="stats">legjobb sorozat: ${s.streak} · ledöntött ház: ${s.wrecked}${accuracy}</span></span>`;
       table.appendChild(row);
+    }
+    // különdíjak: több játékosnál az kapja, aki a legjobb az adott dologban
+    if (!solo) {
+      const best = (value: (s: Standing) => number, text: (s: Standing) => string): string => {
+        const top = [...standings].sort((a, b) => value(b) - value(a))[0];
+        return top && value(top) > 0 ? `<div>${text(top)}</div>` : '';
+      };
+      const awards = document.createElement('div');
+      awards.className = 'awards';
+      awards.innerHTML =
+        best((s) => s.streak, (s) => `Leghosszabb sorozat: <b>${esc(s.name)}</b> – ${s.streak} kilövés halál nélkül`) +
+        best((s) => s.wrecked, (s) => `Legtöbb ledöntött ház: <b>${esc(s.name)}</b> – ${s.wrecked}`) +
+        best((s) => s.accuracy, (s) => `Legpontosabb lövész: <b>${esc(s.name)}</b> – ${s.accuracy}%`);
+      if (awards.innerHTML) table.appendChild(awards);
     }
     this.show('results');
   }
