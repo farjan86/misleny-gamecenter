@@ -58,6 +58,14 @@ export class Structures {
     return true;
   }
 
+  /** Az összedőlt épület újra áll, teljes életerővel (a nyitott játékban idővel újraépül). */
+  restore(index: number): boolean {
+    if (index < 0 || index >= this.count || !this.collapsed[index]) return false;
+    this.collapsed[index] = 0;
+    this.hp[index] = this.maxHp[index];
+    return true;
+  }
+
   /** Új kör: minden épület újra áll. */
   reset(): void {
     this.hp.set(this.maxHp);

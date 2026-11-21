@@ -249,6 +249,14 @@ beléphet és kiléphet, és addig fut, amíg a gazdája le nem állítja. (A k�
   és az új pályán éled újra – a szintjük, az eredményeik és a felszerelésük megmarad.
 - **Üresen szünetel:** ha senki nincs bent, a szimuláció áll (nem fogyaszt
   gépidőt), és a következő belépővel onnan folytatódik.
+- **A pálya újraépül:** a ledöntött épületek, kidőlt fák és oszlopok véletlen
+  idő múlva újra megjelennek – fa, oszlop 2–5, épület 4–7 perc múlva –, egyenként
+  (legalább 0,6 mp különbséggel), így a pálya folyamatosan, nem egyszerre épül
+  vissza. Ha a helyén éppen tank, jármű, roncs vagy löveg áll, megvárja, amíg
+  elmegy (senki nem szorul bele). A rom tüze ilyenkor kialszik. A rendes, időre
+  menő meccsben nincs visszanövés.
+- **Menet közbeni belépés:** a belépő megkapja, mi van éppen ledöntve, így nála
+  is romként látszik, ami a szerveren rom.
 - **Leállítás:** a gazdának „Leállítás” gombja van; a bent lévők visszakerülnek
   a játékok listájához.
 - **Újraindítás után is megmarad:** a szerver minden létrehozáskor, módosításkor

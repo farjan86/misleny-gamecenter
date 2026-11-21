@@ -77,10 +77,10 @@ export const STRIKE = {
   max: 2,
   /** a kérés után ennyivel érkezik az első lövedék (mp) – addig figyelmeztető jel látszik */
   delay: 2.2,
-  shells: 8,
-  /** a lövedékek ekkora körbe hullanak (m), ennyi időnként (mp) */
-  spread: 13,
-  interval: 0.26,
+  shells: 18,
+  /** a lövedékek ekkora körbe hullanak (m), egyenletesen elosztva; ennyi időnként (mp) */
+  spread: 24,
+  interval: 0.15,
   blastRadius: 7,
   damage: 60,
   /** az épületeket ennyivel sebzi egy lövedék */
@@ -180,7 +180,7 @@ export const MG = {
   damage: 2.5,
   /** a géppuska ennyivel ül a tank közepétől jobbra (a tank méretének arányában, m), és ilyen hosszú a csöve */
   side: 1.65,
-  barrel: 2.1,
+  barrel: 1.95,
 } as const;
 
 /**

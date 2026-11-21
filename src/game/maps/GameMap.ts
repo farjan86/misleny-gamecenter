@@ -635,6 +635,18 @@ export class GameMap implements Terrain {
     this.walls.setOwnerEnabled(index, false);
   }
 
+  /** Az összedőlt épület újra áll: a falai visszakerülnek az ütközési rácsba. */
+  restoreBuilding(index: number): boolean {
+    if (!this.structures.restore(index)) return false;
+    this.walls.setOwnerEnabled(index, true);
+    return true;
+  }
+
+  /** Az épület alaprajza (lapított x, y párok) – a visszaépülés előtt megnézzük, áll-e rajta valami. */
+  buildingRing(index: number): readonly number[] | null {
+    return this.data.buildings[index]?.pts ?? null;
+  }
+
   /** Új kör: minden fa, oszlop és épület újra áll, a lövésnyomok eltűnnek. */
   resetDamage(): void {
     for (let i = 0; i < this.structures.count; i++) if (this.structures.collapsed[i]) this.walls.setOwnerEnabled(i, true);

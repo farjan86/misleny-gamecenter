@@ -389,7 +389,19 @@ describe('sebzés', () => {
     run(world, {}, seconds(TANK.respawnDelay) + 2);
     expect(target.alive).toBe(true);
     expect(target.hp).toBe(TANK.maxHp);
-    expect(target.effects.invulnerable).toBeGreaterThan(0); // rövid védelem újraéledés után
+    // újraéledés után 3 mp teljes védelem: a lövés nem sebzi
+    expect(TANK.spawnShield).toBe(3);
+    // (az újraéledés óta kb. egy másodperc telt el)
+    expect(target.effects.invulnerable).toBeGreaterThan(TANK.spawnShield - 1.2);
+    expect(target.effects.invulnerable).toBeLessThanOrEqual(TANK.spawnShield);
+    shooter.cooldown = 0;
+    target.x = shooter.x + 40;
+    target.y = shooter.y;
+    run(world, { [shooter.id]: { fire: true, aim: 0 } }, seconds(1));
+    expect(target.hp).toBe(TANK.maxHp);
+    // utána már igen
+    run(world, {}, seconds(TANK.spawnShield));
+    expect(target.effects.invulnerable).toBe(0);
   });
 
   it('a lézer és a rakéta is sebez; a rakéta robbanása a közelben állót is', () => {
@@ -768,7 +780,7 @@ describe('szintek', () => {
     veteran.hp = 20;
     veteran.weapon = 'rocket';
     veteran.tripleShots = 4;
-    veteran.ricochet = true;
+    veteran.effects.ricochet = 30;
     veteran.oil = 2;
     veteran.turrets = 1;
     veteran.effects.rapid = 30;
@@ -792,7 +804,7 @@ describe('szintek', () => {
     // a fegyverzet és a képességek elvesznek
     expect(veteran.weapon).toBeNull();
     expect(veteran.tripleShots).toBe(0);
-    expect(veteran.ricochet).toBe(false);
+    expect(veteran.effects.ricochet).toBe(0);
     expect(veteran.shield).toBe(0);
     expect(veteran.oil).toBe(0);
     // a lövegekből az alapkészlet újra jár
@@ -892,8 +904,10 @@ describe('szintek', () => {
     expect(shooter.level).toBe(2);
     expect(shooter.botKills).toBe(0);
     expect(LEVEL.botKills).toBe(3);
-    // a kilövések száma (a győzelemhez) minden botnál nő
-    expect(shooter.kills).toBe(3);
+    // a kilőtt botok száma (statisztika) minden botnál nő
+    expect(shooter.botsDown).toBe(3);
+    // a kilőtt botok nem számítanak kilövésnek (csak statisztika)
+    expect(shooter.kills).toBe(0);
     // a számláló a halál után sem vész el
     kill();
     const enemy = world.addTank(shooter.x - 12, shooter.y, 0, { team: 11 });
@@ -1140,18 +1154,20 @@ describe('megmaradó fegyverek', () => {
     run(world, {}, seconds(TANK.respawnDelay + 0.5));
     expect(target.alive).toBe(true);
     expect(target.weapon).toBeNull();
-    expect(target.ricochet).toBe(false);
+    expect(target.effects.ricochet).toBe(0);
     expect(target.tripleShots).toBe(0);
   });
 
-  it('a pattanó lövedék megmaradó képesség: fegyvercsere után is megvan, a nehéz lövedék is pattan', () => {
+  it('a pattanó lövedék 60 mp-ig tart: fegyvercsere után is megvan, a nehéz lövedék is pattan', () => {
     const world = new World(arena(4000));
     const tank = world.addTank(200, 2000, 0);
     give(world, tank, 'ricochet');
-    run(world, {}, seconds(60));
-    expect(tank.ricochet).toBe(true);
+    expect(tank.effects.ricochet).toBe(PICKUPS.ricochet.duration);
+    expect(PICKUPS.ricochet.duration).toBe(60);
+    run(world, {}, seconds(30));
+    expect(tank.effects.ricochet).toBeGreaterThan(0);
     give(world, tank, 'heavy');
-    expect(tank.ricochet).toBe(true);
+    expect(tank.effects.ricochet).toBeGreaterThan(0);
     run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
     expect(world.bullets[0].kind).toBe('heavy');
     expect(world.bullets[0].bounces).toBe(BOOST.ricochetBounces);
@@ -1160,7 +1176,16 @@ describe('megmaradó fegyverek', () => {
     tank.cooldown = 0;
     run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
     expect(world.bullets[world.bullets.length - 1].bounces).toBe(0);
-    expect(tank.ricochet).toBe(true);
+    expect(tank.effects.ricochet).toBeGreaterThan(0);
+    // 60 mp után lejár: a lövedék már nem pattan
+    run(world, {}, seconds(31));
+    expect(tank.effects.ricochet).toBe(0);
+    give(world, tank, 'heavy');
+    tank.cooldown = 0;
+    const before = world.bullets.length;
+    run(world, { [tank.id]: { fire: true, aim: 0 } }, 2);
+    expect(world.bullets.length).toBeGreaterThan(before);
+    expect(world.bullets[world.bullets.length - 1].bounces).toBe(0);
   });
 
   it('a hármas lövés lövésszámra szól, nem időre', () => {
@@ -1272,5 +1297,15 @@ describe('újraéledés', () => {
     expect(player.alive).toBe(true);
     expect(player.hullAngle).toBeCloseTo(SPAWN_ANGLE, 6);
     expect(player.turretAngle).toBeCloseTo(SPAWN_ANGLE, 6);
+  });
+});
+
+describe('lézer: a lövő tank', () => {
+  it('a lézer eseménye megmondja, melyik tank lőtt (a kliens ennek a csövéhez köti a sugarat)', () => {
+    const world = new World(arena());
+    const tank = world.addTank(100, 200, 0);
+    give(world, tank, 'laser');
+    const beam = run(world, { [tank.id]: { fire: true, aim: 0, throttle: 1 } }, 2).find((e) => e.type === 'laser');
+    expect(beam && beam.type === 'laser' && beam.tank).toBe(tank.id);
   });
 });

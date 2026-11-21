@@ -42,7 +42,7 @@ async function start(): Promise<void> {
     // a pálya a meccs beállításai szerint: játéktér és időjárás
     map.setArea(settings.area);
     map.weather = settings.weather;
-    world = new ClientWorld(map, link, message.room, message.tank, message.players, message.workshops);
+    world = new ClientWorld(map, link, message.room, message.tank, message.players, message.workshops, message.destroyed ?? null);
     // meccs közben a böngésző megerősítést kér a lap bezárása előtt (a Ctrl+W ellen)
     guardLeave(true);
     // többjátékos meccsen: üzenetek a többieknek és hang gombnyomásra (a saját szerveren át)

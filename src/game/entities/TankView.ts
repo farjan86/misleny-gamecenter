@@ -8,8 +8,8 @@
 import Phaser from 'phaser';
 import { BASE_PPM } from '../quality';
 import { MG } from '../sim/gadgets';
-import { angleDiff, LEVEL, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
-import { FIRE_FRAMES, GTEX } from './gameTextures';
+import { angleDiff, LEVEL, TANK, tankMaxHp, tankSize, tankTier, type TankState } from '../sim/world';
+import { FIRE_FRAMES, GTEX, MG_TEX } from './gameTextures';
 import { damageStage, tankTex, TANK_TIERS, TRACK_FRAMES, TURRET_PIVOT, TURRET_SIZE, type TankPaint } from './tankTextures';
 import { TEX } from './textures';
 
@@ -28,6 +28,22 @@ export class TankView {
   private readonly shadow: Phaser.GameObjects.Image;
   private readonly hull: Phaser.GameObjects.Image;
   private readonly turret: Phaser.GameObjects.Image;
+  /** ahol a tank a képernyőn utoljára látszott (pixel), a tornya szöge és a mérete – a lézersugár innen indul */
+  private shownX = 0;
+  private shownY = 0;
+
+  /** Ahol a tank most a képen látszik (világpixel): a simított, kirajzolt hely. */
+  get shownPx(): { x: number; y: number } {
+    return { x: this.shownX, y: this.shownY };
+  }
+  private shownTurret = 0;
+  private shownSize = 1;
+
+  /** A cső vége a képernyőn (pixel): ahonnan a lövés látszik. */
+  muzzle(): { x: number; y: number; angle: number } {
+    const reach = TANK.barrelLength * this.shownSize * this.ppm;
+    return { x: this.shownX + Math.cos(this.shownTurret) * reach, y: this.shownY + Math.sin(this.shownTurret) * reach, angle: this.shownTurret };
+  }
   /** a sérülések rajza a test és a torony fölött, és a súlyosan sérült tankon égő láng */
   private readonly hullDamage: Phaser.GameObjects.Image;
   private readonly turretDamage: Phaser.GameObjects.Image;
@@ -292,18 +308,19 @@ export class TankView {
     // kiegészítő géppuska: a tank jobb oldalán ül, kilóg a lánctalp fölé; a célja felé fordul, különben előre néz
     if (tank.effects.gun > 0) {
       if (!this.mg) {
-        this.mg = this.scene.add.image(0, 0, GTEX.mg).setOrigin(0.2, 0.37).setDepth(11.2);
+        this.mg = this.scene.add.image(0, 0, GTEX.mg).setOrigin(MG_TEX.pivotX / MG_TEX.w, 0.5).setDepth(11.2);
         this.mgAngle = hull;
       }
       const want = time - this.mgShotAt < 0.7 ? this.mgTarget : hull;
       this.mgAngle += angleDiff(want, this.mgAngle) * 0.3;
       const side = MG.side * tankSize(tank) * this.ppm;
-      // lövéskor a fegyver egy pillanatra hátrarúg
-      const kick = Math.max(0, 1 - (time - this.mgShotAt) / 0.07) * 2.5 * size;
+      // lövéskor a fegyver egy pillanatra hátrarúg (kicsit, mint egy nehézgéppuska)
+      const kick = Math.max(0, 1 - (time - this.mgShotAt) / 0.07) * 1.2 * size;
       this.mg
         .setPosition(x + Math.cos(hull + Math.PI / 2) * side - Math.cos(this.mgAngle) * kick, y + Math.sin(hull + Math.PI / 2) * side - Math.sin(this.mgAngle) * kick)
         .setRotation(this.mgAngle)
-        .setScale(size * 1.7)
+        // a valós méret másfélszerese (a rajz 48 px/m, a játék alap léptéke 12 px/m): kicsi, de jól kivehető
+        .setScale(size * (12 / MG_TEX.ppm) * 1.5)
         .setAlpha(body);
     } else if (this.mg) {
       this.mg.destroy();
@@ -320,6 +337,11 @@ export class TankView {
       this.hull.setTexture(this.hullFrames[frame]);
     }
     this.turret.setPosition(x, y).setRotation(turret);
+    this.shownX = x;
+    this.shownY = y;
+    this.shownTurret = turret;
+    // a cső hossza méterben a tank méretével nő (a rajzolás léptéke nélkül)
+    this.shownSize = tankSize(tank);
     this.marker?.setPosition(x, y).setRotation(hull);
 
     // életerő és sérülések: minél kevesebb az életerő, annál roncsoltabb a tank

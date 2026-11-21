@@ -109,6 +109,73 @@ body {
   image-rendering: pixelated;
 }
 
+/* a térkép billentyűje a keret sarkában */
+#hud-minimap .map-key {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #f4f0e0;
+  background: rgba(12, 15, 20, 0.82);
+  border: 1px solid rgba(255, 216, 74, 0.7);
+  pointer-events: none;
+}
+
+#hud-minimap .map-key b {
+  color: #ffd84a;
+}
+
+#hud-minimap .map-key i {
+  font-style: normal;
+}
+
+#hud-minimap .map-key i::after {
+  content: ' – nagy térkép';
+}
+
+#hud-minimap.big .map-key {
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 10px;
+  font-size: 14px;
+}
+
+#hud-minimap.big .map-key i::after {
+  content: ' – bezárás · kattintás: GPS-cél · jobb klikk: GPS ki';
+}
+
+/* GPS: a cél távolsága a térkép jobb alsó sarkában */
+#hud-minimap .gps-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #ffffff;
+  background: rgba(30, 120, 210, 0.92);
+  border: 1px solid #101418;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#hud-minimap.big .gps-badge {
+  right: 8px;
+  bottom: 8px;
+  padding: 3px 10px;
+  font-size: 14px;
+}
+
+#hud-minimap.big.aim .map-key i::after {
+  content: ' vagy X – mégsem (kattints a célpontra)';
+}
+
+.keycap.fixed {
+  grid-column: span 2;
+  opacity: 0.75;
+  cursor: default;
+}
+
 #hud-minimap.big {
   top: 50%;
   right: 50%;
@@ -1173,6 +1240,28 @@ body {
 
 .room .state.full {
   color: #f0a040;
+}
+
+/* a játéktempó csúszkája és a zárolt (a tempó által beállított) mezők */
+.tempo-slider b {
+  color: #ffd84a;
+}
+
+.slider.locked {
+  opacity: 0.55;
+}
+
+.slider.locked input {
+  cursor: not-allowed;
+}
+
+.area-buttons {
+  justify-content: flex-start;
+  margin-top: 2px;
+}
+
+#area-map.locked {
+  cursor: not-allowed;
 }
 
 /* a demó játék: bármikor be lehet lépni */

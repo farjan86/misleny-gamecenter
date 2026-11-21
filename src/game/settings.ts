@@ -6,7 +6,7 @@ import type { MatchSettings } from './sim/match';
 const STORAGE_KEY = 'tank-misleny.settings.v2';
 
 /** A billentyűvel kiváltható műveletek. */
-export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'deploy', 'mine', 'smoke', 'strike', 'cloak', 'chat', 'talk', 'scores', 'map', 'fullscreen', 'info'] as const;
+export const ACTIONS = ['forward', 'back', 'left', 'right', 'fire', 'boost', 'oil', 'deploy', 'mine', 'smoke', 'strike', 'cloak', 'chat', 'talk', 'scores', 'map', 'gps', 'fullscreen', 'info'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -25,7 +25,8 @@ export const ACTION_LABEL: Record<Action, string> = {
   chat: 'Üzenet írása a többieknek',
   talk: 'Beszéd (amíg nyomva van)',
   scores: 'Eredménytábla (amíg nyomva van)',
-  map: 'Nagy térkép',
+  map: 'Nagy térkép (kattintás rajta: GPS-cél)',
+  gps: 'GPS kikapcsolása',
   fullscreen: 'Teljes képernyő',
   info: 'Irányítás (súgó)',
 };
@@ -50,6 +51,7 @@ export const DEFAULT_KEYS: KeyBindings = {
   talk: ['KeyB'],
   scores: ['Tab'],
   map: ['KeyM'],
+  gps: ['KeyG'],
   fullscreen: ['KeyF'],
   info: ['KeyH'],
 };
@@ -79,6 +81,11 @@ function sanitize(raw: Partial<Settings> | null): Settings {
     const list = given[action];
     if (Array.isArray(list)) keys[action] = list.filter((c): c is string => typeof c === 'string' && c.length > 0 && c.length < 24).slice(0, 2);
   }
+  // a rögzített billentyűk mindig a helyükön vannak, és más művelethez nem tartozhatnak
+  for (const [action, codes] of Object.entries(FIXED_KEYS) as [Action, string[]][]) {
+    for (const other of ACTIONS) if (other !== action) keys[other] = keys[other].filter((c) => !codes.includes(c));
+    keys[action] = [...codes];
+  }
   // a régi alapkiosztás (Enter: üzenet, T: beszéd) helyett az új: T vagy Enter az üzenet, B a beszéd
   if (JSON.stringify(given.chat) === '["Enter"]' && JSON.stringify(given.talk) === '["KeyT"]') {
     keys.chat = [...DEFAULT_KEYS.chat];
@@ -90,6 +97,9 @@ function sanitize(raw: Partial<Settings> | null): Settings {
   const look = typeof raw?.look === 'number' && Number.isInteger(raw.look) && raw.look >= 0 && raw.look < 6 ? raw.look : 0;
   return { name, token, keys, volume, look, lastMatch: raw?.lastMatch && typeof raw.lastMatch === 'object' ? raw.lastMatch : null };
 }
+
+/** A rögzített (át nem állítható) billentyűk: a térkép mindig az M (mint map). */
+export const FIXED_KEYS: Partial<Record<Action, string[]>> = { map: ['KeyM'] };
 
 export function loadSettings(): Settings {
   try {

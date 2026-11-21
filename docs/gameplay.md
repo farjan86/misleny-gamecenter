@@ -7,7 +7,7 @@ megjelenítést és a kód felépítését írja le.
 ## A játék
 
 Kozármisleny térképének egy kijelölt részén, tankkal, mindenki mindenki ellen.
-Egy meccsben 1–8 játékos és (beállítástól függően) gép vezérelte botok vannak.
+Egy meccsben 1–20 játékos (nyitott játékban 2–100) és (beállítástól függően) gép vezérelte botok vannak.
 A meccs **időre megy** (5–30 perc): a kilőtt tank néhány másodperc múlva
 újraéled, és **az nyer, aki az idő lejártáig a legtöbb tankot lövi ki**. Az
 utcákon – ha a létrehozó nem kapcsolja ki – civil forgalom is van.
@@ -15,6 +15,39 @@ utcákon – ha a létrehozó nem kapcsolja ki – civil forgalom is van.
 Ez az egyetlen játékmód („deathmatch"); a mód a meccs beállításainak része
 (`mode`), hogy később más módok (csapatos, várvédő, küldetés) is
 bekerülhessenek.
+
+### Játéktempó
+
+Új játék létrehozásakor (és egyjátékos módban) a **Játéktempó** csúszka egy
+mozdulattal beállítja az egész meccset a játékosszámhoz. Alapérték: **Pörgős**.
+
+| Tempó | Pálya játékosonként | Legkisebb pálya | Botok (2 / 20 játékosnál) | Bot ügyesség, agresszivitás, szívósság | Tárgyak, forgalom |
+|---|---|---|---|---|---|
+| Egyéni | – minden kézzel állítható | – | – | – | – |
+| Lopakodó vadászat | kb. 0,08 km² | 0,3 km² | 3 / 1 | közepes, óvatos, szívós | kevés, kevés |
+| Taktikus | kb. 0,06 km² | 0,22 km² | 4 / 1 | ügyes, közepes, szívós | közepes, kevés |
+| Kiegyensúlyozott | kb. 0,045 km² | 0,16 km² | 6 / 1 | közepes, közepes, közepes | közepes, kevés |
+| **Pörgős** | kb. 0,032 km² | 0,11 km² | 9 / 2 | ügyes, harcias, közepes | sok, nagyon kevés |
+| Aréna | kb. 0,022 km² | 0,07 km² | 11 / 4 | nagyon ügyes, vadászik rád, gyenge | nagyon sok, nincs |
+
+- A pálya legfeljebb 1 km², és kevés játékosnál sem kisebb a tempó legkisebb
+  pályájánál (a pörgős legalább kb. 380 × 290 m) – ne legyen szűk. A botok
+  száma a játékosszámmal csökken: kevés játékosnál a botok adják az akciót,
+  sokaknál már a játékosok.
+- **A pályát a gép jelöli ki** véletlen helyen, de mindig játszható helyen: a
+  kijelölt cellák legalább 60%-ában utca van, legfeljebb 15%-uk víz, és az
+  utak, épületek szerint a legjobb néhány hely közül választ. A **„Másik
+  helyszín”** gomb ugyanakkora pályát máshová sorsol.
+- Tempó állásban a pálya, a botok, a tárgyak és a forgalom **zárolva van** (az
+  értékük látszik); szabadon állítható a név, a belépőkód, a létszám, a
+  játékidő és az időjárás. Kézi beállításhoz az **Egyéni** állás kell: ilyenkor
+  a csúszkák az addigi tempó értékeiről indulnak. (Egyéni állásban a botok
+  száma a régi módon, a pálya méretéhez arányosan számolódik – egészen kicsi
+  pályán így kevesebb lehet, mint az Aréna tempóban.)
+- A szerver is a tempó táblázatából számol: ha a játékok listájában „Pörgős”
+  áll, az valóban a pörgős beállítás.
+- **Nyitott játéknál** a pálya és a botszám a **várható létszámhoz** igazodik
+  (külön csúszka, alapból 10 fő), nem a 100 fős felső korláthoz.
 
 ### Menük
 
@@ -47,12 +80,13 @@ bekerülhessenek.
 | Q | ágyú telepítése a tank mögé (ha van töltet) |
 | R | akna lerakása a tank mögé (ha van töltet) |
 | C | füst a tank köré (ha van töltet) |
-| X | tüzérségi csapás oda, ahová az egér mutat (ha jár) |
+| X | tüzérségi csapás (ha jár): feljön a nagy térkép, azon kell kattintani a célpontra; utána a térkép magától bezárul |
 | Bal Ctrl / V | álcázás (percenként egyszer, 10 másodpercre) |
 | T vagy Enter | üzenet írása mindenkinek (többjátékos meccsen) – a mező a képernyő közepén nyílik, az üzenetek a jobb szélen jelennek meg |
 | B | beszéd, amíg nyomva van (többjátékos meccsen) |
 | Tab | eredménytábla, amíg nyomva van |
-| M | az egész város térképe utcanevekkel be/ki |
+| M | nagy térkép ki/be – **rögzített billentyű**, nem állítható át (a térkép keretében is ki van írva); a nagy térképre kattintva **GPS-cél** |
+| G | a GPS kikapcsolása (a nagy térképen jobb klikk is) |
 | F | teljes képernyős mód be/ki (a játék bal alsó sarkában halványan ki is van írva; teljes képernyőn eltűnik) |
 | H | információs panel be/ki |
 | Esc | menü (billentyűk, kilépés) |
@@ -111,7 +145,8 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
   mindenkinek mutatja, mivel történt a kilövés, és a kilövő is megtudja, ha az
   aknája, a lövege vagy a tüzérsége talált.
 - **Meccs végi statisztika:** a végeredmény táblázata játékosonként mutatja a
-  kilövéseket, a halálokat, az arányukat, az okozott és a kapott sebzést, a
+  kilövéseket (csak a kilőtt ellenséges játékosok), a **kilőtt botokat** (külön
+  oszlopban, csak statisztika), a halálokat, az arányukat, az okozott és a kapott sebzést, a
   találatokat és a leadott lövéseket, a pontosságot, a leghosszabb sorozatot,
   a ledöntött házakat, a szintet és a **teljesítménypontot**. A pont: kilövés
   100, halál −50, sebzés pontonként 0,3, sorozat 20, pontosság %-onként 1
@@ -129,13 +164,12 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
   megáll (a határt sárga vonal jelzi), azon túl semmi nem látszik – a térképen sem.
 - **A tank sávja** a bal szélen, egymás alatt (így nem lóg bele az órába):
   felül a tank szintje, alatta az álcázás állapota, majd ami éppen nála van – a
-  fegyver (nehéz lövedék, rakéta, lézer), a megmaradó képességek (pattanó
-  lövedék), a hármas lövés hátralévő lövései, a pajzs, az olaj, a lövegek, az
+  fegyver (nehéz lövedék, rakéta, lézer), a hármas lövés hátralévő lövései, a pajzs, az olaj, a lövegek, az
   aknák, a füst, valamint az időre szóló tárgyak a hátralévő másodpercekkel.
   Amit billentyűvel lehet használni, annál a **beállított billentyű** is ott
   áll zárójelben, pl. „Löveg (Q) ×5”, „Akna (R) ×2”.
-- A térkép a tank kb. 700 m-es környékét mutatja (kis játéktérnél az egészet); az M az egész játékteret mutatja nagyban. A botok piros, a többi játékos narancssárga pontként látszik
-  (a játékosok mindig, bármilyen messze vannak).
+- A térkép a tank kb. 700 m-es környékét mutatja (kis játéktérnél az egészet, kitöltve); az M az egész játékteret mutatja nagyban, a képernyőhöz illő felbontásban (kis játéktéren sem kockás; a képe a játék elején a háttérben készül el, így azonnal nyílik). A térképen **csak a botok** látszanak (piros pont); az ellenséges
+  játékosok nem – őket a saját szemeddel kell megtalálnod.
 - A saját tank zöld, a botok vörösek, a többi játékos tankja kék.
 - A tankok fölött az életerősáv; a sajátod fölött – használat közben – a
   gyorsító hőfoka is.
@@ -147,8 +181,8 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
 - **Kilövési értesítő** a térkép alatt: ki kit lőtt ki (a saját neved sárga,
   a botok halványak). Néhány másodperc után elhalványul.
 - **Bosszú:** aki kilőtt, az az újraéledésed után 25 másodpercig jelölve van:
-  piros nyíl mutat rá (ha nincs a képen, a kép széléről felé), és a térképen
-  villogó keret jelzi. Ha közben kilövöd, „Bosszú!” üzenetet kapsz; ha más
+  piros nyíl mutat rá (ha nincs a képen, a kép széléről felé); ha bot volt, a
+  térképen villogó keret is jelzi (játékos a térképen nem látszik). Ha közben kilövöd, „Bosszú!” üzenetet kapsz; ha más
   lövi ki, vagy füstbe bújik, a jel eltűnik. Pont nem jár érte külön.
 - **Sebzésszámok:** a találat helyén felröppen a sebzés (piros: téged ért,
   sárga: te okoztad, fehér: másoké).
@@ -182,13 +216,21 @@ Játék közben állandóan a **térkép** (jobb felül), a **menü gombja**
 - **Sebzés:** a tank életereje 200 (szintenként 24-gyel több, a 20. szinten
   656), vagyis a kezdő tank nyolc sima lövedéket bír ki. Egy sima lövedék 25-öt
   sebez, a nehéz 50-et, a rakéta 55-öt (a robbanása 7 m-en belül további
-  30-at), a lézer 18-at.
+  30-at), a lézer 24-et.
+- **Rombolás fegyverenként:** az épületekben okozott kár a sebzés többszöröse –
+  ágyú 1×, lézer 1,4×, nehéz lövedék 2,4×, rakéta 3× (egy kis házat egy rakéta
+  is ledönt), és a rakéta robbanása a 6 m-en belüli szomszéd házakat is rombolja.
+  A becsapódás nyoma is a fegyverrel nő: az ágyúé kis folt, a nehéz lövedéké
+  2,6 m-es, a rakétáé 3,8 m-es mély kráter (sötét mélyedés, árnyékos fal, körülötte
+  kidobott föld).
 - **Kilövés:** a kilőtt tank 4 másodperc múlva éled újra – véletlen helyen, a
-  többi játékostól távol –, rövid sebezhetetlenséggel, alapfegyverrel,
+  többi játékostól távol –, **3 másodperces teljes védelemmel** (semmi nem sebzi), alapfegyverrel,
   akárhányszor. A roncsa ott marad, ahol kilőtték (akadály; egy ideig ég).
-- **Győzelem:** az idő lejártakor az nyer, akinek a legtöbb kilövése van (a
-  botok kilövése is számít, és az is, amit a telepített ágyúja vagy egy általa
-  felrobbantott jármű ért el). Azonos kilövésszámnál az nyer, akit
+- **Győzelem:** az idő lejártakor az nyer, akinek a legtöbb kilövése van.
+  **Kilövésnek csak az ellenséges játékos kilövése számít** (az is, amit a
+  telepített ágyúja vagy egy általa felrobbantott jármű ért el); a kilőtt botok
+  száma csak statisztika (a meccs végi táblában és az információs panelen), a
+  helyezésbe és a pontba nem számít. Egyedül játszva az eredmény a kilőtt botok száma. Azonos kilövésszámnál az nyer, akit
   kevesebbszer lőttek ki; ha ez is egyezik, döntetlen. Ha egy többjátékos
   meccsből mindenki más kilép, a bent maradó nyer.
 - **Önjavítás:** ha a tankot 8 másodpercig nem éri sebzés, az életereje
@@ -397,12 +439,13 @@ Minden tank **öt löveggel** indul, és újraéledéskor újra megkapja az öt�
 
   | A gazda szintje | Életerő | Lőtáv | Két lövés között | Egy lövés sebzése |
   |---|---|---|---|---|
-  | 1. | 160 | 55 m | 1,0 mp | 25 |
-  | 10. | 448 | 68,5 m | 0,65 mp | 43 |
-  | 20. | 768 | 83,5 m | 0,47 mp | 63 |
+  | 1. | 100 | 55 m | 1,0 mp | 25 |
+  | 10. | 208 | 68,5 m | 0,65 mp | 43 |
+  | 20. | 328 | 83,5 m | 0,47 mp | 63 |
 
   A 20. szintű tank egy lövege így kb. ötször annyit sebez másodpercenként,
-  mint a kezdőé, és közel ötször annyit bír ki. Szintlépéskor a löveg a többlet
+  mint a kezdőé, és kb. háromszor annyit bír ki – de ki lehet lőni: egy azonos szintű
+  tanknak öt-hat lövés, egy kezdő tanknak a legerősebb löveghez is elég 14 alaplövés. Szintlépéskor a löveg a többlet
   életerőt megkapja; ha a gazda szintet veszít, a löveg felső határa is csökken.
 - **Kilőhető:** az ellenség lövedéke, a rakéta robbanása, az akna, a tüzérségi
   csapás és a felrobbanó jármű is sebzi. A lerakója lövedéke nem árt neki. A
@@ -470,6 +513,25 @@ mennyi idő múlva lesz újra használható.
 > **Újraéledés:** a tankod újraéledéskor és belépéskor a térkép teteje felé
 > (felfelé) néz.
 
+### GPS
+
+- **Cél kijelölése:** az **M**-mel feljövő nagy térképen kattints oda, ahová menni
+  szeretnél: ott egy kék zászló jelenik meg. Újabb kattintás máshová: a cél átkerül.
+- **Csak normál utakon vezet** (fő utak, lakóutcák, kiszolgáló utak) – gyalogúton,
+  kerékpárúton, földúton és zöldterületen nem. Ha a cél nem úton van (pl. egy
+  kertben), a GPS a hozzá legközelebbi útpontig visz, onnan pontozott vonal mutatja.
+  A játéktérből nem vezet ki.
+- **Amit mutat:** a talajon áttetsző kék sáv, rajta a cél felé áramló fehér
+  nyilacskák (nem keverhető össze a sárga felezővonallal); a kép szélén kék nyíl
+  a cél felé; a térképeken kék vonal és zászló; a térkép sarkában a hátralévő
+  távolság („GPS 340 m · G: ki”).
+- **Újratervez:** fél másodpercenként a tank helyéről – ha letérsz, onnan vezet tovább.
+- **Kikapcsolás:** **G** (átállítható), vagy jobb klikk a nagy térképen. Megérkezéskor
+  (10 m-en belül) magától kikapcsol. Kilövéskor a cél megmarad.
+- **Csak te látod**, a többiek nem. A tüzérségi csapás célzása (**X**) közben a
+  kattintás a csapás helye, nem GPS-cél.
+- A lerombolt házak helyén nem vág át: a GPS mindig az utakon marad.
+
 ### Javítóműhely
 
 A pályán néhány **javítóműhely** áll, minden meccsen máshol (négyzetkilométerenként
@@ -490,10 +552,13 @@ Fala nincs, be lehet hajtani.
 - Minden harmadik kilövés után, amelyet halál nélkül érsz el, jár egy
   **tüzérségi csapás** (egyszerre legfeljebb kettő lehet nálad; a botok nem
   kapnak). A halál a sorozatot nullázza, a már megszerzett csapás megmarad.
-- **Kérése:** az **X** oda kéri, ahová az egér mutat; vagy nyisd meg a nagy
-  térképet (M) és kattints rá – így a pálya bármely pontjára kérhető.
+- **Kérése:** az **X** feljön a nagy térkép, és csak azon lehet célpontot
+  választani: kattints oda, ahová kéred – a pálya bármely pontjára. A kérés
+  után a térkép magától bezárul; az X újra megnyomva, az M vagy az Esc a kérés
+  nélkül zárja be.
 - 2,2 másodperc figyelmeztetés után (piros kör a földön és a térképen, süvítő
-  hang) nyolc lövedék hull a 13 méter sugarú körbe. Egy lövedék 7 méteres
+  hang) 18 lövedék hull a 24 méter sugarú körbe, egyenletesen elosztva (a kör
+  minden részére jut, nem csomósodnak), kb. 2,7 másodperc alatt. Egy lövedék 7 méteres
   körben legfeljebb 60-at sebez, a távolsággal gyengülve; az épületeket is
   rombolja, a fákat kidönti. A kérőt és a saját lövegeit nem sebzi; a kilövés
   neki számít.
@@ -537,8 +602,8 @@ múlva új jelenik meg, máshol. A tank érintésre veszi fel őket.
 |---|---|---|
 | Nehéz lövedék | fegyver: nagyobb robbanás, gyorsabb lövedék, dupla sebzés | a következő fegyverig vagy a kilövésig |
 | Rakéta | fegyver: lassan indul, felgyorsul, kb. 160 m-re repül, területre sebez | a következő fegyverig vagy a kilövésig |
-| Lézer | fegyver: azonnal célba érő sugár 160 m-ig | a következő fegyverig vagy a kilövésig |
-| Pattanó lövedék | képesség: az alap- és a nehéz lövedék a falról kétszer visszapattan (a rakéta és a lézer nem) | a kilövésig |
+| Lézer | fegyver: azonnal célba érő sugár 160 m-ig, 24 sebzés; a sugár a csőből indul (menet közben is), vakító sárga mag kettős lila spirállal | a következő fegyverig vagy a kilövésig |
+| Pattanó lövedék | az alap- és a nehéz lövedék a falról kétszer visszapattan (a rakéta és a lézer nem) | 60 mp |
 | Hármas lövés | három lövedék (rakéta, lézersugár) legyezőben, bármelyik fegyverrel | 25 lövés (összeadódik, legfeljebb 75) |
 | Gyorstöltő | 2,5-szer gyorsabb tüzelés | 15 mp |
 | Olajfolt | 3 lerakható, 7 méter sugarú folt (egy utcát teljes szélességében elzár); aki gyorsan hajt rá, 1,7 mp-ig irányíthatatlanul pörög és sodródik, és aki belehajt (akár lassan), annak **olajos lesz a lánctalpa**: a folton és utána még 4 mp-ig kipörög, mint a jégen – a végsebessége a 45%-a, a gyorsulása és a fékezése a 30%-a | 3 töltet, a folt 45 mp-ig marad |

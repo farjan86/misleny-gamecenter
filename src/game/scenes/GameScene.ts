@@ -16,6 +16,7 @@ import { WeatherLayer } from '../entities/WeatherLayer';
 import { ChunkLayer } from '../maps/ChunkLayer';
 import type { GameMap } from '../maps/GameMap';
 import { RoadLabelLayer } from '../maps/RoadLabelLayer';
+import { RoadNav, type Route } from '../maps/roadNav';
 import type { ClientWorld } from '../net/ClientWorld';
 import { BASE_PPM } from '../quality';
 import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '../settings';
@@ -39,9 +40,9 @@ const REVENGE_SECONDS = 25;
 /** Ha a térkép ennyi idő alatt sem készül el, a töltőképernyő akkor is eltűnik. */
 const LOADING_TIMEOUT_MS = 8000;
 /** A robbanás mérete a találat fajtája szerint. */
-const BLAST: Record<ShotKind, number> = { shell: 1, heavy: 1.7, rocket: 2.4, laser: 0.45 };
+const BLAST: Record<ShotKind, number> = { shell: 1, heavy: 2, rocket: 2.9, laser: 0.55 };
 /** A maradandó lövésnyom sugara méterben, a találat fajtája szerint. */
-const SCAR: Record<ShotKind, number> = { shell: 1.1, heavy: 1.8, rocket: 2.6, laser: 0.45 };
+const SCAR: Record<ShotKind, number> = { shell: 1.2, heavy: 2.6, rocket: 3.8, laser: 0.55 };
 /** A találattól kigyulladó háztető tüze: a láng fél szélessége (m) és az égés ideje (mp). */
 const ROOF_FIRE: Record<ShotKind, { size: number; life: number }> = {
   shell: { size: 1.7, life: 24 },
@@ -66,6 +67,32 @@ export interface GameSceneData {
   volume: number;
   /** a játékos a „Kilépés a meccsből” gombra kattintott */
   onLeave: () => void;
+}
+
+/**
+ * A GPS-útvonal a tank mostani helyétől: megkeresi, melyik szakasz mellett jár a tank (az útvonal
+ * elején), az addig megtett részt levágja, és az útvonal a tanktól indul. off: a tank távolsága az
+ * útvonaltól (m) – ha nagy, letért róla (az első szakasz a tervezéskori tankhelytől indul, az nem számít).
+ */
+function trimRoute(p: readonly number[], x: number, y: number): { points: number[]; length: number; off: number } {
+  let best = 0;
+  let bestD = Infinity;
+  // csak az elején keres: a tank az utolsó tervezés óta legfeljebb ennyi pontot haladhatott
+  const last = Math.min(p.length - 4, 80);
+  for (let i = 0; i <= last; i += 2) {
+    const dx = p[i + 2] - p[i];
+    const dy = p[i + 3] - p[i + 1];
+    const t = Math.max(0, Math.min(1, ((x - p[i]) * dx + (y - p[i + 1]) * dy) / (dx * dx + dy * dy || 1)));
+    const d = Math.hypot(x - p[i] - dx * t, y - p[i + 1] - dy * t);
+    if (d < bestD - 0.01) {
+      bestD = d;
+      best = i;
+    }
+  }
+  const points = [x, y, ...p.slice(best + 2)];
+  let length = 0;
+  for (let i = 2; i < points.length; i += 2) length += Math.hypot(points[i] - points[i - 2], points[i + 1] - points[i - 1]);
+  return { points, length, off: best === 0 ? 0 : bestD };
 }
 
 /** A lángszóró lángjának egy darabja: a csőtől kifelé repül, közben nő, és fehérből sárgán, narancson át vörösbe hűl. */
@@ -93,6 +120,18 @@ const FLAME_SPEED = 46;
 
 /** egy füstfelhő gomolyagjainak száma */
 const SMOKE_PUFFS = 26;
+/**
+ * A lézersugár élete (mp) és rétegei (pixelvastagság 1-es léptéknél): halvány borostyán izzás,
+ * sárga sugár, vakító fehér mag – körülötte két spirálisan tekeredő lila szalag (LASER_SPIRAL).
+ */
+const LASER_LIFE = 0.42;
+const LASER_LAYERS = [
+  { width: 36, tint: 0xff9010, alpha: 0.6, depth: 0 },
+  { width: 14, tint: 0xffd84a, alpha: 0.95, depth: 0.1 },
+  { width: 5, tint: 0xffffff, alpha: 1, depth: 0.2 },
+] as const;
+/** a szalagok: kitérés és menetemelkedés (pixel), forgási sebesség (rad/mp), színük */
+const LASER_SPIRAL = { amplitude: 11, pitch: 36, spin: 16, step: 3.5, colors: [0xa04dff, 0xe04ae0] } as const;
 /** Egy füstfelhő képei: a sűrű mag két rétege, a gomolyagok, a földre vetett árnyék; és a szervertől utoljára kapott hátralévő idő. */
 interface SmokeView {
   core: Phaser.GameObjects.Image[];
@@ -172,14 +211,35 @@ export class GameScene extends Phaser.Scene {
   private readonly boomPool: Phaser.GameObjects.Sprite[] = [];
   private readonly flashPool: Phaser.GameObjects.Image[] = [];
   private readonly beamPool: Phaser.GameObjects.Image[] = [];
+  /** a látható lézersugarak (lásd beam, updateLasers) */
+  private readonly lasers: {
+    shooter: number;
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    age: number;
+    layers: { width: number; tint: number; alpha: number; image: Phaser.GameObjects.Image }[];
+    muzzle: Phaser.GameObjects.Image;
+    hit: Phaser.GameObjects.Image;
+    sparks: { t: number; vx: number; vy: number; image: Phaser.GameObjects.Image }[];
+    back: Phaser.GameObjects.Graphics;
+    front: Phaser.GameObjects.Graphics;
+    seed: number;
+  }[] = [];
   private readonly smokePool: Phaser.GameObjects.Image[] = [];
   // képkockánként újrahasznált objektumok (ne keletkezzen fölösleges szemét)
   private readonly input_: TankInput = { throttle: 0, turn: 0, aim: null, fire: false, drop: false, boost: false, deploy: false, mine: false, smoke: false, strike: null, cloak: false };
   private readonly view = new Phaser.Geom.Rectangle();
   private readonly hudFrame: HudFrame = {
     x: 0, y: 0, angle: 0, viewX: 0, viewY: 0, viewW: 0, viewH: 0, canvasLeft: 0, canvasTop: 0, canvasWidth: 1, canvasHeight: 1,
-    tanks: [], pickups: null, focusId: 0, smokes: [], marks: [],
+    tanks: [], pickups: null, focusId: 0, smokes: [], marks: [], gps: null,
   };
+  /** GPS: a kijelölt cél, az utolsó útvonal és a tervezés ideje (mp); null: ki van kapcsolva */
+  private gps: { x: number; y: number; route: Route | null; plannedAt: number } | null = null;
+  private nav: RoadNav | null = null;
+  private gpsLine: Phaser.GameObjects.Graphics | null = null;
+  private gpsArrow: Phaser.GameObjects.Image | null = null;
+  /** a tüzérségi csapás célzása (X): amíg nyitva a nagy térkép, a kattintás a csapás helye */
+  private strikeAim = false;
   private canvasRectStale = true;
   private accumulator = 0;
   private pointerMoved = false;
@@ -245,6 +305,19 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setRoundPixels(true);
 
     this.ground = new ChunkLayer(this, this.map, this.ppm);
+    // menet közben léptünk be (nyitott játék): ami már le van döntve, az nálunk is úgy látszik
+    const destroyed = this.world.destroyed;
+    if (destroyed) {
+      for (const index of destroyed.b) {
+        if (this.map.structures.collapsed[index]) continue;
+        this.map.collapse(index);
+        this.ground.notify({ type: 'collapse', index });
+      }
+      destroyed.p.forEach((index, i) => {
+        if (!this.map.fellables.fell(index, destroyed.a[i] ?? 0)) return;
+        this.ground.notify({ type: 'felled', index, angle: destroyed.a[i] ?? 0 });
+      });
+    }
     this.fires = new FireLayer(this, this.ppm);
     this.weather = new WeatherLayer(this, this.map, this.ppm, this.world.room.settings.weather);
     this.tracks = new TrackLayer(this, this.map, this.ppm, this.world.room.settings.weather);
@@ -258,6 +331,11 @@ export class GameScene extends Phaser.Scene {
     this.hud.onMapClick((x, y) => {
       if (this.requestStrike(x, y)) this.hud.toggleMap();
     });
+    // GPS: kattintás a nagy térképen (M) – cél; jobb klikk vagy G – kikapcsolás
+    this.hud.onGps(
+      (x, y) => this.setGps(x, y),
+      () => this.gpsOff(),
+    );
     this.roadLabels = new RoadLabelLayer(this, this.map, this.ppm);
     this.buildWorkshops();
 
@@ -282,13 +360,14 @@ export class GameScene extends Phaser.Scene {
       if (ev.repeat) return;
       this.sfx.unlock();
       if (action === 'map') this.hud.toggleMap();
+      else if (action === 'gps') this.gpsOff();
       else if (action === 'info') this.hud.toggleInfo();
       else if (action === 'fullscreen') toggleFullscreen();
       else if (action === 'oil') this.dropLatch = true;
       else if (action === 'deploy') this.deployLatch = true;
       else if (action === 'mine') this.mineLatch = true;
       else if (action === 'smoke') this.smokeLatch = true;
-      else if (action === 'strike') this.requestStrike();
+      else if (action === 'strike') this.aimStrike();
       else if (action === 'cloak') this.requestCloak();
       else if (action === 'scores') this.hud.holdScores(true);
     }) as EventListener);
@@ -431,6 +510,7 @@ export class GameScene extends Phaser.Scene {
     if (world.listsChanged) this.syncOils();
     this.oilyTracks();
     this.flames(Math.min(0.1, deltaMs / 1000));
+    this.updateLasers(Math.min(0.1, deltaMs / 1000));
     // a „kilőttek” jelzés az újraéledésig marad kint, a hátralévő idővel
     const fallen = world.own;
     if (fallen && !fallen.alive) this.hud.deathCountdown(fallen.out ? -1 : fallen.respawn);
@@ -506,7 +586,10 @@ export class GameScene extends Phaser.Scene {
     f.pickups = own && own.effects.radar > 0 ? world.pickups : null;
     f.smokes = world.smokes;
     f.marks = this.updateMarks(view);
-    this.hud.setAiming(!!own && own.alive && own.strikes > 0);
+    // a csapás célzása csak addig tart, amíg az X-szel nyitott nagy térkép nyitva van
+    if (!this.hud.mapOpen) this.strikeAim = false;
+    this.hud.setAiming(this.strikeAim && !!own && own.alive && own.strikes > 0);
+    f.gps = this.updateGps(view);
     this.hud.update(f);
 
     // a saját tank fölött: a gyorsító hőfoka és az életek
@@ -581,7 +664,7 @@ export class GameScene extends Phaser.Scene {
     return (
       `<h3>${escapeHtml(s.name)}</h3>` +
       `<table><tr><th></th><th class="name">Játékos</th><th>Kilövés</th><th>Halál</th><th>Szint</th></tr>${rows.join('')}</table>` +
-      `<p class="small">A legtöbb kilövés nyer${bots}</p>`
+      `<p class="small">A legtöbb kilövés nyer (csak a játékosok kilövése számít)${bots}</p>`
     );
   }
 
@@ -591,7 +674,8 @@ export class GameScene extends Phaser.Scene {
     const mine = world.standings.find((p) => p.tank === world.myId);
     if (!mine) return '';
     const rivals = world.standings.filter((p) => !p.gone);
-    if (rivals.length < 2) return `${mine.kills} kilövés`;
+    // egyedül nincs ellenséges játékos: a kilőtt botok száma látszik
+    if (rivals.length < 2) return `${world.own?.botsDown ?? 0} kilőtt bot`;
     const place = 1 + rivals.filter((p) => p.kills > mine.kills || (p.kills === mine.kills && p.deaths < mine.deaths)).length;
     return `${mine.kills} kilövés · ${place}. hely`;
   }
@@ -615,7 +699,6 @@ export class GameScene extends Phaser.Scene {
     };
     if (own.weapon === 'flame') add('flame', `${Math.ceil(own.fuel)} mp`);
     else if (own.weapon) add(own.weapon);
-    if (own.ricochet) add('ricochet');
     if (own.tripleShots > 0) add('triple', `${own.tripleShots} lövés`);
     if (own.shield > 0) add('shield', `×${own.shield}`);
     if (own.oil > 0) add('oil', `×${own.oil}`);
@@ -643,10 +726,9 @@ export class GameScene extends Phaser.Scene {
     controls.splice(4, 0, ['Egér', 'célzás – bal gomb: lövés, jobb gomb: olajfolt']);
     const state: [string, string][] = [];
     if (own) {
-      state.push(['Életerő', `${Math.ceil(own.hp)} / ${tankMaxHp(own)}`], ['Szint', this.levelText(own.level)], ['Kilövés / halál', `${own.kills} / ${own.deaths}`]);
+      state.push(['Életerő', `${Math.ceil(own.hp)} / ${tankMaxHp(own)}`], ['Szint', this.levelText(own.level)], ['Kilövés / halál', `${own.kills} / ${own.deaths}`], ['Kilőtt bot', `${own.botsDown}`]);
       state.push(['Fegyver', own.weapon ? PICKUP_STYLE[own.weapon].label : 'alaplövedék']);
       const extras: string[] = [];
-      if (own.ricochet) extras.push(PICKUP_STYLE.ricochet.label);
       if (own.tripleShots > 0) extras.push(`${PICKUP_STYLE.triple.label} (${own.tripleShots} lövés)`);
       for (const kind of TIMED_KINDS) if (own.effects[kind] > 0) extras.push(`${PICKUP_STYLE[kind].label} (${Math.ceil(own.effects[kind])} mp)`);
       if (own.shield > 0) extras.push(`${PICKUP_STYLE.shield.label} ×${own.shield}`);
@@ -721,7 +803,7 @@ export class GameScene extends Phaser.Scene {
         break;
       }
       case 'laser':
-        this.beam(ev.x1, ev.y1, ev.x2, ev.y2);
+        this.beam(ev.tank, ev.x1, ev.y1, ev.x2, ev.y2);
         this.weather.flash((ev.x1 + ev.x2) / 2, (ev.y1 + ev.y2) / 2, Math.hypot(ev.x2 - ev.x1, ev.y2 - ev.y1) / 2 + 4, 0.2);
         break;
       case 'burn': {
@@ -835,6 +917,9 @@ export class GameScene extends Phaser.Scene {
       case 'collapse':
         this.dropStructureBar(ev.index);
         this.collapse(ev.index);
+        break;
+      case 'regrow':
+        this.regrow(ev.what, ev.index, ev.x, ev.y);
         break;
       case 'structure':
         this.showStructureBar(ev.index, ev.x, ev.y, ev.left);
@@ -983,7 +1068,7 @@ export class GameScene extends Phaser.Scene {
         if (mine) {
           this.sfx.streak();
           // a kilövés üzenete után jelenik meg, hogy ne írja felül
-          const text = `${ev.streak} kilövés egyhuzamban – tüzérségi csapás jár! ${keysText(this.bindings, 'strike')}: a célkeresztre, vagy kattints a nagy térképen`;
+          const text = `${ev.streak} kilövés egyhuzamban – tüzérségi csapás jár! ${keysText(this.bindings, 'strike')}: nagy térkép, kattints a célpontra`;
           this.time.delayedCall(1700, () => this.hud.toast(text));
         }
         break;
@@ -1095,21 +1180,32 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Tüzérségi csapás kérése: a megadott helyre, különben oda, ahová az egér mutat.
-   * Igazat ad, ha a kérés elment.
+   * A csapás gombja: ha van kérhető csapás, feljön a nagy térkép, és csak azon lehet célpontot
+   * választani (kattintással); újra megnyomva, vagy Esc-re a térkép bezárul.
    */
-  private requestStrike(x?: number, y?: number): boolean {
+  private aimStrike(): void {
+    const own = this.world.own;
+    if (!own || !own.alive) return;
+    if (own.strikes <= 0) {
+      this.hud.toast(`Nincs kérhető tüzérségi csapás – ${STRIKE.every} kilövés kell hozzá halál nélkül`);
+      return;
+    }
+    if (this.hud.mapOpen) {
+      this.hud.toggleMap();
+      return;
+    }
+    this.hud.toggleMap();
+    this.strikeAim = true;
+    this.hud.toast('Tüzérségi csapás: kattints a térképen oda, ahová kéred (M, X vagy Esc: mégsem)');
+  }
+
+  /** Tüzérségi csapás kérése a térképen kijelölt helyre. Igazat ad, ha a kérés elment. */
+  private requestStrike(x: number, y: number): boolean {
     const own = this.world.own;
     if (!own || !own.alive) return false;
     if (own.strikes <= 0) {
       this.hud.toast(`Nincs kérhető tüzérségi csapás – ${STRIKE.every} kilövés kell hozzá halál nélkül`);
       return false;
-    }
-    if (x === undefined || y === undefined) {
-      const pointer = this.input.activePointer;
-      pointer.updateWorldPoint(this.cameras.main);
-      x = pointer.worldX / this.ppm;
-      y = pointer.worldY / this.ppm;
     }
     this.strikeLatch = { x, y };
     this.sfx.radio();
@@ -1304,6 +1400,143 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** GPS-cél a pálya egy pontjára: a GPS a normál utakon vezet oda. */
+  private setGps(x: number, y: number): void {
+    const own = this.world.own;
+    const area = this.map.bounds ?? { minX: 0, minY: 0, maxX: this.map.width, maxY: this.map.height };
+    this.nav ??= new RoadNav(this.map.data.roads, area);
+    const tx = Math.max(area.minX + 1, Math.min(area.maxX - 1, x));
+    const ty = Math.max(area.minY + 1, Math.min(area.maxY - 1, y));
+    const from = own ?? this.world.focus;
+    const route = from ? this.nav.route(from.x, from.y, tx, ty) : null;
+    if (!route) {
+      this.hud.toast('Ide nem vezet út a játéktéren belül');
+      return;
+    }
+    this.gps = { x: tx, y: ty, route, plannedAt: this.time.now / 1000 };
+    this.sfx.ping();
+    this.hud.toast(`GPS: ${Math.round(route.length)} m – kövesd a kék vonalat (${keysText(this.bindings, 'gps')} vagy jobb klikk a térképen: kikapcsolás)`);
+  }
+
+  /** A GPS kikapcsolása (a cél törlése). */
+  private gpsOff(): void {
+    if (!this.gps) return;
+    this.gps = null;
+    this.hud.toast('GPS kikapcsolva');
+  }
+
+  /**
+   * A GPS képkockánként: fél másodpercenként újratervez a tank helyéről (ha letért, onnan vezet
+   * tovább), a talajra rajzolja az útvonalat (a cél felé áramló sárga szaggatott vonal), a kép
+   * szélén nyíl mutat a cél felé, és megérkezéskor kikapcsol. A térképnek az útvonalat adja vissza.
+   */
+  private updateGps(view: Phaser.Geom.Rectangle): HudFrame['gps'] {
+    const gps = this.gps;
+    const own = this.world.own;
+    if (!gps || !this.nav) {
+      this.gpsLine?.clear();
+      this.gpsArrow?.setVisible(false);
+      this.hud.setGps('');
+      return null;
+    }
+    const now = this.time.now / 1000;
+    // a tank ott, ahol a képen látszik (így a vonal eleje pontosan a tanknál van, gyors menetben is)
+    const shown = own ? this.tankViews.get(own.id)?.shownPx : undefined;
+    const tx = shown ? shown.x / this.ppm : own?.x;
+    const ty = shown ? shown.y / this.ppm : own?.y;
+    const trim = (): ReturnType<typeof trimRoute> | null => (gps.route && tx !== undefined && ty !== undefined ? trimRoute(gps.route.points, tx, ty) : null);
+    let trimmed = trim();
+    // újratervezés fél másodpercenként, vagy azonnal, ha a tank letért az útvonalról
+    if (own && own.alive && (now - gps.plannedAt > 0.5 || (trimmed !== null && trimmed.off > 8))) {
+      gps.plannedAt = now;
+      gps.route = this.nav.route(own.x, own.y, gps.x, gps.y) ?? gps.route;
+      trimmed = trim();
+    }
+    const planned = gps.route;
+    if (!planned) return null;
+    const route: Route = trimmed ? { points: trimmed.points, length: trimmed.length, end: planned.end } : planned;
+    // megérkezett: az út végéhez (a célhoz legközelebbi útponthoz) vagy a célhoz ért
+    if (own && own.alive && (Math.hypot(own.x - route.end.x, own.y - route.end.y) < 10 || Math.hypot(own.x - gps.x, own.y - gps.y) < 10)) {
+      this.gps = null;
+      this.sfx.ping();
+      this.hud.toast('Megérkeztél a célhoz – a GPS kikapcsolt');
+      return this.updateGps(view);
+    }
+    this.drawGps(route, gps, view, now);
+    this.gpsArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.4).setTint(0x38a8ff).setScale(this.spriteScale * 0.85);
+    this.pointAt(this.gpsArrow, gps.x, gps.y, view);
+    const rest = route.length + Math.hypot(gps.x - route.end.x, gps.y - route.end.y);
+    this.hud.setGps(`GPS ${rest >= 1000 ? `${(rest / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(rest / 10) * 10} m`} · ${keysText(this.bindings, 'gps')}: ki`);
+    return { route: route.points, end: route.end, target: gps };
+  }
+
+  /**
+   * Az útvonal a talajon, mint az autós navigációban: áttetsző kék sáv, rajta a cél felé áramló
+   * fehér nyilacskák (nem keverhető össze az út sárga felezővonalával); a végén a célzászló.
+   */
+  private drawGps(route: Route, target: { x: number; y: number }, view: Phaser.Geom.Rectangle, now: number): void {
+    const g = (this.gpsLine ??= this.add.graphics().setDepth(2.4));
+    g.clear();
+    const ppm = this.ppm;
+    const p = route.points;
+    const margin = 30 * ppm;
+    const visible = (x1: number, y1: number, x2: number, y2: number): boolean =>
+      Math.max(x1, x2) > view.x - margin && Math.min(x1, x2) < view.right + margin && Math.max(y1, y2) > view.y - margin && Math.min(y1, y2) < view.bottom + margin;
+    // halvány kék sáv (az út jól látszik alatta)
+    g.lineStyle(2 * ppm, 0x38a8ff, 0.2);
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const x1 = p[i] * ppm;
+      const y1 = p[i + 1] * ppm;
+      const x2 = p[i + 2] * ppm;
+      const y2 = p[i + 3] * ppm;
+      if (visible(x1, y1, x2, y2)) g.lineBetween(x1, y1, x2, y2);
+    }
+    // a nyilacskák a cél felé áramlanak
+    const period = 5;
+    let along = -((now * 7) % period);
+    g.lineStyle(0.26 * ppm, 0xffffff, 0.5);
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const ax = p[i];
+      const ay = p[i + 1];
+      const len = Math.hypot(p[i + 2] - ax, p[i + 3] - ay);
+      if (len > 0 && visible(ax * ppm, ay * ppm, p[i + 2] * ppm, p[i + 3] * ppm)) {
+        const ux = (p[i + 2] - ax) / len;
+        const uy = (p[i + 3] - ay) / len;
+        // az első nyilacska helye ezen a szakaszon
+        for (let d = ((-along % period) + period) % period; d < len; d += period) {
+          // csúcsa előre mutat, a két szára hátra és oldalra
+          const tx = (ax + ux * d) * ppm;
+          const ty = (ay + uy * d) * ppm;
+          const bx = tx - ux * 0.8 * ppm;
+          const by = ty - uy * 0.8 * ppm;
+          g.lineBetween(bx - uy * 0.65 * ppm, by + ux * 0.65 * ppm, tx, ty);
+          g.lineBetween(bx + uy * 0.65 * ppm, by - ux * 0.65 * ppm, tx, ty);
+        }
+      }
+      along += len;
+    }
+    // az út végétől a célig pontozva (ha a cél nem az úton van)
+    const { end } = route;
+    const off = Math.hypot(target.x - end.x, target.y - end.y);
+    if (off > 2) {
+      g.fillStyle(0xffffff, 0.8);
+      for (let d = 1.5; d < off; d += 2) {
+        const k = d / off;
+        g.fillCircle((end.x + (target.x - end.x) * k) * ppm, (end.y + (target.y - end.y) * k) * ppm, 0.22 * ppm);
+      }
+    }
+    // célzászló: lüktető kék gyűrű, rúd, lobogó
+    const fx = target.x * ppm;
+    const fy = target.y * ppm;
+    const pulse = (now * 0.8) % 1;
+    g.lineStyle(0.3 * ppm, 0x38a8ff, 0.9 * (1 - pulse));
+    g.strokeCircle(fx, fy, (1.5 + pulse * 4) * ppm);
+    g.fillStyle(0x101418, 0.9);
+    g.fillRect(fx - 0.12 * ppm, fy - 3.2 * ppm, 0.24 * ppm, 3.2 * ppm);
+    g.fillStyle(0x38a8ff, 1);
+    g.fillTriangle(fx + 0.1 * ppm, fy - 3.2 * ppm, fx + 2.2 * ppm, fy - 2.6 * ppm, fx + 0.1 * ppm, fy - 2 * ppm);
+  }
+
   /** Nyíl a célpont fölött, vagy – ha nincs a képen – a kép szélén, a célpont felé mutatva. */
   private pointAt(arrow: Phaser.GameObjects.Image, wx: number, wy: number, view: Phaser.Geom.Rectangle): void {
     const px = wx * this.ppm;
@@ -1351,7 +1584,8 @@ export class GameScene extends Phaser.Scene {
     const target = revenge && revenge.live ? world.tank(revenge.id) : undefined;
     if (revenge && revenge.live && now > revenge.until) this.revenge = null;
     if (this.revenge && target && target.alive && !(target.cloak > 0) && !world.smokes.some((k) => insideSmoke(k, target.x, target.y))) {
-      marks.push({ kind: 'revenge', x: target.x, y: target.y });
+      // a térképen csak a bot jelölhető: az ellenséges játékos ott nem látszik (a nyíl a képen igen)
+      if (target.bot) marks.push({ kind: 'revenge', x: target.x, y: target.y });
       this.revengeArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff3a2a).setScale(this.spriteScale);
       this.pointAt(this.revengeArrow, target.x, target.y, view);
     } else this.revengeArrow?.setVisible(false);
@@ -1461,6 +1695,30 @@ export class GameScene extends Phaser.Scene {
           .setAlpha(born * gone * (0.92 - 0.3 * ring) * dim);
       }
     }
+  }
+
+  /** Visszanövés (nyitott játék): az épület újra áll (építési por kíséri), a fa, oszlop újra megjelenik. */
+  private regrow(what: 'building' | 'prop', index: number, x: number, y: number): void {
+    if (what === 'building') {
+      if (!this.map.restoreBuilding(index)) return;
+      this.ground.notify({ type: 'restore', what, index });
+      const [minX, minY, maxX, maxY] = this.map.buildingBoxes[index];
+      this.ground.invalidate(minX - 6, minY - 6, maxX + 6, maxY + 6);
+      // a rom tüze kialszik
+      this.fires.douse(minX - 1, minY - 1, maxX + 1, maxY + 1);
+      const size = Math.max(maxX - minX, maxY - minY);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        this.puff((x + Math.cos(a) * size * 0.35) * this.ppm, (y + Math.sin(a) * size * 0.35) * this.ppm, 0xcfc6b4, 1.4, 900);
+      }
+      return;
+    }
+    if (!this.map.fellables.restore(index)) return;
+    this.ground.notify({ type: 'restore', what, index });
+    const reach = (this.map.trees[index]?.r ?? 2.5) * 2.6 + 3;
+    this.ground.invalidate(x - reach, y - reach, x + reach, y + reach);
+    // a kidőlt fa tüze kialszik
+    this.fires.douse(x - reach, y - reach, x + reach, y + reach);
   }
 
   /** Épület összedőlése: a pályán rom lesz belőle (át lehet hajtani rajta), porfelhő és tűz kíséri. */
@@ -1676,29 +1934,127 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** Lézersugár: fényes vonal, amely gyorsan elhalványul. */
-  private beam(x1: number, y1: number, x2: number, y2: number): void {
+  /**
+   * Lézersugár: lágy szélű, rétegzett fény (széles vörös izzás, rózsaszín sugár, vakító fehér mag),
+   * egymásra adódó fénnyel; remeg, a halványulás közben elvékonyodik. Az eleje képkockánként a lövő
+   * tank csövéhez igazodik (menet közben sem marad le), a vége a becsapódás helyén izzik; a sugár
+   * mentén szikrák pattannak szét.
+   */
+  private beam(shooter: number, x1: number, y1: number, x2: number, y2: number): void {
     const ppm = this.ppm;
-    const length = Math.hypot(x2 - x1, y2 - y1) * ppm;
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-    for (const [width, tint, alpha] of [[9, 0xff4a8a, 0.45], [3, 0xffffff, 0.95]] as const) {
-      const beam = this.beamPool.pop() ?? this.add.image(0, 0, GTEX.px).setOrigin(0, 0.5).setDepth(13);
-      beam
-        .setPosition(x1 * ppm, y1 * ppm)
-        .setRotation(angle)
-        .setDisplaySize(length, width * this.spriteScale)
-        .setTint(tint)
-        .setAlpha(alpha)
-        .setVisible(true);
-      this.tweens.add({
-        targets: beam,
-        alpha: 0,
-        duration: 240,
-        onComplete: () => {
-          beam.setVisible(false);
-          this.beamPool.push(beam);
-        },
-      });
+    const take = (texture: string): Phaser.GameObjects.Image => {
+      const image = this.beamPool.pop() ?? this.add.image(0, 0, texture);
+      return image.setTexture(texture).setBlendMode(Phaser.BlendModes.ADD).setVisible(true).setAlpha(1).setScale(1).setRotation(0);
+    };
+    const layers = LASER_LAYERS.map((layer) => ({ ...layer, image: take(GTEX.laserBeam).setOrigin(0, 0.5).setDepth(13 + layer.depth) }));
+    const muzzle = take(GTEX.light).setOrigin(0.5).setDepth(13.4).setTint(0xffe0a0);
+    const hit = take(GTEX.light).setOrigin(0.5).setDepth(13.4).setTint(0xd080ff);
+    // a szalagok a sugár mögött (mag alatt) és előtte (mag fölött) futó szakaszai
+    const back = this.add.graphics().setDepth(13.05).setBlendMode(Phaser.BlendModes.ADD);
+    const front = this.add.graphics().setDepth(13.3).setBlendMode(Phaser.BlendModes.ADD);
+    const end = { x: x2 * ppm, y: y2 * ppm };
+    const start = { x: x1 * ppm, y: y1 * ppm };
+    // szikrák a sugár mentén (a becsapódás felé sűrűbben)
+    const sparks = Array.from({ length: 10 }, (_, i) => {
+      const t = 0.25 + 0.75 * Math.sqrt((i + 0.5) / 10);
+      const a = Math.random() * Math.PI * 2;
+      const speed = (18 + Math.random() * 40) * this.spriteScale;
+      return { t, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, image: take(GTEX.px).setOrigin(0.5).setDepth(13.5).setTint(i % 3 ? 0xd8a0ff : 0xfff0b0) };
+    });
+    this.lasers.push({ shooter, start, end, age: 0, layers, muzzle, hit, sparks, back, front, seed: Math.random() * 100 });
+  }
+
+  /**
+   * A sugár körül csavarodó két szalag: csavarvonal, amely a sugár tengelye körül forog. Ahol a
+   * szalag a sugár előtt fut, ott vastagabb és fényesebb (a mag fölé kerül), ahol mögötte, ott
+   * vékonyabb és halványabb (a mag alá). A cső végénél és a becsapódásnál összeszűkül.
+   */
+  private laserSpiral(laser: { back: Phaser.GameObjects.Graphics; front: Phaser.GameObjects.Graphics; start: { x: number; y: number }; age: number; seed: number }, length: number, angle: number, fade: number, s: number): void {
+    const { back, front } = laser;
+    back.clear();
+    front.clear();
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const step = LASER_SPIRAL.step * s;
+    const pitch = LASER_SPIRAL.pitch * s;
+    const taper = 16 * s;
+    // a szalag kifelé tágul, ahogy a sugár halványul (szétfoszlik)
+    const amplitude = LASER_SPIRAL.amplitude * s * (1 + 0.6 * (1 - fade));
+    const spin = laser.age * LASER_SPIRAL.spin + laser.seed;
+    for (let strand = 0; strand < 2; strand++) {
+      const color = LASER_SPIRAL.colors[strand];
+      let px = 0;
+      let py = 0;
+      let first = true;
+      for (let d = 0; d <= length + step * 0.5; d += step) {
+        const along = Math.min(d, length);
+        const phase = (along / pitch) * Math.PI * 2 - spin + strand * Math.PI;
+        // összeszűkül a két végén
+        const ends = Math.min(1, along / taper, (length - along) / taper + 0.25);
+        const off = Math.sin(phase) * amplitude * Math.max(0, ends);
+        const x = laser.start.x + cos * along - sin * off;
+        const y = laser.start.y + sin * along + cos * off;
+        if (!first) {
+          const facing = Math.cos(phase);
+          const target = facing >= 0 ? front : back;
+          target.lineStyle((facing >= 0 ? 4.2 : 2.4) * s * (0.6 + 0.4 * fade), color, (facing >= 0 ? 1 : 0.45) * fade);
+          target.lineBetween(px, py, x, y);
+        }
+        px = x;
+        py = y;
+        first = false;
+      }
+    }
+  }
+
+  /** A lézersugarak frissítése képkockánként (lásd beam). */
+  private updateLasers(dt: number): void {
+    const s = this.spriteScale;
+    for (let i = this.lasers.length - 1; i >= 0; i--) {
+      const laser = this.lasers[i];
+      laser.age += dt;
+      const k = laser.age / LASER_LIFE;
+      if (k >= 1) {
+        for (const image of [...laser.layers.map((l) => l.image), laser.muzzle, laser.hit, ...laser.sparks.map((p) => p.image)]) {
+          image.setVisible(false);
+          this.beamPool.push(image);
+        }
+        laser.back.destroy();
+        laser.front.destroy();
+        this.lasers.splice(i, 1);
+        continue;
+      }
+      // a sugár eleje: a lövő tank csövének vége, ahol a tank éppen látszik
+      const muzzle = this.tankViews.get(laser.shooter)?.muzzle();
+      if (muzzle) {
+        laser.start.x = muzzle.x;
+        laser.start.y = muzzle.y;
+      }
+      const dx = laser.end.x - laser.start.x;
+      const dy = laser.end.y - laser.start.y;
+      const length = Math.max(1, Math.hypot(dx, dy));
+      const angle = Math.atan2(dy, dx);
+      // gyors felvillanás, aztán halványul és vékonyodik; közben remeg
+      const fade = (1 - k) ** 1.6;
+      const flicker = 1 + 0.18 * Math.sin(laser.age * 90 + laser.seed) + 0.08 * Math.sin(laser.age * 233 + laser.seed * 3);
+      for (const layer of laser.layers) {
+        layer.image
+          .setPosition(laser.start.x, laser.start.y)
+          .setRotation(angle)
+          .setDisplaySize(length, layer.width * s * flicker * (0.35 + 0.65 * fade) * (k < 0.08 ? 1.6 - k * 7.5 : 1))
+          .setTint(layer.tint)
+          .setAlpha(layer.alpha * fade);
+      }
+      this.laserSpiral(laser, length, angle, fade, s);
+      laser.muzzle.setPosition(laser.start.x, laser.start.y).setScale(s * (0.42 + 0.12 * flicker) * (0.4 + 0.6 * fade)).setAlpha(0.95 * fade);
+      laser.hit.setPosition(laser.end.x, laser.end.y).setScale(s * (0.55 + 0.15 * flicker) * (0.5 + 0.5 * fade)).setAlpha(0.9 * fade);
+      for (const p of laser.sparks) {
+        p.image
+          .setPosition(laser.start.x + dx * p.t + p.vx * laser.age, laser.start.y + dy * p.t + p.vy * laser.age)
+          .setRotation(Math.atan2(p.vy, p.vx))
+          .setDisplaySize(4 * s * (1 - k * 0.5), 1.4 * s)
+          .setAlpha(Math.min(1, fade * 1.4));
+      }
     }
   }
 

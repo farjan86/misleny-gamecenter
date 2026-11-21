@@ -48,6 +48,10 @@ export interface MatchSettings {
   botAggression: number;
   /** a botok szívóssága (1–5): minél szívósabb, annál erősebb a páncélja és annál nagyobbat lő */
   botToughness: number;
+  /** játéktempó: 0 = egyéni (minden kézzel), 1–5 = lopakodó vadászattól az arénáig (a gép ajánlja a beállításokat) */
+  tempo: number;
+  /** nyitott játéknál: hányan lesznek várhatóan bent egyszerre (ehhez igazodik a tempó szerinti pálya és botszám) */
+  expectedPlayers: number;
   /** felvehető tárgyak szintje, ugyanígy */
   pickups: number;
   /** a civil forgalom szintje (autók, buszok, ellátó teherautók); 0 = nincs */
@@ -62,7 +66,7 @@ export const MATCH = {
   minCells: 2,
   /** ekkora terület (km²) alatt a botok és a járművek legkisebb száma is csökken */
   fullArea: 0.25,
-  players: { min: 1, max: 8 },
+  players: { min: 1, max: 20 },
   /** a játékidő határai és a csúszka lépésköze (perc) */
   minutes: { min: 5, max: 30, step: 5, normal: 10 },
   levels: { min: 0, max: 5 },
@@ -85,8 +89,65 @@ export const WEATHERS: readonly Weather[] = ['day', 'rain', 'night'];
  * Amit a játékos a nyitott játékban megtart, ha kilép és rövidesen visszalép, vagy ha a
  * játékot módosítják (új pálya): a szintje, az eredményei és a felszerelése.
  */
-export const CARRY_KEYS = ['level', 'kills', 'deaths', 'streak', 'bestStreak', 'botKills', 'weapon', 'tripleShots', 'ricochet', 'shield', 'oil', 'mines', 'smokes', 'strikes', 'turrets', 'fuel', 'shots', 'hits', 'dealt', 'taken', 'wrecked'] as const;
+export const CARRY_KEYS = ['level', 'kills', 'deaths', 'streak', 'bestStreak', 'botKills', 'botsDown', 'weapon', 'tripleShots', 'shield', 'oil', 'mines', 'smokes', 'strikes', 'turrets', 'fuel', 'shots', 'hits', 'dealt', 'taken', 'wrecked'] as const;
 export type Carry = Pick<TankState, (typeof CARRY_KEYS)[number]>;
+
+/**
+ * Játéktempó. 0: egyéni – minden kézzel állítható. 1–5: a gép ajánlja a beállításokat a
+ * játékosszámhoz: a pálya méretét (játékosonként ennyi km²; egy képernyőnyi kb. 0,0144 km²),
+ * a botok számát (base − slope × játékos: kevés játékosnál sok bot, sokaknál kevesebb, hogy a
+ * pálya mindig nagyjából egyformán sűrű legyen), a botok viselkedését, a tárgyakat és a forgalmat.
+ * Tempó állásban ezek nem állíthatók – a játékok listájában a tempó neve azt jelenti, amit mond.
+ */
+export const TEMPO_NAMES = ['Egyéni', 'Lopakodó vadászat', 'Taktikus', 'Kiegyensúlyozott', 'Pörgős', 'Aréna'] as const;
+export const TEMPO_HINTS = [
+  'Minden beállítást te adsz meg.',
+  'Nagy pálya, kevés, de szívós bot: cserkészés, lesből támadás.',
+  'Tágas pálya, ügyes botok: átgondolt mozgás, fedezékharc.',
+  'Közepes pálya, közepes botok.',
+  'Kis pálya, sok ügyes, rád vadászó bot: folyamatos akció.',
+  'Egészen kis pálya, rengeteg bot és tárgy: káosz.',
+] as const;
+export const TEMPO = {
+  custom: 0,
+  /** az alapérték: pörgős */
+  normal: 4,
+  max: 5,
+  /** a pálya legfeljebb ekkora lehet (km²) – ne legyen túl nagy */
+  maxKm2: 1,
+  /** minKm2: a pálya legalább ekkora (km²), kevés játékosnál is – ne legyen szűk */
+  presets: [
+    { km2PerPlayer: 0, minKm2: 0, botBase: 0, botSlope: 0, botSkill: 3, botAggression: 3, botToughness: 3, pickups: 3, traffic: 2 },
+    { km2PerPlayer: 0.08, minKm2: 0.3, botBase: 3, botSlope: 0.1, botSkill: 3, botAggression: 2, botToughness: 4, pickups: 2, traffic: 2 },
+    { km2PerPlayer: 0.06, minKm2: 0.22, botBase: 4, botSlope: 0.15, botSkill: 4, botAggression: 3, botToughness: 4, pickups: 3, traffic: 2 },
+    { km2PerPlayer: 0.045, minKm2: 0.16, botBase: 6, botSlope: 0.25, botSkill: 3, botAggression: 3, botToughness: 3, pickups: 3, traffic: 2 },
+    { km2PerPlayer: 0.032, minKm2: 0.11, botBase: 10, botSlope: 0.4, botSkill: 4, botAggression: 4, botToughness: 3, pickups: 4, traffic: 1 },
+    { km2PerPlayer: 0.022, minKm2: 0.07, botBase: 12, botSlope: 0.4, botSkill: 5, botAggression: 5, botToughness: 2, pickups: 5, traffic: 0 },
+  ],
+} as const;
+
+/** A tempó szerinti pálya mérete (km²) a játékosszámhoz: a legkisebb megengedett és TEMPO.maxKm2 között. */
+export function tempoKm2(tempo: number, players: number): number {
+  const preset = TEMPO.presets[clamp(Math.round(tempo), 1, TEMPO.max)];
+  const min = Math.max(((MATCH.cell * MATCH.minCells) / 1000) ** 2, preset.minKm2);
+  return clamp(preset.km2PerPlayer * Math.max(2, players), min, TEMPO.maxKm2);
+}
+
+/** A tempó szerinti botszám: kevés játékosnál sok bot, sokaknál kevesebb (legalább 1). */
+export function tempoBots(tempo: number, players: number): number {
+  const preset = TEMPO.presets[clamp(Math.round(tempo), 1, TEMPO.max)];
+  return Math.max(1, Math.round(preset.botBase - preset.botSlope * Math.max(1, players)));
+}
+
+/** Hány játékosra méretezzük a pályát: rendes játéknál a létszám, nyitott játéknál a várható létszám. */
+export const sizingPlayers = (s: Pick<MatchSettings, 'maxPlayers' | 'expectedPlayers'>, open: boolean): number => (open ? s.expectedPlayers : s.maxPlayers);
+
+/**
+ * Visszanövés a nyitott játékban: a ledöntött épület, a kidőlt fa és oszlop véletlen idő múlva
+ * (a két határ között, mp) újra megjelenik – egyszerre egy, legalább `gap` mp különbséggel, hogy a
+ * pálya folyamatosan, ne egyszerre épüljön újra. Ha a helyén áll valami, `retry` mp múlva újra próbálja.
+ */
+export const REGROW = { building: [240, 420], prop: [120, 300], gap: 0.6, retry: 8 } as const;
 
 /** A nyitott játék: korlátlan ideig fut, bárki bármikor beléphet; a gazdája adja meg, legfeljebb hányan (2–100). */
 export const DEMO = { minPlayers: 2, maxPlayers: 100 } as const;
@@ -148,6 +209,9 @@ export function sanitizeSettings(raw: Partial<MatchSettings> | null | undefined,
     botToughness: clamp(int(r.botToughness, BOT_TOUGHNESS_LEVELS.normal), BOT_TOUGHNESS_LEVELS.min, BOT_TOUGHNESS_LEVELS.max),
     pickups: clamp(int(r.pickups, 3), MATCH.levels.min, MATCH.levels.max),
     traffic: clamp(int(r.traffic, 2), MATCH.levels.min, MATCH.levels.max),
+    // a mentett vagy régi beállításban nincs tempó: az egyéni (az értékei úgy maradnak, ahogy voltak)
+    tempo: clamp(int(r.tempo, TEMPO.custom), TEMPO.custom, TEMPO.max),
+    expectedPlayers: clamp(int(r.expectedPlayers, 10), 1, DEMO.maxPlayers),
     weather: WEATHERS.includes(r.weather as Weather) ? (r.weather as Weather) : 'day',
   };
 }
@@ -168,7 +232,18 @@ export interface MatchPlan {
 }
 
 /** A csúszkák szintjeiből és a pálya méretéből a tényleges létszámok. */
-export function matchPlan(settings: MatchSettings): MatchPlan {
+/**
+ * Tempó állásban a tempóhoz tartozó beállítások (botok viselkedése, tárgyak, forgalom) a tempó
+ * táblázatából jönnek – a kérésben küldött értéktől függetlenül. Egyéni állásban nem változik semmi.
+ */
+export function applyTempo(settings: MatchSettings): MatchSettings {
+  if (settings.tempo <= TEMPO.custom) return settings;
+  const p = TEMPO.presets[settings.tempo];
+  return { ...settings, bots: Math.max(1, settings.bots), botSkill: p.botSkill, botAggression: p.botAggression, botToughness: p.botToughness, pickups: p.pickups, traffic: p.traffic };
+}
+
+/** `open`: nyitott játék (a tempó szerinti botszám a várható létszámhoz igazodik). */
+export function matchPlan(settings: MatchSettings, open = false): MatchPlan {
   const w = settings.area.maxX - settings.area.minX;
   const h = settings.area.maxY - settings.area.minY;
   const km2 = (w * h) / 1e6;
@@ -176,7 +251,12 @@ export function matchPlan(settings: MatchSettings): MatchPlan {
   const share = km2 / MATCH.fullArea;
   const minBots = Math.max(1, Math.round(settings.bots * clamp(0.5 + share / 2, 0.5, 1)));
   const minTraffic = Math.max(1, Math.round((settings.traffic + 1) * clamp(share, 0.2, 1)));
-  const bots = settings.bots === 0 ? 0 : clamp(Math.round(settings.bots * MATCH.botsPerKm2 * km2), minBots, MATCH.maxBots);
+  const bots =
+    settings.tempo > TEMPO.custom
+      ? tempoBots(settings.tempo, sizingPlayers(settings, open))
+      : settings.bots === 0
+        ? 0
+        : clamp(Math.round(settings.bots * MATCH.botsPerKm2 * km2), minBots, MATCH.maxBots);
   const pickups = settings.pickups === 0 ? 0 : clamp(Math.round(settings.pickups * MATCH.pickupsPerKm2 * km2), settings.pickups * 2, MATCH.maxPickups);
   // minél kisebb a pálya és minél többen vannak, annál közelebb kell születniük
   const spawnGap = clamp(Math.sqrt((w * h) / Math.max(2, settings.maxPlayers)) * 0.6, 40, 220);
@@ -202,7 +282,10 @@ export interface MatchStanding {
   name: string;
   /** helyezés (holtversenyben azonos) */
   place: number;
+  /** kilőtt ellenséges játékosok: ez dönti el a helyezést */
   kills: number;
+  /** kilőtt botok: csak statisztika, a helyezésbe és a pontba nem számít */
+  bots: number;
   deaths: number;
   level: number;
   gone: boolean;
@@ -224,7 +307,7 @@ export interface MatchStanding {
   mvp: boolean;
 }
 
-type Final = Pick<MatchStanding, 'kills' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy' | 'shots' | 'hits' | 'damage' | 'taken'>;
+type Final = Pick<MatchStanding, 'kills' | 'bots' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy' | 'shots' | 'hits' | 'damage' | 'taken'>;
 
 /** A teljesítménypont összetevői. */
 export const SCORE = {
@@ -262,6 +345,7 @@ export function matchScore(s: Final): number {
 
 const finalOf = (tank: TankState): Final => ({
   kills: tank.kills,
+  bots: tank.botsDown,
   deaths: tank.deaths,
   level: tank.level,
   streak: tank.bestStreak,
@@ -294,6 +378,11 @@ export class Match {
   private superSpot: { x: number; y: number } | null = null;
   /** a következő belépő csapatszáma (mindenki külön csapat) */
   private nextTeam = 0;
+  /** nyitott játék: a visszanövésre váró épületek, fák (mikor esedékes, a meccs órája szerint) */
+  private readonly regrowQueue: { what: 'building' | 'prop'; index: number; due: number }[] = [];
+  /** a meccs kezdete óta eltelt idő (mp) és az utolsó visszanövés ideje */
+  private clock = 0;
+  private lastRegrow = -Infinity;
 
   /**
    * `terrain`: a pálya, amelyen a játéktér (bounds) és az időjárás már be van
@@ -307,7 +396,7 @@ export class Match {
     /** nyitott játék: nincs időkorlát, bárki beléphet és kiléphet, és a meccs nem ér véget magától */
     readonly endless = false,
   ) {
-    this.plan = matchPlan(settings);
+    this.plan = matchPlan(settings, endless);
     this.timeLeft = endless ? Infinity : settings.minutes * 60;
     // az életek száma korlátlan: a kilőtt tank néhány másodperc múlva újraéled
     this.world = new World(terrain, seed, { weather: settings.weather, lives: 0, spawnGap: this.plan.spawnGap });
@@ -369,12 +458,53 @@ export class Match {
     this.bots.update(this.inputs, 1 / 60);
     this.world.step(this.inputs);
     this.stepSuper(1 / 60);
-    if (this.endless) return;
+    this.clock += 1 / 60;
+    if (this.endless) {
+      this.stepRegrow();
+      return;
+    }
     this.timeLeft -= 1 / 60;
     if (this.timeLeft <= 0) {
       this.timeLeft = 0;
       this.finish();
     }
+  }
+
+  /** Nyitott játék: a ledöntöttek felírása a visszanövési sorba, és az esedékesek visszaállítása – egyszerre egy. */
+  private stepRegrow(): void {
+    const { world } = this;
+    const between = (range: readonly [number, number]): number => range[0] + world.rnd() * (range[1] - range[0]);
+    for (const ev of world.events) {
+      if (ev.type === 'collapse') this.regrowQueue.push({ what: 'building', index: ev.index, due: this.clock + between(REGROW.building) });
+      else if (ev.type === 'felled') this.regrowQueue.push({ what: 'prop', index: ev.index, due: this.clock + between(REGROW.prop) });
+    }
+    if (this.clock - this.lastRegrow < REGROW.gap || this.regrowQueue.length === 0) return;
+    // a legrégebben esedékes
+    let at = -1;
+    for (let i = 0; i < this.regrowQueue.length; i++) if (this.regrowQueue[i].due <= this.clock && (at < 0 || this.regrowQueue[i].due < this.regrowQueue[at].due)) at = i;
+    if (at < 0) return;
+    const item = this.regrowQueue[at];
+    this.lastRegrow = this.clock;
+    if (world.regrow(item.what, item.index)) this.regrowQueue.splice(at, 1);
+    // ha a helyén áll valami, később újra megpróbálja
+    else item.due = this.clock + REGROW.retry;
+  }
+
+  /** A ledöntött épületek és a kidőlt fák, oszlopok (a menet közben belépő játékos ezt kapja meg). */
+  destroyed(): { b: number[]; p: number[]; a: number[] } | null {
+    const { structures, fellables } = this.world.terrain;
+    const b: number[] = [];
+    const p: number[] = [];
+    const a: number[] = [];
+    if (structures) for (let i = 0; i < structures.count; i++) if (structures.collapsed[i]) b.push(i);
+    if (fellables) {
+      for (let i = 0; i < fellables.count; i++) {
+        if (!fellables.fallen[i]) continue;
+        p.push(i);
+        a.push(Math.round(fellables.angle[i] * 100) / 100);
+      }
+    }
+    return b.length || p.length ? { b, p, a } : null;
   }
 
   /** A szupertárgy: időnként megjelenik a játéktér közepén; előtte bejelentés megy mindenkinek. */
@@ -433,7 +563,7 @@ export class Match {
       .map((p) => {
         // a kilépett játékos tankja már nincs a világban: az utolsó állása számít
         const live = this.world.tank(p.tankId);
-        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 };
+        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, bots: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 };
         return { id: p.id, name: p.name, place: 0, gone: p.gone, ...final, score: matchScore(final), mvp: false };
       })
       // a kilépettek a bent lévők mögé kerülnek

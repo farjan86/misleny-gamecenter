@@ -3,6 +3,17 @@ chcp 65001 >nul
 title TANK MISLENY - szerver
 cd /d "%~dp0"
 
+rem Ha a játék már a felhőben fut (felho.txt), itthon nem szabad mellette elindítani:
+rem a közös alagút miatt a játékosok hol ide, hol oda kerülnének.
+if exist "felho.txt" (
+  echo FIGYELEM: a játék a felhőben fut ^(lásd felho.txt^).
+  echo Ha itthon is elindítod, a játékosok két külön szerverre kerülnek.
+  echo Csak akkor indítsd, ha a felhős szervert leállítottad.
+  choice /c IN /m "Mégis itthon indítod"
+  if errorlevel 2 exit /b 0
+)
+
+
 where node >nul 2>nul
 if errorlevel 1 (
   echo A Node.js nincs telepítve, vagy nincs a PATH-ban.

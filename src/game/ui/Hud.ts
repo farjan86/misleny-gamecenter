@@ -13,10 +13,25 @@ import { isFullscreen, toggleFullscreen } from './fullscreen';
 
 const esc = (text: string): string => text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
-/** A térképkép felbontása: pixel / méter. */
+/** A térképkép felbontása: pixel / méter (nagy játéktéren a kis térképé). */
 const MINI_SCALE = 0.3;
-/** A sarokban lévő kis térkép mérete pixelben; a tank környékét mutatja. */
+/** A sarokban lévő kis térkép mérete pixelben; a tank környékét mutatja (kis játéktéren az egészet). */
 const MINI_VIEW = 220;
+/** A kis térkép legfeljebb ekkora felbontású (px/m): egy egészen kis játéktér se legyen óriási rajta. */
+const MINI_MAX_SCALE = 1.2;
+/** A nagy térkép legfeljebb ekkora felbontású (px/m). */
+const BIG_MAX_SCALE = 6;
+/** Az előre készülő térképkép egy sávja legfeljebb ennyi pixel (kb. 30–40 ms munka): nem akasztja meg a játékot. */
+const STRIP_PIXELS = 80000;
+
+/** A játéktér képe egy adott felbontásban; amíg nincs kész, sávonként készül (row: az első még üres sor). */
+interface MapBase {
+  canvas: HTMLCanvasElement;
+  ox: number;
+  oy: number;
+  scale: number;
+  row: number;
+}
 
 const POI_LABEL: Record<string, string> = {
   place_of_worship: 'Templom',
@@ -109,7 +124,7 @@ export interface HudFrame {
   canvasTop: number;
   canvasWidth: number;
   canvasHeight: number;
-  /** az ismert tankok: a botok piros, a többi játékos narancs pontként látszik a térképen */
+  /** az ismert tankok: a térképen csak a botok látszanak (piros pont), az ellenséges játékosok nem */
   tanks: readonly TankState[];
   /** a saját (követett) tank azonosítója */
   focusId: number;
@@ -119,6 +134,8 @@ export interface HudFrame {
   smokes: readonly SmokeState[];
   /** külön jelek a térképen: bosszú (aki kilőtt), szupertárgy (érkezik / kint van), tüzérségi csapás */
   marks: readonly MapMark[];
+  /** GPS: az útvonal pontjai (x, y párok, méterben), az út utolsó pontja és a kijelölt cél; null: ki van kapcsolva */
+  gps: { route: readonly number[]; end: { x: number; y: number }; target: { x: number; y: number } } | null;
 }
 
 export interface MapMark {
@@ -140,8 +157,15 @@ export class Hud {
   private readonly infoBody = el<HTMLDivElement>('hud-info-body');
   private readonly miniCtx: CanvasRenderingContext2D;
   private readonly miniBase: HTMLCanvasElement;
-  /** a térképképnek az a része, amely a játéktérhez tartozik (pixel): csak ez látszik */
-  private readonly crop: { x: number; y: number; w: number; h: number };
+  /** a játéktér (méterben): csak ez látszik a térképen */
+  private readonly area: { minX: number; minY: number; maxX: number; maxY: number };
+  /** a térkép mostani felbontása (px/m) és az ehhez rajzolt alapkép (bal felső sarka világpixelben) */
+  private scale = MINI_SCALE;
+  private base: { canvas: HTMLCanvasElement; ox: number; oy: number };
+  /** a játéktérre szabott, nagyobb felbontású alapképek felbontás szerint (egyszer rajzolódnak ki) */
+  private readonly bases = new Map<number, MapBase>();
+  /** a háttérben készülő nagy térkép (ha még nincs kész) */
+  private preparing: MapBase | null = null;
   private readonly labels: Label[] = [];
   private readonly streets: StreetLabel[];
   private frame = 0;
@@ -161,6 +185,10 @@ export class Hud {
   private deathNote = '';
   private deathLeft = '';
   private mapClick: ((x: number, y: number) => void) | null = null;
+  private gpsClick: ((x: number, y: number) => void) | null = null;
+  private gpsOff: (() => void) | null = null;
+  private readonly gpsBadge = el<HTMLSpanElement>('hud-gps');
+  private gpsText = '';
   private aiming = false;
   private readonly clock = el<HTMLDivElement>('hud-clock');
   private readonly clockTime = el<HTMLDivElement>('hud-clock-time');
@@ -188,16 +216,16 @@ export class Hud {
     const buf = new Uint32Array(w * h);
     renderMap(map, { buf, w, h, ox: 0, oy: 0, scale: MINI_SCALE, detail: false });
     this.miniBase.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer), w, h), 0, 0);
-    const area = map.bounds ?? { minX: 0, minY: 0, maxX: map.width, maxY: map.height };
-    this.crop = {
-      x: Math.round(area.minX * MINI_SCALE),
-      y: Math.round(area.minY * MINI_SCALE),
-      w: Math.round((area.maxX - area.minX) * MINI_SCALE),
-      h: Math.round((area.maxY - area.minY) * MINI_SCALE),
-    };
+    this.area = map.bounds ?? { minX: 0, minY: 0, maxX: map.width, maxY: map.height };
+    this.base = { canvas: this.miniBase, ox: 0, oy: 0 };
     this.miniCtx = this.mini.getContext('2d')!;
     this.resizeMinimap();
-    window.addEventListener('resize', () => this.resizeMinimap());
+    window.addEventListener('resize', () => {
+      this.resizeMinimap();
+      this.prepareBig();
+    });
+    // a nagy térkép képe a játék elején, a szabad időben készül el: így az M azonnal nyílik
+    window.setTimeout(() => this.prepareBig(), 1500);
 
     this.streets = streetLabels(map);
     el<HTMLDivElement>('hud').classList.remove('hidden');
@@ -211,13 +239,23 @@ export class Hud {
     el<HTMLSpanElement>('hud-menu-no').onclick = () => this.menuConfirm.classList.add('hidden');
     el<HTMLSpanElement>('hud-menu-yes').onclick = () => this.leave();
     el<HTMLSpanElement>('hud-info-close').onclick = () => this.toggleInfo();
-    // nagy térképen (ha van kérhető csapás) a kattintás helye a pályán
-    this.mini.addEventListener('click', (ev) => {
-      if (!this.bigMap || !this.aiming || !this.mapClick) return;
+    // nagy térképen a kattintás helye a pályán: csapás célzásakor (X) a csapás helye, különben a GPS célja
+    const at = (ev: MouseEvent): { x: number; y: number } => {
       const rect = this.mini.getBoundingClientRect();
       const px = ((ev.clientX - rect.left) / rect.width) * this.mini.width;
       const py = ((ev.clientY - rect.top) / rect.height) * this.mini.height;
-      this.mapClick((this.crop.x + px) / MINI_SCALE, (this.crop.y + py) / MINI_SCALE);
+      return { x: this.area.minX + px / this.scale, y: this.area.minY + py / this.scale };
+    };
+    this.mini.addEventListener('click', (ev) => {
+      if (!this.bigMap) return;
+      const { x, y } = at(ev);
+      if (this.aiming) this.mapClick?.(x, y);
+      else this.gpsClick?.(x, y);
+    });
+    // jobb klikk a nagy térképen: a GPS kikapcsol
+    this.mini.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      if (this.bigMap && !this.aiming) this.gpsOff?.();
     });
     this.clock.onclick = () => {
       this.scoresPinned = !this.scoresPinned;
@@ -256,7 +294,21 @@ export class Hud {
     this.mapClick = callback;
   }
 
-  /** Kattintható-e most a nagy térkép (van kérhető csapás): ilyenkor célkereszt a kurzor. */
+  /** A GPS kezelői: kattintás a nagy térképen (cél), jobb klikk (kikapcsolás). */
+  onGps(set: (x: number, y: number) => void, off: () => void): void {
+    this.gpsClick = set;
+    this.gpsOff = off;
+  }
+
+  /** A GPS jelvénye a térkép sarkában (üres szöveg: nincs kint). */
+  setGps(text: string): void {
+    if (text === this.gpsText) return;
+    this.gpsText = text;
+    this.gpsBadge.textContent = text;
+    this.gpsBadge.classList.toggle('hidden', !text);
+  }
+
+  /** Csapást céloz-e most a nagy térkép (X): ilyenkor a kattintás a csapás helye, célkereszt a kurzor. */
   setAiming(aiming: boolean): void {
     if (aiming === this.aiming) return;
     this.aiming = aiming;
@@ -443,17 +495,90 @@ export class Hud {
     this.frame = 0; // azonnali újrarajzolás
   }
 
-  /** Kis nézetben a vászon a tank környékét mutatja, nagy nézetben az egész pályát. */
+  /**
+   * Kis nézetben a vászon a tank környékét mutatja (kis játéktéren az egészet, kitöltve),
+   * nagy nézetben az egész játékteret, a képernyőt kitöltve. A kép mindig a vászon saját
+   * felbontásában készül, nem felnagyítva – így kis játéktéren sem kockás.
+   */
   private resizeMinimap(): void {
-    const { crop } = this;
-    this.mini.width = this.bigMap ? crop.w : Math.min(MINI_VIEW, crop.w);
-    this.mini.height = this.bigMap ? crop.h : Math.min(MINI_VIEW, crop.h);
-    // nagy nézetben a játéktér képe kitölti a képernyőt (a képarány megtartásával)
-    const zoom = this.bigMap ? Math.min((window.innerWidth * 0.9) / crop.w, (window.innerHeight * 0.86) / crop.h, 5) : 1;
-    this.mini.style.width = `${Math.round(this.mini.width * zoom)}px`;
-    this.mini.style.height = `${Math.round(this.mini.height * zoom)}px`;
+    const { area } = this;
+    const w = area.maxX - area.minX;
+    const h = area.maxY - area.minY;
+    const scale = this.scaleFor(this.bigMap);
+    this.scale = scale;
+    this.base = scale === MINI_SCALE ? { canvas: this.miniBase, ox: 0, oy: 0 } : this.baseAt(scale);
+    this.mini.width = Math.min(this.bigMap ? Infinity : MINI_VIEW, Math.round(w * scale));
+    this.mini.height = Math.min(this.bigMap ? Infinity : MINI_VIEW, Math.round(h * scale));
+    this.mini.style.width = `${this.mini.width}px`;
+    this.mini.style.height = `${this.mini.height}px`;
     this.miniCtx.imageSmoothingEnabled = false;
     this.miniDirty = true;
+  }
+
+  /** A kis (big: false) vagy a nagy térkép felbontása (px/m) a játéktér és az ablak méretéhez. */
+  private scaleFor(big: boolean): number {
+    const { area } = this;
+    const w = area.maxX - area.minX;
+    const h = area.maxY - area.minY;
+    const fit = big
+      ? Math.min((window.innerWidth * 0.9) / w, (window.innerHeight * 0.86) / h, BIG_MAX_SCALE)
+      : Math.min(MINI_VIEW / w, MINI_VIEW / h, MINI_MAX_SCALE);
+    // nagy játéktéren a kis térkép az alap felbontású (a tank környéke látszik)
+    return Math.max(MINI_SCALE, Math.round(fit * 100) / 100);
+  }
+
+  /** A nagy térkép képének elkészítése a háttérben, sávonként (a szabad időben). */
+  private prepareBig(): void {
+    const scale = this.scaleFor(true);
+    if (scale === MINI_SCALE) return;
+    const base = this.bases.get(scale) ?? this.newBase(scale);
+    if (base.row >= base.canvas.height || this.preparing === base) return;
+    this.preparing = base;
+    const step = (): void => {
+      if (this.preparing !== base) return;
+      if (base.row >= base.canvas.height) {
+        this.preparing = null;
+        return;
+      }
+      this.renderStrip(base, Math.max(1, Math.floor(STRIP_PIXELS / base.canvas.width)));
+      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(step, { timeout: 400 });
+      else window.setTimeout(step, 30);
+    };
+    step();
+  }
+
+  /** Új, még üres térképkép a megadott felbontásban (a játéktér méretére vágva). */
+  private newBase(scale: number): MapBase {
+    const { area } = this;
+    const ox = Math.floor(area.minX * scale);
+    const oy = Math.floor(area.minY * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(area.maxX * scale) - ox;
+    canvas.height = Math.ceil(area.maxY * scale) - oy;
+    const base = { canvas, ox, oy, scale, row: 0 };
+    // ablakátméretezéskor új felbontás kellhet: a régiek közül legfeljebb kettő marad meg
+    if (this.bases.size >= 3) this.bases.delete(this.bases.keys().next().value as number);
+    this.bases.set(scale, base);
+    return base;
+  }
+
+  /** A térképkép következő (legfeljebb `rows` soros) sávjának kirajzolása. */
+  private renderStrip(base: MapBase, rows: number): void {
+    const w = base.canvas.width;
+    const h = Math.min(rows, base.canvas.height - base.row);
+    if (h <= 0) return;
+    const buf = new Uint32Array(w * h);
+    renderMap(this.map, { buf, w, h, ox: base.ox, oy: base.oy + base.row, scale: base.scale, detail: false });
+    base.canvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(buf.buffer), w, h), 0, base.row);
+    base.row += h;
+  }
+
+  /** A játéktér képe a megadott felbontásban (px/m): ha még nincs kész, a hátralévő része most készül el. */
+  private baseAt(scale: number): MapBase {
+    const base = this.bases.get(scale) ?? this.newBase(scale);
+    if (base.row < base.canvas.height) this.renderStrip(base, base.canvas.height - base.row);
+    if (this.preparing === base) this.preparing = null;
+    return base;
   }
 
   update(f: HudFrame): void {
@@ -497,22 +622,24 @@ export class Hud {
 
   private drawMinimap(f: HudFrame): void {
     const ctx = this.miniCtx;
-    const s = MINI_SCALE;
-    // kis nézetben a kép a tank köré igazodik (a pálya szélén megáll)
-    const { crop } = this;
-    let ox = crop.x;
-    let oy = crop.y;
+    const s = this.scale;
+    // kis nézetben a kép a tank köré igazodik (a játéktér szélén megáll)
+    const { area } = this;
+    const cropX = Math.round(area.minX * s);
+    const cropY = Math.round(area.minY * s);
+    let ox = cropX;
+    let oy = cropY;
     if (!this.bigMap) {
-      ox = Math.max(crop.x, Math.min(crop.x + crop.w - this.mini.width, Math.round(f.x * s - this.mini.width / 2)));
-      oy = Math.max(crop.y, Math.min(crop.y + crop.h - this.mini.height, Math.round(f.y * s - this.mini.height / 2)));
+      ox = Math.max(cropX, Math.min(Math.round(area.maxX * s) - this.mini.width, Math.round(f.x * s - this.mini.width / 2)));
+      oy = Math.max(cropY, Math.min(Math.round(area.maxY * s) - this.mini.height, Math.round(f.y * s - this.mini.height / 2)));
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(this.miniBase, -ox, -oy);
+    ctx.drawImage(this.base.canvas, this.base.ox - ox, this.base.oy - oy);
     ctx.translate(-ox, -oy);
 
     // nagy térképen az utcanevek is látszanak
     if (this.bigMap) {
-      ctx.font = 'bold 11px Consolas, "Courier New", monospace';
+      ctx.font = `bold ${s >= 1.5 ? 13 : 11}px Consolas, "Courier New", monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineJoin = 'round';
@@ -596,17 +723,63 @@ export class Hud {
       }
     }
 
-    // ellenséges tankok: piros pont (ami füstben van, az a térképen sem látszik)
+    // a botok: piros pont (ami füstben van, az a térképen sem látszik). Az ellenséges játékosok
+    // a térképen nem látszanak: őket csak a saját szemével találhatja meg a játékos.
     const hidden = (t: TankState): boolean => f.smokes.some((k) => insideSmoke(k, t.x, t.y));
     for (const t of f.tanks) {
       // az álcázott tank a térképen sem látszik
-      if (!t.alive || t.id === f.focusId || t.cloak > 0 || (f.smokes.length > 0 && hidden(t))) continue;
+      if (!t.bot || !t.alive || t.id === f.focusId || t.cloak > 0 || (f.smokes.length > 0 && hidden(t))) continue;
       ctx.fillStyle = '#101418';
       ctx.fillRect(t.x * s - 4, t.y * s - 4, 8, 8);
-      // a botok pirosak, a többi játékos narancssárga (nagyobb ponttal)
-      ctx.fillStyle = t.bot ? '#ff4a3a' : '#ffb020';
-      const r = t.bot ? 2.5 : 3.5;
+      ctx.fillStyle = '#ff4a3a';
+      const r = 2.5;
       ctx.fillRect(t.x * s - r, t.y * s - r, r * 2, r * 2);
+    }
+
+    // GPS: az útvonal kék vonallal (az utak sárgák), a cél zászlóval (az út végétől a célig pontozva)
+    if (f.gps) {
+      const r = f.gps.route;
+      const trace = (): void => {
+        ctx.beginPath();
+        ctx.moveTo(r[0] * s, r[1] * s);
+        for (let i = 2; i < r.length; i += 2) ctx.lineTo(r[i] * s, r[i + 1] * s);
+      };
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      trace();
+      ctx.strokeStyle = 'rgba(16,20,24,0.75)';
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      trace();
+      ctx.strokeStyle = '#38a8ff';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      const { end, target } = f.gps;
+      if (Math.hypot(target.x - end.x, target.y - end.y) > 2) {
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(end.x * s, end.y * s);
+        ctx.lineTo(target.x * s, target.y * s);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // zászló: rúd és kék lobogó
+      const fx = target.x * s;
+      const fy = target.y * s;
+      ctx.fillStyle = '#101418';
+      ctx.fillRect(fx - 1.5, fy - 14, 3, 15);
+      ctx.beginPath();
+      ctx.moveTo(fx + 1, fy - 14);
+      ctx.lineTo(fx + 12, fy - 10);
+      ctx.lineTo(fx + 1, fy - 6);
+      ctx.closePath();
+      ctx.fillStyle = '#38a8ff';
+      ctx.fill();
+      ctx.strokeStyle = '#101418';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
     }
 
     // a tank: irányba forgatott nyíl

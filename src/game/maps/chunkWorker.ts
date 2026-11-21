@@ -14,6 +14,7 @@ export type ChunkRequest =
   | { type: 'felled'; index: number; angle: number }
   | { type: 'scar'; x: number; y: number; r: number }
   | { type: 'collapse'; index: number }
+  | { type: 'restore'; what: 'building' | 'prop'; index: number }
   | { type: 'reset' };
 
 export interface ChunkReply {
@@ -59,6 +60,11 @@ scope.onmessage = (ev) => {
   }
   if (msg.type === 'collapse') {
     map.collapse(msg.index);
+    return;
+  }
+  if (msg.type === 'restore') {
+    if (msg.what === 'building') map.restoreBuilding(msg.index);
+    else map.fellables.restore(msg.index);
     return;
   }
   if (msg.type === 'reset') {

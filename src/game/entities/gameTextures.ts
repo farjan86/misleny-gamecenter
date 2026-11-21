@@ -6,6 +6,9 @@ import { WORKSHOP } from '../sim/gadgets';
 import { PICKUP_KINDS } from '../sim/pickups';
 import { PICKUP_STYLE, pickupTexture } from './pickupStyle';
 
+/** A gépfegyver rajzának mérete (pixel, 48 px/m) és a forgáspontja (a talp): a .50-es nehézgéppuska kb. 1,85 m. */
+export const MG_TEX = { w: 92, h: 36, pivotX: 26, ppm: 48 } as const;
+
 export const GTEX = {
   rocket: 'rocket',
   heavyShell: 'heavy-shell',
@@ -14,6 +17,8 @@ export const GTEX = {
   glow: 'fx-glow',
   /** lágy szélű fehér korong: este ezzel „vágunk lyukat” a sötétségbe a fények helyén */
   light: 'fx-light',
+  /** lézersugár: keresztben lágy szélű csík (hosszában nyújtva) */
+  laserBeam: 'fx-laser-beam',
   rain: 'fx-rain',
   /** a földet érő esőcsepp gyűrűje */
   splash: 'fx-splash',
@@ -68,6 +73,20 @@ export function createGameTextures(scene: Phaser.Scene): void {
     g.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 128, 128);
+  });
+
+  // lézersugár: függőlegesen középen telt fény, a szélek felé gyorsan elhalványul
+  canvasTexture(scene, GTEX.laserBeam, 4, 64, (ctx) => {
+    const g = ctx.createLinearGradient(0, 0, 0, 64);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.3, 'rgba(255,255,255,0.35)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.5, 'rgba(255,255,255,1)');
+    g.addColorStop(0.55, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.7, 'rgba(255,255,255,0.35)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 4, 64);
   });
 
   // esőcseppek: sok rövid, vékony, különböző erősségű vonalka (a kép csempézve ismétlődik)
@@ -426,34 +445,97 @@ export function createGameTextures(scene: Phaser.Scene): void {
   }
 
   // kiegészítő géppuska felülről: lőszeres doboz hevederrel, tok, hűtőbordás cső, csőszájfék
-  canvasTexture(scene, GTEX.mg, 46, 20, (ctx) => {
-    // lőszeres doboz a tok mellett, belőle sárga heveder fut a tokba
-    ctx.fillStyle = '#4a5a3a';
-    ctx.fillRect(2, 11, 11, 8);
-    ctx.strokeStyle = '#141a10';
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(2, 11, 11, 8);
-    ctx.fillStyle = '#ffd84a';
-    for (let i = 0; i < 4; i++) ctx.fillRect(4 + i * 2.4, 8.2, 1.4, 3.2);
-    // tok
-    ctx.fillStyle = '#2a2d33';
+  // .50-es (12,7 mm-es) nehézgéppuska felülnézetből, 48 px/m: hátul a két markolat, a szögletes tok a
+  // fedelével, balról a lőszerdobozból sárgaréz heveder fut be; elöl a lyuggatott hűtőköpeny, a hosszú
+  // vékony cső és a lángrejtő. A forgáspont (a talp) a tok közepén van: MG_PIVOT.
+  canvasTexture(scene, GTEX.mg, MG_TEX.w, MG_TEX.h, (ctx) => {
+    const m = 48;
+    const px = MG_TEX.pivotX;
+    const py = MG_TEX.h / 2;
+    const X = (v: number): number => px + v * m;
+    const Y = (v: number): number => py + v * m;
+    const rect = (x0: number, y0: number, x1: number, y1: number, fill: string | CanvasGradient, stroke?: string, r = 1.2): void => {
+      ctx.beginPath();
+      ctx.roundRect(X(x0), Y(y0), (x1 - x0) * m, (y1 - y0) * m, r);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    };
+    const steel = (y0: number, y1: number, light: string, dark: string): CanvasGradient => {
+      const g = ctx.createLinearGradient(0, Y(y0), 0, Y(y1));
+      g.addColorStop(0, light);
+      g.addColorStop(1, dark);
+      return g;
+    };
+    // árnyék a talp alatt
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.beginPath();
-    ctx.roundRect(1, 3, 17, 8, 1.5);
+    ctx.ellipse(X(0.02), Y(0.03), 0.12 * m, 0.1 * m, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#0a0b0d';
+    // lőszerdoboz (olívzöld) a bal oldalon, fedéllel és fogantyúval
+    rect(-0.24, -0.34, 0.08, -0.2, steel(-0.34, -0.2, '#6b7a44', '#3e4826'), '#1c2210', 1.5);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(X(-0.22), Y(-0.29), 0.28 * m, 1);
+    rect(-0.12, -0.36, -0.03, -0.33, '#2a2f1a');
+    // a heveder: sárgaréz töltények fekete szemekkel, a dobozból a tok oldalába
+    for (let i = 0; i < 6; i++) {
+      const x = -0.02 + i * 0.022;
+      rect(x, -0.21 + i * 0.022, x + 0.016, -0.07 + i * 0.002, '#d8a83a', '#5a4410', 0.8);
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(X(x) + 0.5, Y(-0.21 + i * 0.022) + 1, 0.016 * m - 1, 1.6);
+    }
+    // markolatok és az elsütő (hátul)
+    rect(-0.52, -0.075, -0.44, -0.035, '#3a3c42', '#c8ccd4', 2);
+    rect(-0.52, 0.035, -0.44, 0.075, '#3a3c42', '#c8ccd4', 2);
+    rect(-0.46, -0.05, -0.37, 0.05, '#25272c', '#08090a', 1);
+    ctx.fillStyle = '#8a8f99';
+    ctx.fillRect(X(-0.45), Y(-0.008), 0.05 * m, 0.016 * m);
+    // a tok: szögletes acéldoboz, tetején a fedél zsanérral és szegecsekkel
+    rect(-0.38, -0.078, 0.27, 0.078, steel(-0.078, 0.078, '#7a808a', '#3a3e46'), '#c8ccd4', 1.5);
+    rect(-0.3, -0.06, 0.18, 0.03, steel(-0.06, 0.03, '#9aa0aa', '#5a5f68'), '#2a2d33', 1);
+    ctx.fillStyle = '#9aa0aa';
+    for (const x of [-0.27, -0.12, 0.03, 0.15]) {
+      ctx.beginPath();
+      ctx.arc(X(x), Y(0.05), 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(X(-0.3), Y(-0.015));
+    ctx.lineTo(X(0.18), Y(-0.015));
     ctx.stroke();
-    ctx.fillStyle = '#5a5f6a';
-    ctx.fillRect(3, 4.3, 12, 1.6);
-    // cső hűtőbordákkal
-    ctx.fillStyle = '#1c1e22';
-    ctx.fillRect(18, 5.2, 24, 3.6);
-    ctx.fillStyle = '#6a6f7a';
-    for (let x = 20; x < 36; x += 3) ctx.fillRect(x, 4.4, 1.5, 5.2);
-    // csőszájfék
+    // a felhúzókar a jobb oldalon
+    rect(-0.1, 0.075, -0.02, 0.105, '#2a2c31', '#08090a', 1);
+    // a hűtőköpeny: lyuggatott cső a tok előtt
+    rect(0.27, -0.042, 0.66, 0.042, steel(-0.042, 0.042, '#8a9099', '#3a3e46'), '#c8ccd4', 2);
     ctx.fillStyle = '#0c0d10';
-    ctx.fillRect(40, 4, 5, 6);
-    ctx.fillStyle = '#8a9099';
-    ctx.fillRect(41.2, 5, 1.2, 4);
+    for (let x = 0.31; x < 0.63; x += 0.05) {
+      for (const y of [-0.018, 0.018]) {
+        ctx.beginPath();
+        ctx.ellipse(X(x), Y(y), 0.014 * m, 0.008 * m, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // a cső: hosszú, vékony
+    rect(0.66, -0.02, 1.22, 0.02, steel(-0.02, 0.02, '#a0a6b0', '#3a3e46'), '#c8ccd4', 1);
+    // lángrejtő a cső végén
+    ctx.fillStyle = steel(-0.04, 0.04, '#55595f', '#15171a');
+    ctx.beginPath();
+    ctx.moveTo(X(1.2), Y(-0.026));
+    ctx.lineTo(X(1.31), Y(-0.04));
+    ctx.lineTo(X(1.31), Y(0.04));
+    ctx.lineTo(X(1.2), Y(0.026));
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#050506';
+    ctx.stroke();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(X(1.3), Y(-0.012), 1.2, 0.024 * m);
   });
 
   // akna: sötét tányér tüskékkel, közepén piros gyújtó

@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { GameMap } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
 import { SegmentGrid } from '../src/game/sim/collision';
-import { areaOfCells, gridSize, MATCH, Match, matchPlan, sanitizeSettings, type MatchSettings } from '../src/game/sim/match';
+import { applyTempo, areaOfCells, gridSize, MATCH, Match, matchPlan, sanitizeSettings, TEMPO, tempoBots, tempoKm2, type MatchSettings } from '../src/game/sim/match';
+import { areaShares, MAX_WATER_SHARE, MIN_STREET_SHARE, pickArea } from '../src/game/ui/areaPick';
 import { Structures } from '../src/game/sim/structures';
 import { CRUSH, DAMAGE, ramPower, ramThrough, SIM_DT, TANK, TEAM, World, type SimEvent, type TankInput, type TankState, type Terrain } from '../src/game/sim/world';
 
@@ -69,8 +70,9 @@ describe('ledönthető épületek', () => {
     expect(hits.length).toBeGreaterThanOrEqual(2);
     expect(hits[0]).toMatchObject({ index: 0, x: 145, y: 200 });
     expect(hits[0].left).toBeCloseTo(1 - DAMAGE.shell / 150, 5);
-    expect(shots('heavy')).toBe(3);
-    expect(shots('rocket')).toBe(3);
+    // a nagyobb, erősebb lövedék jóval jobban rombol (STRUCTURE_MULT): nehéz lövedékből kettő, rakétából egy is elég
+    expect(shots('heavy')).toBe(2);
+    expect(shots('rocket')).toBe(1);
   });
 
   it('a le nem dönthető épület (a hivatal) akárhány találat után is áll', () => {
@@ -411,12 +413,12 @@ describe('meccs a valódi pályán', () => {
     expect(draw.standings().map((s) => s.place)).toEqual([1, 1]);
   });
 
-  it('a botok kilövése is számít, és a teljes játékidő alatt van kit lőni', () => {
+  it('a botok kilövése statisztika (nem kilövés), és a teljes játékidő alatt van kit lőni', () => {
     const { match } = setup({ bots: 2, maxPlayers: 2 }, ['a', 'b']);
     const a = match.tankOf('p0')!;
     const bot = match.world.tanks.find((t) => t.bot)!;
     kill(match, a, bot);
-    expect(match.standings()[0]).toMatchObject({ id: 'p0', kills: 1 });
+    expect(match.standings()[0]).toMatchObject({ id: 'p0', kills: 0, bots: 1 });
     wait(match, TANK.respawnDelay + 0.5);
     expect(bot.alive).toBe(true);
   });
@@ -547,4 +549,165 @@ describe('nagyon kis pálya a valódi térképen (kétfős párbaj)', () => {
     expect(inside(bot, settings)).toBe(true);
     for (const v of match.world.vehicles) expect(v.x > settings.area.minX - 12 && v.x < settings.area.maxX + 12).toBe(true);
   });
+});
+
+describe('játéktempó és ajánlott pálya', () => {
+  const mapData = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+  const { cols, rows } = gridSize(mapData.meta.width, mapData.meta.height);
+
+  it('a pörgősebb tempó kisebb pályát ad ugyanannyi játékosnak; a pálya legfeljebb 1 km²; több játékosnak nagyobb', () => {
+    for (const players of [1, 4, 10, 20]) {
+      const sizes = [1, 2, 3, 4, 5].map((t) => tempoKm2(t, players));
+      for (let i = 1; i < sizes.length; i++) expect(sizes[i], `${players} fő, tempó ${i + 1}`).toBeLessThanOrEqual(sizes[i - 1]);
+      for (const km2 of sizes) expect(km2).toBeLessThanOrEqual(TEMPO.maxKm2);
+    }
+    expect(tempoKm2(4, 20)).toBeGreaterThan(tempoKm2(4, 4));
+    expect(tempoKm2(1, 20)).toBe(TEMPO.maxKm2);
+    // kevés játékosnál sem szűk: a pörgős legalább 0,1 km² (kb. 360 × 280 m), az aréna is legalább kb. 300 × 230 m
+    expect(tempoKm2(4, 1)).toBeGreaterThanOrEqual(0.1);
+    expect(tempoKm2(5, 1)).toBeGreaterThanOrEqual(0.07);
+  });
+
+  it('a botok száma a játékosszámmal csökken; pörgős tempóban kevés játékosnál sok bot van', () => {
+    expect(tempoBots(4, 2)).toBeGreaterThanOrEqual(8);
+    expect(tempoBots(4, 20)).toBeLessThan(tempoBots(4, 2));
+    expect(tempoBots(5, 4)).toBeGreaterThan(tempoBots(1, 4));
+    for (let t = 1; t <= 5; t++) expect(tempoBots(t, 100)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('tempó állásban a botok, tárgyak, forgalom a tempóból jön (a kérésben küldött érték nem számít); egyéniben nem változik', () => {
+    const raw = { tempo: 4, botSkill: 1, botAggression: 1, botToughness: 5, pickups: 0, traffic: 5, bots: 0, maxPlayers: 4 };
+    const s = applyTempo(sanitizeSettings(raw, mapData.meta.width, mapData.meta.height));
+    expect(s).toMatchObject({ botSkill: TEMPO.presets[4].botSkill, botAggression: TEMPO.presets[4].botAggression, botToughness: TEMPO.presets[4].botToughness, pickups: TEMPO.presets[4].pickups, traffic: TEMPO.presets[4].traffic });
+    expect(matchPlan(s).bots).toBe(tempoBots(4, 4));
+    const custom = applyTempo(sanitizeSettings({ ...raw, tempo: 0 }, mapData.meta.width, mapData.meta.height));
+    expect(custom).toMatchObject({ botSkill: 1, botAggression: 1, botToughness: 5, pickups: 0, traffic: 5 });
+    // a régi (tempó nélküli) beállítás egyéni marad; legfeljebb 20 játékos
+    expect(sanitizeSettings({}, mapData.meta.width, mapData.meta.height).tempo).toBe(TEMPO.custom);
+    expect(sanitizeSettings({ maxPlayers: 50 }, mapData.meta.width, mapData.meta.height).maxPlayers).toBe(20);
+  });
+
+  it('az ajánlott pálya a kért méretű, a pályán belül van, és jó helyen: van benne út és épület; a „Másik helyszín” máshová tesz', () => {
+    let seed = 7;
+    const rnd = (): number => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (const [tempo, players] of [[4, 4], [5, 2], [1, 20], [3, 10]] as const) {
+      const km2 = tempoKm2(tempo, players);
+      const rect = pickArea(mapData, cols, rows, km2, MATCH.minCells, rnd);
+      expect(rect.c0).toBeGreaterThanOrEqual(0);
+      expect(rect.r0).toBeGreaterThanOrEqual(0);
+      expect(rect.c1).toBeLessThan(cols);
+      expect(rect.r1).toBeLessThan(rows);
+      const area = areaOfCells(mapData.meta.width, mapData.meta.height, rect.c0, rect.r0, rect.c1, rect.r1);
+      const real = ((area.maxX - area.minX) * (area.maxY - area.minY)) / 1e6;
+      expect(real, `tempó ${tempo}, ${players} fő`).toBeGreaterThan(km2 * 0.5);
+      expect(real, `tempó ${tempo}, ${players} fő`).toBeLessThan(Math.max(km2 * 1.8, 0.06));
+      // van benne épület és közút
+      const inside = (x: number, y: number): boolean => x > area.minX && x < area.maxX && y > area.minY && y < area.maxY;
+      const houses = mapData.buildings.filter((b) => inside(b.pts[0], b.pts[1])).length;
+      const roads = mapData.roads.filter((r) => r.kind !== 'footway' && r.kind !== 'path' && r.pts.some((v, i) => i % 2 === 0 && inside(v, r.pts[i + 1]))).length;
+      expect(houses, `tempó ${tempo}`).toBeGreaterThan(8);
+      expect(roads, `tempó ${tempo}`).toBeGreaterThan(2);
+      // játszható: a cellák nagy részében utca, alig víz
+      const shares = areaShares(mapData, cols, rows, rect);
+      expect(shares.street, `tempó ${tempo}`).toBeGreaterThanOrEqual(MIN_STREET_SHARE);
+      expect(shares.water, `tempó ${tempo}`).toBeLessThanOrEqual(MAX_WATER_SHARE);
+      const other = pickArea(mapData, cols, rows, km2, MATCH.minCells, rnd, rect);
+      expect(other.c0 !== rect.c0 || other.r0 !== rect.r0).toBe(true);
+    }
+  });
+});
+
+describe('visszanövés a nyitott játékban', () => {
+  const mapData = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
+  const area = { minX: 600, minY: 900, maxX: 1000, maxY: 1300 };
+  /** Meccs, amelyben az első lépés után a megadott épületek összedőlnek és a fák kidőlnek (valódi eseményekkel). */
+  const setup = (endless: boolean, buildings: number, trees: number) => {
+    const map = new GameMap(mapData);
+    map.setArea(area);
+    const settings = sanitizeSettings({ area, bots: 0, pickups: 0, traffic: 0, maxPlayers: 1 }, map.width, map.height);
+    const match = new Match(map, settings, [{ id: 'a', name: 'Anna' }], 3, endless);
+    const inside = (x: number, y: number): boolean => x > area.minX + 30 && x < area.maxX - 30 && y > area.minY + 30 && y < area.maxY - 30;
+    const houses: number[] = [];
+    for (let i = 0; i < map.structures.count && houses.length < buildings; i++) if (map.structures.maxHp[i] !== Infinity && inside(map.structures.x[i], map.structures.y[i])) houses.push(i);
+    const props: number[] = [];
+    for (let i = 0; i < map.fellables.count && props.length < trees; i++) if (inside(map.fellables.x[i], map.fellables.y[i])) props.push(i);
+    // a játékos messzire, hogy ne álljon útban
+    const me = match.tankOf('a')!;
+    me.x = area.minX + 5;
+    me.y = area.minY + 5;
+    const world = match.world as unknown as { step: (i: unknown) => void; damageStructure: (i: number, a: number) => void; fell: (i: number, a: number) => boolean };
+    const step = world.step.bind(match.world);
+    let once = true;
+    world.step = (inputs) => {
+      step(inputs);
+      if (!once) return;
+      once = false;
+      for (const i of houses) world.damageStructure(i, Infinity);
+      for (const i of props) world.fell(i, 0.5);
+    };
+    return { match, map, houses, props };
+  };
+  const advance = (match: Match, seconds: number): SimEvent[] => {
+    const events: SimEvent[] = [];
+    for (let i = 0; i < seconds * 60; i++) {
+      match.step(new Map());
+      events.push(...match.world.events);
+      // a játékos maradjon a sarokban
+      const me = match.tankOf('a')!;
+      me.x = 605;
+      me.y = 905;
+    }
+    return events;
+  };
+
+  it('a ledöntöttek idővel egyenként, időben elosztva újra megjelennek; a rendes meccsben nem', () => {
+    const { match, map, houses, props } = setup(true, 4, 6);
+    advance(match, 1);
+    expect(houses.every((i) => map.structures.collapsed[i] === 1)).toBe(true);
+    expect(props.every((i) => map.fellables.fallen[i] === 1)).toBe(true);
+    // két perc alatt még semmi nem nő vissza
+    expect(advance(match, 100).filter((e) => e.type === 'regrow')).toHaveLength(0);
+    // 7 perc múlva mind visszanőtt – de nem egyszerre: két visszanövés között legalább REGROW.gap telik el
+    const ticks: number[] = [];
+    let t = 0;
+    for (let s = 0; s < 330; s++) {
+      for (const e of advance(match, 1)) if (e.type === 'regrow') ticks.push(t);
+      t++;
+    }
+    expect(ticks).toHaveLength(houses.length + props.length);
+    expect(houses.every((i) => map.structures.collapsed[i] === 0)).toBe(true);
+    expect(props.every((i) => map.fellables.fallen[i] === 0)).toBe(true);
+    // a visszaépült ház falai újra akadályok
+    expect(houses.every((i) => map.structures.hp[i] === map.structures.maxHp[i])).toBe(true);
+    // a rendes (időre menő) meccsben nem nő vissza semmi
+    const normal = setup(false, 2, 2);
+    advance(normal.match, 1);
+    (normal.match as unknown as { clock: number }).clock += 1000;
+    expect(advance(normal.match, 3).filter((e) => e.type === 'regrow')).toHaveLength(0);
+  }, 120000);
+
+  it('nem épül vissza arra, ami a helyén áll; a belépő játékos megkapja, mi van ledöntve', () => {
+    const { match, map, houses } = setup(true, 1, 0);
+    advance(match, 1);
+    const house = houses[0];
+    // egy második tank áll a rom közepén
+    const blocker = match.world.addTank(map.structures.x[house], map.structures.y[house], 0, { team: 50 });
+    (match as unknown as { clock: number }).clock += 1000;
+    const keep = (): void => {
+      blocker.x = map.structures.x[house];
+      blocker.y = map.structures.y[house];
+      blocker.speed = 0;
+    };
+    for (let i = 0; i < 600; i++) {
+      match.step(new Map());
+      keep();
+    }
+    expect(map.structures.collapsed[house]).toBe(1);
+    expect(match.destroyed()?.b).toContain(house);
+    // elmegy: a ház visszaépül
+    match.world.removeTank(blocker.id);
+    advance(match, 12);
+    expect(map.structures.collapsed[house]).toBe(0);
+    expect(match.destroyed()).toBeNull();
+  }, 60000);
 });

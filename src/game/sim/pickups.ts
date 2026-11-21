@@ -33,16 +33,14 @@ export type WeaponKind = (typeof WEAPON_KINDS)[number];
 export const isWeapon = (kind: PickupKind): kind is WeaponKind => (WEAPON_KINDS as readonly string[]).includes(kind);
 /** Lövésszámra szóló tárgy: a hármas lövés PICKUP.tripleShots lövésig tart, bármelyik fegyverrel. */
 export type AmmoKind = 'triple';
-/**
- * Megmaradó képesség: a pattanó lövedék a fegyvertől függetlenül megmarad, amíg
- * a tankot ki nem lövik (az alap- és a nehéz lövedék pattan, a rakéta és a lézer nem).
- */
-export type AbilityKind = 'ricochet';
 /** Töltetekben számolódnak (pajzs, olaj) vagy azonnal hatnak (javítás). */
 export type ChargeKind = 'shield' | 'oil' | 'repair' | 'turret' | 'mine' | 'smoke';
-/** Az időzített hatások. */
-export type TimedKind = Exclude<PickupKind, ChargeKind | WeaponKind | AmmoKind | AbilityKind>;
-export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'ricochet' && k !== 'shield' && k !== 'oil' && k !== 'repair' && k !== 'turret' && k !== 'mine' && k !== 'smoke');
+/**
+ * Az időzített hatások. A pattanó lövedék is ilyen: a fegyvertől függetlenül hat (az alap- és a
+ * nehéz lövedék pattan, a rakéta és a lézer nem), de csak PICKUPS.ricochet.duration másodpercig.
+ */
+export type TimedKind = Exclude<PickupKind, ChargeKind | WeaponKind | AmmoKind>;
+export const TIMED_KINDS = PICKUP_KINDS.filter((k): k is TimedKind => !isWeapon(k) && k !== 'triple' && k !== 'shield' && k !== 'oil' && k !== 'repair' && k !== 'turret' && k !== 'mine' && k !== 'smoke');
 
 /**
  * duration: a hatás ideje másodpercben (csak az időzített tárgyaknál; a
@@ -56,8 +54,8 @@ export const PICKUPS: Record<PickupKind, { duration: number; weight: number }> =
   triple: { duration: 0, weight: 12 },
   /** gyorstöltő: jóval rövidebb idő két lövés között */
   rapid: { duration: 15, weight: 10 },
-  /** pattanó lövedék: a falról kétszer visszapattan, mielőtt robban; megmaradó képesség */
-  ricochet: { duration: 0, weight: 9 },
+  /** pattanó lövedék: a falról kétszer visszapattan, mielőtt robban; 60 másodpercig tart */
+  ricochet: { duration: 60, weight: 9 },
   /** rakéta: lassan indul, felgyorsul, messzire repül, nagyot robban */
   rocket: { duration: 0, weight: 10 },
   /** lézer: azonnal célba érő sugár, nagy lőtávval */

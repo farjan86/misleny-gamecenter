@@ -84,6 +84,8 @@ export class ClientWorld {
     players: readonly PlayerInfo[],
     /** a javítóműhelyek helye (a meccs alatt nem változnak) */
     workshops: readonly number[][] = [],
+    /** menet közbeni belépéskor: ami már le van döntve (a játékjelenet induláskor alkalmazza) */
+    readonly destroyed: { b: number[]; p: number[]; a: number[] } | null = null,
   ) {
     this.workshops = workshops.map(([x, y], i) => ({ id: i + 1, x, y }));
     this.viewId = myId;

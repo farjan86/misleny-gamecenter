@@ -11,7 +11,7 @@ import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehic
 import { TANK_LOOKS } from '../sim/world';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -93,7 +93,9 @@ export interface Standing {
   id: string;
   name: string;
   place: number;
+  /** kilőtt ellenséges játékosok; a kilőtt botok külön (bots) */
   kills: number;
+  bots: number;
   deaths: number;
   level: number;
   /** a leghosszabb kilövéssorozat, a ledöntött épületek száma, a pontosság százalékban (−1: nem lőtt) */
@@ -207,7 +209,8 @@ export type ServerMessage =
   | { t: 'left'; reason: string }
   | { t: 'error'; message: string }
   /** workshops: a javítóműhelyek helye, [x, y] párok (a meccs alatt nem változnak) */
-  | { t: 'start'; room: RoomInfo; tank: number; players: PlayerInfo[]; workshops: number[][] }
+  /** destroyed: a már ledöntött épületek (b), kidőlt fák, oszlopok (p) és dőlésirányuk (a) – menet közbeni belépéskor */
+  | { t: 'start'; room: RoomInfo; tank: number; players: PlayerInfo[]; workshops: number[][]; destroyed?: { b: number[]; p: number[]; a: number[] } }
   | Snapshot
   | { t: 'ev'; e: SimEvent[] }
   /** a futó (nyitott) játékba új játékos lépett be */
@@ -298,10 +301,9 @@ export function blankTank(id: number): TankState {
     homeX: 0,
     homeY: 0,
     homeAngle: 0,
-    effects: { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0, super: 0, gun: 0 },
+    effects: { rapid: 0, ricochet: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0, super: 0, gun: 0 },
     weapon: null,
     tripleShots: 0,
-    ricochet: false,
     shield: 0,
     oil: 0,
     turrets: 0,
@@ -319,6 +321,7 @@ export function blankTank(id: number): TankState {
     cloak: 0,
     cloakReady: 0,
     botKills: 0,
+    botsDown: 0,
     gunCooldown: 0,
     dropCooldown: 0,
     slip: 0,
@@ -433,7 +436,6 @@ export function packMe(t: TankState): Partial<TankState> {
     effects,
     weapon: t.weapon,
     tripleShots: t.tripleShots,
-    ricochet: t.ricochet,
     shield: t.shield,
     oil: t.oil,
     turrets: t.turrets,
@@ -442,6 +444,7 @@ export function packMe(t: TankState): Partial<TankState> {
     strikes: t.strikes,
     streak: t.streak,
     botKills: t.botKills,
+    botsDown: t.botsDown,
     cloak: stepUp(t.cloak, 0.5),
     cloakReady: stepUp(t.cloakReady, 1),
   };

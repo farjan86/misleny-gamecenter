@@ -32,7 +32,7 @@ import {
   type RoomStatus,
   type ServerMessage,
 } from '../src/game/net/protocol';
-import { MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings, DEMO, demoPlayers, type Carry } from '../src/game/sim/match';
+import { applyTempo, MATCH, Match, matchPlan, sanitizeSettings, type MatchPlan, type MatchSettings, DEMO, demoPlayers, type Carry } from '../src/game/sim/match';
 import { cleanLook, NO_INPUT, SIM_DT, type SimEvent, type TankInput, type TankState } from '../src/game/sim/world';
 
 export interface Link {
@@ -198,12 +198,13 @@ export class Lobby {
       const { id, host, settings: stored } = entry as Partial<StoredOpenGame>;
       if (typeof id !== 'string' || !/^r\d{1,9}$/.test(id) || this.rooms.has(id)) continue;
       if (typeof host !== 'string' || !this.isAdmin(host)) continue;
-      const settings = sanitizeSettings(stored ?? null, this.width, this.height);
+      const settings = applyTempo(sanitizeSettings(stored ?? null, this.width, this.height));
       settings.maxPlayers = demoPlayers(stored?.maxPlayers);
       const owner = new Client('host', { send: () => undefined, close: () => undefined });
       owner.name = cleanName(host);
       const room = new Room(id, owner, settings);
       room.demo = true;
+      room.plan = matchPlan(settings, true);
       this.rooms.set(id, room);
       this.nextRoom = Math.max(this.nextRoom, Number(id.slice(1)) + 1);
       this.start(room, 0);
@@ -406,7 +407,7 @@ export class Lobby {
       client.send({ t: 'error', message: 'Most nem hozható létre több játék, próbáld később.' });
       return;
     }
-    const settings = sanitizeSettings(raw, this.width, this.height);
+    const settings = applyTempo(sanitizeSettings(raw, this.width, this.height));
     if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) settings.name = `${client.name} játéka`;
     if (demo) {
       // nyitott játék: csak a szerver gazdája nyithatja, egyszerre egy fut; nincs belépőkód és időkorlát
@@ -419,6 +420,7 @@ export class Lobby {
       // ő a játékok listájánál marad, és ha akar, ugyanúgy beléphet, mint bárki más
       const room = new Room(`r${this.nextRoom++}`, client, settings);
       room.demo = true;
+      room.plan = matchPlan(settings, true);
       this.rooms.set(room.id, room);
       this.start(room, this.now);
       this.saveOpenGames();
@@ -546,7 +548,8 @@ export class Lobby {
     const player = match.addPlayer(client.id, client.name, client.look, carry);
     const info = { id: player.id, name: player.name, tank: player.tankId, look: player.look };
     for (const other of room.clients) if (other !== client) other.send({ t: 'joined', player: info });
-    client.send({ t: 'start', room: room.info(), tank: player.tankId, players: this.playersOf(match), workshops: this.workshopsOf(match) });
+    const destroyed = match.destroyed();
+    client.send({ t: 'start', room: room.info(), tank: player.tankId, players: this.playersOf(match), workshops: this.workshopsOf(match), ...(destroyed ? { destroyed } : {}) });
     this.broadcastRooms();
   }
 
@@ -569,7 +572,7 @@ export class Lobby {
       client.send({ t: 'error', message: 'A nyitott játékot csak a szerver gazdája módosíthatja.' });
       return;
     }
-    const settings = sanitizeSettings(raw, this.width, this.height);
+    const settings = applyTempo(sanitizeSettings(raw, this.width, this.height));
     if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) settings.name = room.settings.name;
     settings.maxPlayers = Math.min(DEMO.maxPlayers, Math.max(demoPlayers(raw?.maxPlayers), room.clients.length));
     // a bent lévők állapota félre: az új pályán ezzel folytatják
@@ -581,7 +584,7 @@ export class Lobby {
     }
     room.clients.length = 0;
     room.settings = settings;
-    room.plan = matchPlan(settings);
+    room.plan = matchPlan(settings, true);
     this.start(room, this.now);
     this.saveOpenGames();
   }

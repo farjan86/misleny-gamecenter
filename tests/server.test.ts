@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { Accounts } from '../server/accounts';
 import { Gate } from '../server/gate';
 import { LIMITS, Lobby, type OpenGameStore, type StoredOpenGame } from '../server/lobby';
+import { GameMap } from '../src/game/maps/GameMap';
 import type { MapData } from '../src/game/maps/types';
 import { CHAT, cleanChat, encode, messageReader, packInput, PROTOCOL_VERSION, VOICE, type ClientMessage, type FullSnapshot, type RoomInfo, type ServerMessage } from '../src/game/net/protocol';
-import { DEMO, demoPlayers, MATCH } from '../src/game/sim/match';
+import { DEMO, demoPlayers, MATCH, type Match } from '../src/game/sim/match';
 
 const data = JSON.parse(readFileSync(new URL('../assets/maps/processed/misleny-kozpont.json', import.meta.url), 'utf8')) as MapData;
 
@@ -811,5 +812,30 @@ describe('a nyitott játékok megmaradnak a szerver újraindítása után', () =
     // a teljesen hibás mentés sem állítja meg a szervert
     const broken = { load: () => { throw new Error('sérült fájl'); }, save: () => undefined };
     expect(() => new Lobby(data, MATCH.countdown, ['ProWolf'], broken)).not.toThrow();
+  });
+});
+
+describe('menet közbeni belépés: a ledöntött épületek, fák', () => {
+  it('a nyitott játékba később belépő megkapja, mi van már ledöntve (nem lát „szellemházat”)', () => {
+    const lobby = new Lobby(data, MATCH.countdown, ['ProWolf']);
+    const admin = new FakeClient(lobby, 'ProWolf');
+    lobby.tick(0);
+    admin.send({ t: 'create', settings: { area: { minX: 600, minY: 900, maxX: 1000, maxY: 1300 }, bots: 0, pickups: 0, traffic: 0, minutes: 5 }, demo: true });
+    const id = admin.rooms()[0].id;
+    const anna = new FakeClient(lobby, 'Anna');
+    anna.send({ t: 'join', room: id });
+    expect(anna.last('start')!.destroyed).toBeUndefined();
+    // egy ház összedől, egy fa kidől
+    const match = (lobby as unknown as { rooms: Map<string, { match: Match }> }).rooms.get(id)!.match;
+    const map = match.world.terrain as GameMap;
+    const house = [...Array(map.structures.count).keys()].find((i) => map.structures.maxHp[i] !== Infinity && map.structures.x[i] > 650 && map.structures.x[i] < 950 && map.structures.y[i] > 950 && map.structures.y[i] < 1250)!;
+    map.collapse(house);
+    map.fellables.fell(3, 1.25);
+    const bela = new FakeClient(lobby, 'Béla');
+    bela.send({ t: 'join', room: id });
+    const destroyed = bela.last('start')!.destroyed!;
+    expect(destroyed.b).toContain(house);
+    expect(destroyed.p).toContain(3);
+    expect(destroyed.a[destroyed.p.indexOf(3)]).toBeCloseTo(1.25, 2);
   });
 });

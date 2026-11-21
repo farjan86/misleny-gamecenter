@@ -9,3 +9,7 @@ dist-server/
 data/
 alagut.txt
 logs/
+felho.txt
+.deploy/
+.deploy.tgz
+mentes/

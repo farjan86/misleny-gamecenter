@@ -1,0 +1,8 @@
+#!/bin/sh
+# A TANK MISLENY adatainak napi mentése a felhős gépen (fiókok, nyitott játékok, statisztika).
+# Helye a gépen: /etc/cron.daily/tank-mentes – a scripts/deploy.mjs --setup telepíti. Az utolsó 14 nap marad meg.
+set -e
+mkdir -p /opt/tank/backup
+chmod 700 /opt/tank/backup
+tar -czf "/opt/tank/backup/tank-$(date +%Y%m%d).tgz" -C /opt/tank data logs
+find /opt/tank/backup -name 'tank-*.tgz' -mtime +14 -delete

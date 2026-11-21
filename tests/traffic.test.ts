@@ -518,7 +518,7 @@ describe('telepíthető ágyú', () => {
   it('a löveg a gazdája szintjét követi: szívósabb, messzebbre lát, gyorsabban és nagyobbat lő', () => {
     // a 20. szintű tank lövege sokkal erősebb a kezdőénél
     expect(turretMaxHp(1)).toBe(TURRET.hp);
-    expect(turretMaxHp(20)).toBeGreaterThan(TURRET.hp * 4);
+    expect(turretMaxHp(20)).toBeGreaterThan(TURRET.hp * 3);
     expect(turretRange(20)).toBeGreaterThan(turretRange(1) * 1.4);
     expect(turretInterval(20)).toBeLessThan(turretInterval(1) / 2);
     const world = new World(field());

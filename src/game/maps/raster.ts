@@ -9,7 +9,7 @@
 
 import { boxesOverlap, MAIN_ROADS, pointInPolygon, STREETS, type GameMap, type Tree } from './GameMap';
 import { drawLandmarkAreas, drawLandmarkOverlay, drawLandmarkProps, drawLandmarkRoof, markLandmarkShadows } from './landmarkRaster';
-import { c, coverBuf, cssColor, faceBuf, fillRings, forDisc, hash, maskBuf, mottled, scratch, shade, strokeLine, strokeRing, vnoise, type Mat, type Put, type RasterTarget } from './rasterCore';
+import { c, coverBuf, cssColor, faceBuf, fillRings, forDisc, hash, maskBuf, mix, mottled, scratch, shade, strokeLine, strokeRing, vnoise, type Mat, type Put, type RasterTarget } from './rasterCore';
 import type { BuildingFeature, Crossing, LandmarkBuilding } from './types';
 
 export type { RasterTarget } from './rasterCore';
@@ -1223,6 +1223,8 @@ function drawScar(t: RasterTarget, x: number, y: number, r: number, seed: number
   const { buf } = t;
   const rp = r * s;
   const k = 1 / (0.5 * s);
+  // a kráter mélysége a méretéből: a kis nyom (ágyú) 0, a rakétáé kb. 1
+  const depth = Math.min(1, Math.max(0, (r - 1.3) / 2.3));
   forDisc(t, x * s, y * s, rp * 1.25, (idx, dx, dy, wx, wy) => {
     const n = vnoise(wx * k + seed * 1.3, wy * k + seed * 0.7);
     const q = Math.sqrt(dx * dx + dy * dy) / rp + (n - 0.5) * 0.45;
@@ -1239,10 +1241,30 @@ function drawScar(t: RasterTarget, x: number, y: number, r: number, seed: number
       else buf[idx] = shade(buf[idx], 0.42);
       return;
     }
-    if (q < 0.45) buf[idx] = n > 0.6 ? c(0x2e2822) : c(0x221c18);
-    else if (q < 0.72) buf[idx] = c(0x3e362e);
-    else buf[idx] = shade(buf[idx], 0.55);
+    if (depth < 0.15) {
+      // kis nyom (ágyú, lézer): mint eddig
+      if (q < 0.45) buf[idx] = n > 0.6 ? c(0x2e2822) : c(0x221c18);
+      else if (q < 0.72) buf[idx] = c(0x3e362e);
+      else buf[idx] = shade(buf[idx], 0.55);
+      return;
+    }
+    // mély kráter: gödör, amelynek a bal felső (a fény felőli) fala árnyékban, a jobb alsó világosban van;
+    // minél nagyobb, annál sötétebb a mélye
+    const light = (dx + dy) / (rp * 1.414);
+    const tone = 0.3 + 0.55 * q * q - 0.2 * depth * (1 - q) + 0.22 * depth * light * Math.min(1, q * 1.6) + (n - 0.5) * 0.12;
+    buf[idx] = shade(q < 0.3 && n > 0.55 ? c(0x3a3026) : c(0x7a6a56), Math.max(0.1, Math.min(1, tone)));
   });
+  if (depth >= 0.15) {
+    // kidobott föld a kráter körül: világosabb, rögös perem
+    forDisc(t, x * s, y * s, rp * 1.6, (idx, dx, dy, wx, wy) => {
+      if (coverBuf[idx] === 1) return;
+      const n = vnoise(wx * k * 1.7 + seed * 2.1, wy * k * 1.7 + seed * 1.1);
+      const q = Math.sqrt(dx * dx + dy * dy) / rp + (n - 0.5) * 0.35;
+      if (q < 1.12 || q >= 1.55) return;
+      const strength = (1 - (q - 1.12) / 0.43) * depth;
+      if (n > 0.48) buf[idx] = mix(buf[idx], (hash(wx, wy) & 3) === 0 ? c(0x5a4e40) : c(0x9a8a6e), Math.min(0.85, strength * 1.1));
+    });
+  }
 }
 
 // --- a lombréteg -------------------------------------------------------------------

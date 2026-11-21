@@ -82,7 +82,7 @@ export const PICKUP_STYLE: Record<PickupKind, PickupStyle> = {
   },
   ricochet: {
     label: 'Pattanó lövedék',
-    hint: 'a lövedéked a falról kétszer visszapattan – megmarad, amíg ki nem lőnek',
+    hint: 'a lövedéked a falról kétszer visszapattan – 60 másodpercig',
     color: '#7a4ac0',
     icon: (ctx) => {
       stroke(ctx, 4);

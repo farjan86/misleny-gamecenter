@@ -25,6 +25,8 @@ export const TANK_LOOKS = 6;
 export const cleanLook = (raw: unknown): number => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw < TANK_LOOKS ? raw : 0);
 
 export const TANK = {
+  /** újraéledés után ennyi másodpercig teljes védelem (sebezhetetlenség) */
+  spawnShield: 3,
   radius: 1.7,
   maxSpeed: 17,
   /** tolatás legnagyobb sebessége */
@@ -133,6 +135,33 @@ export function botRules(toughness: number = BOT_TOUGHNESS_LEVELS.normal, skill 
   return { damage: t.damage, armor: t.armor, perks: skill >= BOT_PERKS_SKILL };
 }
 
+/**
+ * Az épületekben okozott kár a fegyver sebzésének ennyiszerese: a nagyobb, erősebb lövedék
+ * jóval jobban rombol. A rakéta robbanása ROCKET_BLAST méteren belül a szomszédos házakat is rombolja.
+ */
+export const STRUCTURE_MULT: Record<ShotKind, number> = { shell: 1, heavy: 2.4, rocket: 3, laser: 1.4 };
+export const ROCKET_BLAST = { radius: 6, damage: 70 } as const;
+
+/** Áll-e (vagy ér-e bele) egy r sugarú kör az alaprajzba (lapított x, y párok). */
+function ringBlocks(ring: readonly number[], x: number, y: number, r: number): boolean {
+  let inside = false;
+  const n = ring.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = ring[i * 2];
+    const yi = ring[i * 2 + 1];
+    const xj = ring[j * 2];
+    const yj = ring[j * 2 + 1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    // a kör a falhoz ér
+    const dx = xi - xj;
+    const dy = yi - yj;
+    const len2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((x - xj) * dx + (y - yj) * dy) / len2));
+    if (Math.hypot(x - (xj + dx * t), y - (yj + dy * t)) < r) return true;
+  }
+  return inside;
+}
+
 /** Ennyi szintet lép, aki `level` szinten kilő egy `victim` szintű játékost. */
 export function killGain(level: number, victim: number): number {
   return victim - level >= LEVEL.upsetGap ? LEVEL.upsetGain : 1;
@@ -235,7 +264,7 @@ export const DAMAGE = {
   shell: 25,
   heavy: 50,
   rocket: 55,
-  laser: 18,
+  laser: 24,
   /** a rakéta robbanása ekkora körben sebez (m), ennyit */
   splashRadius: 7,
   splash: 30,
@@ -292,6 +321,7 @@ export interface TankState {
   alive: boolean;
   /** újraéledésig hátralévő idő (mp), ha a tank ki van lőve */
   respawn: number;
+  /** kilőtt ellenséges játékosok (a botok nem számítanak bele: azok a botsDown-ban vannak) */
   kills: number;
   deaths: number;
   /** szint: 1-ről indul, minden kilövéssel eggyel nő (LEVEL.max-ig) */
@@ -311,8 +341,6 @@ export interface TankState {
   weapon: WeaponKind | null;
   /** ennyi lövésig hármas még a lövés */
   tripleShots: number;
-  /** pattanó lövedék: megmaradó képesség, a kilövésig tart */
-  ricochet: boolean;
   /** pajzstöltetek száma */
   shield: number;
   /** lerakható olajfoltok száma */
@@ -342,6 +370,8 @@ export interface TankState {
   cloakReady: number;
   /** a kilőtt botok száma a következő szintlépésig (LEVEL.botKills-nél szintet lép) */
   botKills: number;
+  /** az összes kilőtt bot (statisztika: a kilövések közé – kills – nem számít) */
+  botsDown: number;
   /** a kiegészítő géppuska következő lövéséig hátralévő idő (mp) */
   gunCooldown: number;
   dropCooldown: number;
@@ -425,7 +455,7 @@ export interface OilState {
 export type SimEvent =
   | { type: 'shot'; tank: number; kind: ShotKind; x: number; y: number; angle: number }
   | { type: 'impact'; kind: ShotKind; x: number; y: number }
-  | { type: 'laser'; x1: number; y1: number; x2: number; y2: number }
+  | { type: 'laser'; tank: number; x1: number; y1: number; x2: number; y2: number }
   | { type: 'ricochet'; x: number; y: number }
   /** a lángszóró lángja falat ért: az épület ott lángra kap */
   | { type: 'burn'; x: number; y: number }
@@ -454,6 +484,8 @@ export type SimEvent =
   | { type: 'mg'; tank: number; x1: number; y1: number; x2: number; y2: number }
   /** összedőlt egy épület (index: az épület sorszáma a pályán) */
   | { type: 'collapse'; index: number; x: number; y: number }
+  /** a nyitott játékban a ledöntött épület, illetve a kidőlt fa, oszlop idővel újra megjelenik */
+  | { type: 'regrow'; what: 'building' | 'prop'; index: number; x: number; y: number }
   /** a tanknak elfogytak az életei: kiesett */
   | { type: 'eliminated'; tank: number; by: number }
   /** felrobbant egy jármű */
@@ -515,6 +547,9 @@ export interface Terrain {
   workshopSpot?(rnd: () => number, radius: number): { x: number; y: number } | null;
   /** Véletlen hely egy ház fala mellett (gázpalacknak), ha a pálya tud ilyet adni. */
   barrelSpot?(rnd: () => number): { x: number; y: number } | null;
+  /** Az épület alaprajza (a visszaépüléshez), illetve az összedőltnek újraállítása. */
+  buildingRing?(index: number): readonly number[] | null;
+  restoreBuilding?(index: number): boolean;
 }
 
 /** A meccs szabályai. */
@@ -551,7 +586,7 @@ function rotateToward(current: number, target: number, maxStep: number): number 
 }
 
 function noEffects(): Effects {
-  return { rapid: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0, super: 0, gun: 0 };
+  return { rapid: 0, ricochet: 0, speed: 0, allTerrain: 0, invulnerable: 0, radar: 0, super: 0, gun: 0 };
 }
 
 /**
@@ -651,7 +686,6 @@ export class World {
       effects: noEffects(),
       weapon: null,
       tripleShots: 0,
-      ricochet: false,
       shield: 0,
       oil: 0,
       // a botok nem telepítenek löveget
@@ -670,6 +704,7 @@ export class World {
       cloak: 0,
       cloakReady: 0,
       botKills: 0,
+      botsDown: 0,
       gunCooldown: 0,
       dropCooldown: 0,
       slip: 0,
@@ -847,9 +882,8 @@ export class World {
     tank.fuel = 0;
     tank.flaming = false;
     tank.tripleShots = 0;
-    tank.ricochet = false;
-    // rövid védelem újraéledés után
-    tank.effects.invulnerable = 2.5;
+    // teljes védelem újraéledés után: semmi nem sebzi (lövés, akna, robbanás, tüzérség, ütközés)
+    tank.effects.invulnerable = TANK.spawnShield;
     tank.shield = 0;
     tank.oil = 0;
     // az alap lövegkészlet újra jár (a már lerakott lövegek megmaradnak)
@@ -1131,6 +1165,37 @@ export class World {
     }
   }
 
+  /**
+   * Visszanövés (nyitott játék): a ledöntött épület, illetve a kidőlt fa, oszlop újra megjelenik –
+   * de csak ha nem áll rajta tank, jármű, roncs vagy löveg (senki ne szoruljon bele). Igazat ad, ha megtörtént.
+   */
+  regrow(what: 'building' | 'prop', index: number): boolean {
+    const { terrain } = this;
+    // ami a helyét foglalja: tankok, járművek, roncsok, lövegek (középpont és sugár, méterben)
+    const blockers: { x: number; y: number; r: number }[] = [];
+    for (const t of this.tanks) if (t.alive && !t.out) blockers.push({ x: t.x, y: t.y, r: tankRadius(t) + 1 });
+    for (const v of this.vehicles) blockers.push({ x: v.x, y: v.y, r: 4 });
+    for (const w of this.wrecks) blockers.push({ x: w.x, y: w.y, r: wreckRadius(w) + 0.5 });
+    for (const u of this.turrets) blockers.push({ x: u.x, y: u.y, r: 2 });
+    if (what === 'prop') {
+      const props = terrain.fellables;
+      if (!props || index < 0 || index >= props.count || !props.fallen[index]) return false;
+      const x = props.x[index];
+      const y = props.y[index];
+      if (blockers.some((b) => Math.hypot(b.x - x, b.y - y) < b.r + 2.5)) return false;
+      props.restore(index);
+      this.events.push({ type: 'regrow', what, index, x, y });
+      return true;
+    }
+    const structures = terrain.structures;
+    const ring = terrain.buildingRing?.(index);
+    if (!structures || !ring || !structures.collapsed[index] || !terrain.restoreBuilding) return false;
+    if (blockers.some((b) => ringBlocks(ring, b.x, b.y, b.r))) return false;
+    if (!terrain.restoreBuilding(index)) return false;
+    this.events.push({ type: 'regrow', what, index, x: structures.x[index], y: structures.y[index] });
+    return true;
+  }
+
   /** Az egymásba csúszott tankok szétválasztása. */
   private separateTanks(): void {
     const { tanks, terrain } = this;
@@ -1271,7 +1336,8 @@ export class World {
     const blocked = terrain.walls.raycast(tank.x, tank.y, mx, my);
     if (blocked) {
       this.events.push({ type: 'impact', kind: laser ? 'laser' : kind, x: blocked.x, y: blocked.y });
-      this.damageStructure(blocked.owner, DAMAGE[laser ? 'laser' : kind] * damageBoost(tank), false, tank.id);
+      this.damageStructure(blocked.owner, DAMAGE[laser ? 'laser' : kind] * STRUCTURE_MULT[laser ? 'laser' : kind] * damageBoost(tank), false, tank.id);
+      if (kind === 'rocket' && !laser) this.blastStructures(blocked.x, blocked.y, ROCKET_BLAST.radius, ROCKET_BLAST.damage * damageBoost(tank), tank.id, blocked.owner);
       return;
     }
 
@@ -1299,7 +1365,7 @@ export class World {
         vx: cos * speed,
         vy: sin * speed,
         life: rocket ? ROCKET.life : BULLET.life * (kind === 'heavy' ? BOOST.heavyLife : 1),
-        bounces: tank.ricochet && !rocket ? BOOST.ricochetBounces : 0,
+        bounces: tank.effects.ricochet > 0 && !rocket ? BOOST.ricochetBounces : 0,
       });
     }
   }
@@ -1326,7 +1392,7 @@ export class World {
     ex = mx + cos * LASER.range * reach;
     ey = my + sin * LASER.range * reach;
     if (target || wall || prop || vehicle || turret || barrel || wreckT >= 0) this.events.push({ type: 'impact', kind: 'laser', x: ex, y: ey });
-    this.events.push({ type: 'laser', x1: mx, y1: my, x2: ex, y2: ey });
+    this.events.push({ type: 'laser', tank: tank.id, x1: mx, y1: my, x2: ex, y2: ey });
     // a legközelebbi találat számít: a keresés sorrendje miatt mindig a később talált van közelebb
     if (prop) this.fell(prop.index, Math.atan2(sin, cos));
     else if (target) {
@@ -1335,7 +1401,7 @@ export class World {
     } else if (barrel) this.igniteBarrel(barrel.barrel, tank.id, 0);
     else if (turret) this.damageTurret(turret.turret, DAMAGE.laser * damageBoost(tank));
     else if (vehicle) this.damageVehicle(vehicle.vehicle, DAMAGE.laser * damageBoost(tank), tank.id);
-    else if (wall && wreckT < 0) this.damageStructure(wall.owner, DAMAGE.laser * damageBoost(tank), false, tank.id);
+    else if (wall && wreckT < 0) this.damageStructure(wall.owner, DAMAGE.laser * STRUCTURE_MULT.laser * damageBoost(tank), false, tank.id);
   }
 
   /** Az útvonal első ellenséges (más csapatbeli) tankja a `limit` paraméterig. */
@@ -1450,7 +1516,9 @@ export class World {
     }
     if (this.wrecks.length > WRECK.max) this.wrecks.shift();
     if (attacker && attacker !== tank) {
-      attacker.kills++;
+      // kilövésnek csak az ellenséges játékos számít; a kilőtt bot külön statisztika
+      if (tank.bot) attacker.botsDown++;
+      else attacker.kills++;
       attacker.streak++;
       attacker.bestStreak = Math.max(attacker.bestStreak, attacker.streak);
       // kilövéssorozatért tüzérségi csapás jár (csak a játékosoknak)
@@ -1857,14 +1925,18 @@ export class World {
 
   /** A tüzérségi lövedék a becsapódás közelében álló épületeket is rombolja. */
   private shellStructures(x: number, y: number, by: number): void {
+    this.blastStructures(x, y, STRIKE.blastRadius * 0.75, STRIKE.structureDamage, by);
+  }
+
+  /** Robbanás: a `reach` méteren belül álló épületek sérülnek (`except`: amelyiket a találat már sebezte). */
+  private blastStructures(x: number, y: number, reach: number, amount: number, by: number, except = -1): void {
     const hit = new Set<number>();
-    const reach = STRIKE.blastRadius * 0.75;
-    for (let k = 0; k < 8; k++) {
-      const a = (k / 8) * Math.PI * 2;
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2;
       const wall = this.terrain.walls.raycast(x, y, x + Math.cos(a) * reach, y + Math.sin(a) * reach);
-      if (wall && wall.owner >= 0) hit.add(wall.owner);
+      if (wall && wall.owner >= 0 && wall.owner !== except) hit.add(wall.owner);
     }
-    for (const index of hit) this.damageStructure(index, STRIKE.structureDamage, false, by);
+    for (const index of hit) this.damageStructure(index, amount, false, by);
   }
 
   private stepGadgets(dt: number): void {
@@ -1910,10 +1982,14 @@ export class World {
       if (strike.delay > 0) continue;
       strike.next -= dt;
       while (strike.next <= 0 && strike.shells > 0) {
+        // egyenletes elosztás („napraforgó” minta): a k. lövedék a kör k. egyforma területű sávjába esik,
+        // kis véletlen eltolással; a sorrend összekevert, hogy ne körben haladva hulljanak
+        const k = ((STRIKE.shells - strike.shells) * 7) % STRIKE.shells;
         strike.shells--;
         strike.next += STRIKE.interval;
-        const angle = this.rnd() * Math.PI * 2;
-        const dist = Math.sqrt(this.rnd()) * STRIKE.spread;
+        const ring = Math.sqrt((k + 0.5 + (this.rnd() - 0.5) * 0.6) / STRIKE.shells);
+        const angle = k * 2.399963 + strike.id * 1.3 + (this.rnd() - 0.5) * 0.35;
+        const dist = Math.min(1, Math.max(0, ring)) * STRIKE.spread;
         const x = Math.max(area.minX, Math.min(area.maxX, strike.x + Math.cos(angle) * dist));
         const y = Math.max(area.minY, Math.min(area.maxY, strike.y + Math.sin(angle) * dist));
         this.boom('shell', x, y, STRIKE.blastRadius, STRIKE.damage, strike.owner, strike.team);
@@ -2059,10 +2135,11 @@ export class World {
           continue;
         }
         this.explode(b, wall.x, wall.y, null);
-        if (wall.owner >= 0) {
-          const owner = this.tank(b.owner);
-          this.damageStructure(wall.owner, DAMAGE[b.kind] * (owner ? damageBoost(owner) : 1), false, b.owner);
-        }
+        const owner = this.tank(b.owner);
+        const boost = owner ? damageBoost(owner) : 1;
+        if (wall.owner >= 0) this.damageStructure(wall.owner, DAMAGE[b.kind] * STRUCTURE_MULT[b.kind] * boost, false, b.owner);
+        // a rakéta robbanása a szomszédos házakat is rombolja
+        if (b.kind === 'rocket') this.blastStructures(wall.x, wall.y, ROCKET_BLAST.radius, ROCKET_BLAST.damage * boost, b.owner, wall.owner);
         this.bullets.splice(i, 1);
         continue;
       }
@@ -2122,7 +2199,6 @@ export class World {
       tank.fuel = Math.min(FLAME.maxFuel, (tank.weapon === 'flame' ? tank.fuel : 0) + FLAME.fuel);
       tank.weapon = 'flame';
     } else if (isWeapon(kind)) tank.weapon = kind; // az előző fegyver helyére lép
-    else if (kind === 'ricochet') tank.ricochet = true;
     else if (kind === 'triple') tank.tripleShots = Math.min(PICKUP.maxTripleShots, tank.tripleShots + PICKUP.tripleShots);
     else tank.effects[kind] = PICKUPS[kind].duration;
   }

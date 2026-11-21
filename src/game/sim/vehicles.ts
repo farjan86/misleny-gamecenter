@@ -102,8 +102,8 @@ export const TURRET = {
   /** minden (ember vezérelte) tank ennyi löveggel indul, és újraéledve is ennyit kap */
   base: 5,
   /** az 1. szintű löveg életereje, és ennyivel több szintenként */
-  hp: 160,
-  hpPerLevel: 32,
+  hp: 100,
+  hpPerLevel: 12,
   /** ilyen messzire lát és lő (m), ha nincs fal az útban; szintenként ennyivel messzebbre */
   range: 55,
   rangePerLevel: 1.5,

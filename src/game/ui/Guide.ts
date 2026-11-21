@@ -32,7 +32,7 @@ export const GUIDE_PICKUPS: Record<PickupKind, Entry> = {
   heavy: { what: `Fegyver: ${DAMAGE.heavy} sebzés lövésenként (az alap ágyú ${DAMAGE.shell}), nagyobb robbanás, gyorsabb lövedék.`, lasts: WEAPON_LASTS },
   triple: { what: `Három lövedék megy legyezőben, egyenként ${DAMAGE.shell} sebzéssel. Bármelyik fegyverrel együtt működik.`, lasts: `${PICKUP.tripleShots} lövés (több felvéve legfeljebb ${PICKUP.maxTripleShots})` },
   rapid: { what: `Gyorstöltő: két lövés között ${fire()} helyett ${fire(BOOST.rapidCooldown)} telik el.`, lasts: `${PICKUPS.rapid.duration} mp` },
-  ricochet: { what: `A lövedék a falról ${BOOST.ricochetBounces}-szer visszapattan, mielőtt robban – sarok mögé is lehet lőni.`, lasts: 'amíg ki nem lőnek' },
+  ricochet: { what: `A lövedék a falról ${BOOST.ricochetBounces}-szer visszapattan, mielőtt robban – sarok mögé is lehet lőni.`, lasts: `${PICKUPS.ricochet.duration} mp` },
   rocket: {
     what: `Fegyver: ${DAMAGE.rocket} sebzés a találatnál, és a robbanása ${DAMAGE.splashRadius} m-es körben további ${DAMAGE.splash} sebzést okoz; fákat dönt, palackot robbant. Lassan indul, felgyorsul, messzire repül; lassabban tölt (${fire(ROCKET.cooldown)}).`,
     lasts: WEAPON_LASTS,
@@ -238,9 +238,10 @@ export function buildGuide(root: HTMLElement, keys: KeyBindings): void {
     'A tank és a szintek',
     `<ul class="guide-list">
       <li><b>Szintek:</b> 1–${LEVEL.max}. Egy játékos kilövése egy szint; ha legalább ${LEVEL.upsetGap} szinttel erősebb volt nálad, ${LEVEL.upsetGain}. ${LEVEL.botKills} bot ér egy szintet. A botok szívóssága a játék beállítása: közepes szinten kisebbet sebeznek (${Math.round(BOT_POWER.damage * 100)}%) és gyengébb a páncéljuk (${Math.round(BOT_POWER.armor * 100)}% sebzést kapnak), a legszívósabb bot egyenrangú a játékossal. A botok nem vesznek fel tárgyat és nem fejlődnek – kivéve a két legügyesebb szintet (nagyon ügyes, ultra ügyes). Ha kilőnek, ${LEVEL.deathLoss} szintet veszítesz, és a felszerelésed elvész (a lövegekből újra ${TURRET.base} jár).</li>
-      <li><b>Kilövéssorozat:</b> minden ${STRIKE.every}. kilövés után (halál nélkül) tüzérségi csapás jár – ${esc(keysText(keys, 'strike'))}, majd kattintás a nagy térképen.</li>
+      <li><b>Kilövéssorozat:</b> minden ${STRIKE.every}. kilövés után (halál nélkül) tüzérségi csapás jár – ${esc(keysText(keys, 'strike'))}: feljön a nagy térkép, és azon kell kattintani a célpontra.</li>
       <li><b>Álcázás:</b> minden tank alapképessége (${esc(keysText(keys, 'cloak'))}): ${CLOAK.duration} mp-ig halvány sziluett vagy, a térképen nem látszol; a lövés megszünteti.</li>
       <li><b>Rombolás:</b> minden tank rombolja az épületet, amelynek nekifeszül; a nagyobb tank gyorsabban, a nehéz tankok a kisebb házakon megállás nélkül áthajtanak. A fák és oszlopok kidőlnek.</li>
+      <li><b>GPS:</b> a nagy térképen (M) kattints a célra – a GPS a normál utakon odavezet (kék sáv a földön, nyíl a kép szélén, távolság a térkép sarkában). Kikapcsolás: ${esc(keysText(keys, 'gps'))} vagy jobb klikk a nagy térképen.</li>
       <li><b>Javítás:</b> javítókészlet (+${PICKUP.repairAmount}), javítóműhely (a térképen zöld kereszt), és lassú önjavítás, ha ${REGEN.delay} mp-ig nem ér találat.</li>
     </ul>`,
   );

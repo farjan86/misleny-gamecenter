@@ -32,6 +32,15 @@ export function cssColor(css: string): number {
   return c(parseInt(css.replace('#', ''), 16));
 }
 
+/** Két szín keveréke (t = 0: az első, t = 1: a második), a puffer formátumában. */
+export function mix(a: number, b: number, t: number): number {
+  const u = 1 - t;
+  const r = ((a & 0xff) * u + (b & 0xff) * t) | 0;
+  const g = (((a >> 8) & 0xff) * u + ((b >> 8) & 0xff) * t) | 0;
+  const bl = (((a >> 16) & 0xff) * u + ((b >> 16) & 0xff) * t) | 0;
+  return (0xff000000 | (bl << 16) | (g << 8) | r) >>> 0;
+}
+
 /** Szín szorzása (f > 1 világosít), csatornánként 255-re vágva. */
 export function shade(color: number, f: number): number {
   const r = Math.min(255, ((color & 0xff) * f) | 0);

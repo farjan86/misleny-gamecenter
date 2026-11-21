@@ -180,6 +180,13 @@ export class FireLayer {
     for (const fire of this.fires) fn(fire.x, fire.y, fire.size * Math.min(1, fire.left / DYING));
   }
 
+  /** A téglalapba (méter) eső tüzek gyorsan kialszanak (pl. a visszaépült házon, a visszanőtt fán). */
+  douse(minX: number, minY: number, maxX: number, maxY: number): void {
+    for (const fire of this.fires) {
+      if (fire.x >= minX && fire.x <= maxX && fire.y >= minY && fire.y <= maxY) fire.left = Math.min(fire.left, DYING * 0.5);
+    }
+  }
+
   /** Minden tűz kialszik (új kör). */
   clear(): void {
     for (const fire of this.fires) this.release(fire);

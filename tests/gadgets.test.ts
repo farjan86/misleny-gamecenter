@@ -12,7 +12,7 @@ import { deathText } from '../src/game/ui/killText';
 import { durationRows, GUIDE_PICKUPS, howToSteps, weaponRows } from '../src/game/ui/Guide';
 import { ROOM_CODE } from '../src/game/net/protocol';
 import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, MATCH, Match, matchPlan, matchScore, sanitizeSettings, SCORE } from '../src/game/sim/match';
-import { DEFAULT_KEYS } from '../src/game/settings';
+import { DEFAULT_KEYS, loadSettings, saveSettings } from '../src/game/settings';
 import { PICKUP, PICKUP_KINDS, PICKUPS, pickKind, mulberry32 } from '../src/game/sim/pickups';
 import { Structures } from '../src/game/sim/structures';
 import { TURRET } from '../src/game/sim/vehicles';
@@ -230,6 +230,15 @@ describe('kilövéssorozat és tüzérségi csapás', () => {
     const shells = booms(events, 'shell');
     expect(shells).toHaveLength(STRIKE.shells);
     for (const s of shells) expect(Math.hypot(s.x - 200, s.y - 200)).toBeLessThanOrEqual(STRIKE.spread + 0.01);
+    // nagy terület (legalább háromszor a régi 13 m-es kör), egyenletesen elosztva: a kör minden negyedébe
+    // és a külső sávba is jut, és nincs két becsapódás egészen közel egymáshoz
+    expect(Math.PI * STRIKE.spread ** 2).toBeGreaterThanOrEqual(3 * Math.PI * 13 ** 2);
+    const quarters = new Set(shells.map((s) => (s.x >= 200 ? 1 : 0) + (s.y >= 200 ? 2 : 0)));
+    expect(quarters.size).toBe(4);
+    expect(shells.filter((s) => Math.hypot(s.x - 200, s.y - 200) > STRIKE.spread * 0.7).length).toBeGreaterThanOrEqual(STRIKE.shells * 0.4);
+    let closest = Infinity;
+    for (let i = 0; i < shells.length; i++) for (let j = i + 1; j < shells.length; j++) closest = Math.min(closest, Math.hypot(shells[i].x - shells[j].x, shells[i].y - shells[j].y));
+    expect(closest).toBeGreaterThan(3);
     expect(world.strikes).toHaveLength(0);
     expect(enemy.hp).toBeLessThan(tankMaxHp(enemy));
     expect(caller.hp).toBe(tankMaxHp(caller));
@@ -768,9 +777,9 @@ describe('statisztika és hálózat', () => {
     const swapped = match.standings();
     expect(swapped[0].id).toBe('a'); // a helyezés a kilövések szerint
     expect(swapped.find((s) => s.mvp)!.id).toBe('b');
-    expect(matchScore({ kills: 0, deaths: 9, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 })).toBe(0);
+    expect(matchScore({ kills: 0, bots: 0, deaths: 9, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 })).toBe(0);
     // a pontosság csak elég lövés után számít; a ledöntött házakért járó pont korlátos
-    const base = { kills: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: 80, shots: 5, hits: 4, damage: 0, taken: 0 };
+    const base = { kills: 0, bots: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: 80, shots: 5, hits: 4, damage: 0, taken: 0 };
     expect(matchScore(base)).toBe(0);
     expect(matchScore({ ...base, shots: 10, hits: 8 })).toBe(80);
     expect(matchScore({ ...base, accuracy: -1, shots: 0, hits: 0, wrecked: 50 })).toBe(SCORE.wreckedMax);
@@ -1166,5 +1175,16 @@ describe('csevegés billentyűi', () => {
         used.set(code, action);
       }
     }
+  });
+});
+
+describe('a térkép billentyűje rögzített', () => {
+  it('a térkép mindig az M: a mentett beállítás sem írhatja felül, és más művelet sem kaphatja meg', () => {
+    const store = new Map<string, string>();
+    (globalThis as unknown as { window: unknown }).window = { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) } };
+    const saved = saveSettings({ ...loadSettings(), keys: { ...DEFAULT_KEYS, map: ['KeyN'], fire: ['KeyM', 'Space'] } });
+    expect(saved.keys.map).toEqual(['KeyM']);
+    expect(saved.keys.fire).toEqual(['Space']);
+    expect(loadSettings().keys.map).toEqual(['KeyM']);
   });
 });

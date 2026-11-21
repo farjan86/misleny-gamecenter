@@ -16,6 +16,10 @@
     <div id="hud" class="hidden">
       <div id="hud-minimap" class="panel">
         <canvas id="minimap" width="220" height="220"></canvas>
+        <!-- a térkép billentyűje (rögzített): kicsiben „nagyítás”, nagyban „bezárás” -->
+        <span class="map-key" title="Térkép: M"><b>M</b><i></i></span>
+        <!-- GPS: a cél távolsága az úton, és a kikapcsolás billentyűje -->
+        <span class="gps-badge hidden" id="hud-gps"></span>
       </div>
       <!-- lenyitható menü: billentyűk és információ, kilépés -->
       <div id="hud-menu-button" class="panel" role="button" title="Menü (Esc)">☰ Menü</div>
@@ -186,9 +190,10 @@
         <h2 id="create-title">Új játék</h2>
         <div class="split">
           <div>
-            <p class="sub">Pálya: húzd az egeret a térképen a játéktér kijelöléséhez</p>
+            <p class="sub" id="area-hint">Pálya: húzd az egeret a térképen a játéktér kijelöléséhez</p>
             <canvas id="area-map"></canvas>
             <p class="note" id="area-text"></p>
+            <div class="buttons area-buttons"><span class="btn" id="area-reroll" role="button" title="Ugyanekkora pálya, máshol">🎲 Másik helyszín</span></div>
           </div>
           <div class="sliders">
             <label class="field" id="create-name-field">A játék neve<input id="create-name" maxlength="28" autocomplete="off" spellcheck="false" /></label>
@@ -200,7 +205,10 @@
             >
             <label class="field" id="create-mode-field">Játékmód<select id="create-mode"></select></label>
             <p class="note" id="mode-note"></p>
-            <label class="slider" id="create-players-field">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="8" step="1" /></label>
+            <label class="slider tempo-slider" id="create-tempo-field">Játéktempó <b id="val-tempo"></b><input type="range" id="sl-tempo" min="0" max="5" step="1" /></label>
+            <p class="note" id="tempo-note"></p>
+            <label class="slider" id="create-players-field">Játékosok <b id="val-players"></b><input type="range" id="sl-players" min="1" max="20" step="1" /></label>
+            <label class="slider hidden" id="create-expected-field">Várható létszám (ehhez igazodik a pálya) <b id="val-expected"></b><input type="range" id="sl-expected" min="2" max="100" step="1" /></label>
             <label class="slider">Játékidő <b id="val-minutes"></b><input type="range" id="sl-minutes" min="5" max="30" step="5" /></label>
             <label class="slider">Botok <b id="val-bots"></b><input type="range" id="sl-bots" min="0" max="5" step="1" /></label>
             <label class="slider">Botok ügyessége <b id="val-skill"></b><input type="range" id="sl-skill" min="1" max="6" step="1" /></label>

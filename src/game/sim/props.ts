@@ -71,6 +71,13 @@ export class Fellables {
     return true;
   }
 
+  /** A kidőlt tárgy újra áll (a nyitott játékban idővel visszanő); false, ha nem volt kidőlve. */
+  restore(index: number): boolean {
+    if (index < 0 || index >= this.count || !this.fallen[index]) return false;
+    this.fallen[index] = 0;
+    return true;
+  }
+
   /** Minden tárgy újra áll (új kör). */
   reset(): void {
     this.fallen.fill(0);

@@ -1,0 +1,41 @@
+# A TANK MISLENY játékszerver szolgáltatása a felhős gépen (systemd).
+# Helye a gépen: /etc/systemd/system/tank.service – a scripts/deploy.mjs telepíti.
+# A szerver csak a gépen belülről érhető el (127.0.0.1): kívülről a Cloudflare alagúton át jönnek a játékosok.
+[Unit]
+Description=TANK MISLENY jatekszerver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tank
+Group=tank
+WorkingDirectory=/opt/tank/app
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8787
+Environment=ACCOUNTS_FILE=/opt/tank/data/accounts.json
+Environment=ADMINS_FILE=/opt/tank/data/admins.txt
+Environment=OPEN_GAMES_FILE=/opt/tank/data/open-games.json
+Environment=STATS_FILE=/opt/tank/logs/statisztika.txt
+ExecStart=/usr/local/bin/node dist-server/server.mjs
+Restart=always
+RestartSec=3
+# leállításkor a szerver kiírja a még el nem mentett fiókadatokat
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# védelem: a szerver csak az adat- és naplókönyvtárba írhat
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/tank/data /opt/tank/logs
+
+[Install]
+WantedBy=multi-user.target

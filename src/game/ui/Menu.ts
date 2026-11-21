@@ -6,9 +6,10 @@ import type { GameMap } from '../maps/GameMap';
 import { renderMap } from '../maps/raster';
 import type { NetClient, NetStatus } from '../net/NetClient';
 import { CHAT, cleanCode, ROOM_CODE, type OnlinePlayer, type RoomInfo, type ServerMessage, type Standing } from '../net/protocol';
-import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, keyName, saveSettings, type Settings } from '../settings';
+import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, FIXED_KEYS, keyName, saveSettings, type Settings } from '../settings';
 import { Sfx } from '../systems/audio';
-import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings, DEMO, demoPlayers } from '../sim/match';
+import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings, DEMO, demoPlayers, applyTempo, TEMPO, TEMPO_HINTS, TEMPO_NAMES, tempoKm2 } from '../sim/match';
+import { pickArea } from './areaPick';
 import { HULL_SIZE, LOOK_TIER_NAMES, TANK_LOOK_HINT, TANK_LOOK_NAMES, tankSprites, TURRET_PIVOT } from '../entities/tankTextures';
 import { LEVEL, BOT_TOUGHNESS, BOT_TOUGHNESS_LEVELS, DAMAGE, TANK } from '../sim/world';
 import { buildGuide, buildHowTo } from './Guide';
@@ -46,7 +47,7 @@ function roomDetails(room: RoomInfo): string {
   const bots = room.plan.bots ? `kb. ${room.plan.bots} bot` : 'bot nélkül';
   // a területet a határokból számoljuk (a hálózaton átjövő érték két tizedesre kerekített)
   const size = ((s.area.maxX - s.area.minX) * (s.area.maxY - s.area.minY)) / 1e6;
-  return `${GAME_MODE_NAME[s.mode] ?? s.mode} · ${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${room.demo ? 'korlátlan ideig' : `${s.minutes} perc`} · ${bots}`;
+  return `${GAME_MODE_NAME[s.mode] ?? s.mode}${s.tempo > 0 ? ` · ${TEMPO_NAMES[s.tempo]}` : ''} · ${km2(size)} · ${WEATHER_NAME[s.weather].toLowerCase()} · ${room.demo ? 'korlátlan ideig' : `${s.minutes} perc`} · ${bots}`;
 }
 
 export class Menu {
@@ -427,6 +428,13 @@ export class Menu {
         ev.preventDefault();
         ev.stopPropagation();
         const keys = this.settings.keys;
+        // a rögzített billentyű (M: térkép) más művelethez sem adható
+        if (Object.values(FIXED_KEYS).some((codes) => codes?.includes(ev.code))) {
+          this.listening = null;
+          this.error(`Az ${keyName(ev.code)} a térképé, ez nem állítható át.`);
+          this.renderKeys();
+          return;
+        }
         if (ev.code === 'Delete' || ev.code === 'Backspace') {
           keys[target.action].splice(target.slot, 1);
         } else if (ev.code !== 'Escape') {
@@ -450,6 +458,16 @@ export class Menu {
       const label = document.createElement('div');
       label.textContent = ACTION_LABEL[action];
       table.appendChild(label);
+      const fixed = FIXED_KEYS[action];
+      if (fixed) {
+        // rögzített billentyű: látszik, de nem kattintható
+        const cap = document.createElement('div');
+        cap.className = 'keycap fixed';
+        cap.title = 'Rögzített billentyű, nem állítható át';
+        cap.textContent = `${fixed.map(keyName).join(' / ')} (rögzített)`;
+        table.appendChild(cap);
+        continue;
+      }
       for (let slot = 0; slot < 2; slot++) {
         const cap = document.createElement('div');
         const listening = this.listening?.action === action && this.listening.slot === slot;
@@ -564,7 +582,27 @@ export class Menu {
 
   // --- új játék ------------------------------------------------------------------
 
-  private readonly sliders = ['players', 'minutes', 'bots', 'skill', 'aggression', 'toughness', 'pickups', 'traffic', 'weather'] as const;
+  private readonly sliders = ['players', 'minutes', 'bots', 'skill', 'aggression', 'toughness', 'pickups', 'traffic', 'weather', 'tempo', 'expected'] as const;
+  /** a tempó által beállított (tempó állásban zárolt) csúszkák */
+  private readonly tempoSliders = ['bots', 'skill', 'aggression', 'toughness', 'pickups', 'traffic'] as const;
+
+  /** A tempó állása (0: egyéni). */
+  private tempo(): number {
+    return Number(el<HTMLInputElement>('sl-tempo').value) || 0;
+  }
+
+  /** Hány játékosra méretezzük a pályát: egyjátékosnál 1, nyitott játéknál a várható létszám, különben a létszám. */
+  private sizingCount(): number {
+    if (this.single) return 1;
+    return this.demoChosenOrEditing() ? Number(el<HTMLInputElement>('sl-expected').value) : Number(el<HTMLInputElement>('sl-players').value);
+  }
+
+  /** Tempó állásban: ajánlott játéktér a játékosszámhoz, véletlen „jó” helyen (avoid: a mostanitól eltérő hely). */
+  private suggestArea(avoid = false): void {
+    const tempo = this.tempo();
+    if (tempo <= TEMPO.custom) return;
+    this.sel = pickArea(this.map.data, this.grid.cols, this.grid.rows, tempoKm2(tempo, this.sizingCount()), MATCH.minCells, Math.random, avoid ? this.selection() : undefined);
+  }
 
   private bindCreate(): void {
     el('create-back').onclick = () => {
@@ -596,6 +634,30 @@ export class Menu {
       this.net.send({ t: 'create', settings, look: this.settings.look, ...(code.trim() ? { code } : {}) });
     };
     for (const name of this.sliders) el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => this.updateCreate());
+    // a tempó és a létszám változásakor a gép új pályát ajánl (a többi csúszkánál a pálya marad)
+    for (const name of ['tempo', 'players', 'expected']) {
+      el<HTMLInputElement>(`sl-${name}`).addEventListener('input', () => {
+        this.suggestArea();
+        this.updateCreate();
+      });
+    }
+    // Egyénire váltáskor a csúszkák a tempó értékeiről indulnak: a botok szintje is akkora, hogy nagyjából ugyanannyi bot legyen
+    let lastTempo = this.tempo();
+    el<HTMLInputElement>('sl-tempo').addEventListener('input', () => {
+      const tempo = this.tempo();
+      if (tempo === TEMPO.custom && lastTempo > TEMPO.custom) {
+        const was = this.readCreateAt(lastTempo);
+        const plan = matchPlan(was, this.demoChosenOrEditing());
+        const perLevel = Math.max(0.01, MATCH.botsPerKm2 * plan.km2);
+        el<HTMLInputElement>('sl-bots').value = String(Math.max(1, Math.min(MATCH.levels.max, Math.round(plan.bots / perLevel))));
+        this.updateCreate();
+      }
+      lastTempo = tempo;
+    });
+    el('area-reroll').onclick = () => {
+      this.suggestArea(true);
+      this.updateCreate();
+    };
     // játékmód: a választható módok listája (ha új mód készül, magától megjelenik itt)
     const mode = el<HTMLSelectElement>('create-mode');
     mode.replaceChildren(
@@ -614,6 +676,8 @@ export class Menu {
       slider.min = String(demo ? DEMO.minPlayers : MATCH.players.min);
       slider.max = String(demo ? DEMO.maxPlayers : MATCH.players.max);
       slider.value = String(demo ? DEMO.maxPlayers : Math.min(Number(slider.value), MATCH.players.max));
+      // nyitott játéknál a várható létszámhoz igazodik a pálya
+      this.suggestArea();
       this.updateCreate();
     });
 
@@ -626,6 +690,11 @@ export class Menu {
       };
     };
     canvas.addEventListener('mousedown', (ev) => {
+      // tempó állásban a pályát a gép ajánlja: kijelölni Egyéni állásban lehet
+      if (this.tempo() > TEMPO.custom) {
+        this.error('Tempó állásban a pályát a gép ajánlja („Másik helyszín” gomb). Saját kijelöléshez állítsd a tempót Egyénire.');
+        return;
+      }
       const { c, r } = cellAt(ev);
       this.dragging = true;
       this.sel = { c0: c, r0: r, c1: c, r1: r };
@@ -703,6 +772,9 @@ export class Menu {
       el<HTMLInputElement>('sl-pickups').value = String(last.pickups);
       el<HTMLInputElement>('sl-traffic').value = String(last.traffic);
       el<HTMLInputElement>('sl-weather').value = String(WEATHERS.indexOf(last.weather));
+      // az alap tempó a pörgős; ha legutóbb mást választott, azt
+      el<HTMLInputElement>('sl-tempo').value = String(this.settings.lastMatch?.tempo !== undefined ? last.tempo : TEMPO.normal);
+      el<HTMLInputElement>('sl-expected').value = String(last.expectedPlayers);
     }
     el<HTMLInputElement>('create-name').value = `${this.net.name} játéka`;
     // egyjátékos módban nincs szoba: nem kell név és létszám, és azonnal indul
@@ -719,6 +791,8 @@ export class Menu {
     el<HTMLInputElement>('sl-players').min = String(MATCH.players.min);
     el<HTMLInputElement>('sl-players').max = String(MATCH.players.max);
     if (this.editing && this.admin && !this.single) this.fillFromRoom(this.editing);
+    // tempó állásban minden megnyitáskor friss ajánlat (a módosításnál a játék mostani pályája marad)
+    else this.suggestArea();
     this.updateCreate();
   }
 
@@ -748,6 +822,8 @@ export class Menu {
     set('sl-pickups', s.pickups);
     set('sl-traffic', s.traffic);
     set('sl-weather', WEATHERS.indexOf(s.weather));
+    set('sl-tempo', s.tempo ?? TEMPO.custom);
+    set('sl-expected', s.expectedPlayers ?? 10);
     el('create-title').textContent = `Nyitott játék módosítása – ${s.name}`;
   }
 
@@ -759,6 +835,18 @@ export class Menu {
   /** A szerver gazdája új nyitott játékot kért. */
   private demoChosen(): boolean {
     return !this.single && this.admin && el<HTMLInputElement>('create-demo').checked;
+  }
+
+  /** A beállítások, mintha a tempó `tempo` állásban lenne (az Egyénire váltás előtti értékekhez). */
+  private readCreateAt(tempo: number): MatchSettings {
+    const slider = el<HTMLInputElement>('sl-tempo');
+    const now = slider.value;
+    slider.value = String(tempo);
+    try {
+      return this.readCreate();
+    } finally {
+      slider.value = now;
+    }
   }
 
   private readCreate(): MatchSettings {
@@ -778,23 +866,49 @@ export class Menu {
         pickups: value('pickups'),
         traffic: value('traffic'),
         weather: WEATHERS[value('weather')] ?? 'day',
+        tempo: value('tempo'),
+        expectedPlayers: value('expected'),
       },
       this.map.width,
       this.map.height,
     );
     // a nyitott játék létszáma nagyobb lehet (2–100): a gazdája adja meg
     if (this.demoChosenOrEditing()) settings.maxPlayers = demoPlayers(value('players'));
-    return settings;
+    // tempó állásban a botok, a tárgyak és a forgalom a tempó táblázatából jön (a szerver is így számol)
+    return applyTempo(settings);
   }
 
   /** A csúszkák feliratai és a térkép a kijelöléssel; a tényleges létszámokat a pálya mérete adja. */
   private updateCreate(): void {
     const settings = this.readCreate();
-    const plan = matchPlan(settings);
+    const plan = matchPlan(settings, this.demoChosenOrEditing());
     el('mode-note').textContent = GAME_MODE_HINT[settings.mode];
+    // a tempó: a felirat, a leírás, és a tempó által beállított mezők zárolása (a csúszkák a tempó értékeit mutatják)
+    const tempo = settings.tempo;
+    const locked = tempo > TEMPO.custom;
+    el('val-tempo').textContent = TEMPO_NAMES[tempo];
+    el('tempo-note').textContent = locked ? `${TEMPO_HINTS[tempo]} A pályát, a botokat, a tárgyakat és a forgalmat a gép állítja be – kézi beállításhoz válaszd az Egyénit.` : TEMPO_HINTS[tempo];
+    for (const name of this.tempoSliders) {
+      const input = el<HTMLInputElement>(`sl-${name}`);
+      input.disabled = locked;
+      input.closest('label')?.classList.toggle('locked', locked);
+    }
+    if (locked) {
+      el<HTMLInputElement>('sl-bots').value = String(settings.bots);
+      el<HTMLInputElement>('sl-skill').value = String(settings.botSkill);
+      el<HTMLInputElement>('sl-aggression').value = String(settings.botAggression);
+      el<HTMLInputElement>('sl-toughness').value = String(settings.botToughness);
+      el<HTMLInputElement>('sl-pickups').value = String(settings.pickups);
+      el<HTMLInputElement>('sl-traffic').value = String(settings.traffic);
+    }
+    el('area-reroll').classList.toggle('hidden', !locked);
+    el('area-map').classList.toggle('locked', locked);
+    el('area-hint').textContent = locked ? 'Pálya: a tempóhoz és a létszámhoz ajánlott terület' : 'Pálya: húzd az egeret a térképen a játéktér kijelöléséhez';
+    el('create-expected-field').classList.toggle('hidden', !this.demoChosenOrEditing());
+    el('val-expected').textContent = `${settings.expectedPlayers} fő`;
     el('val-players').textContent = `${settings.maxPlayers} fő`;
     el('val-minutes').textContent = `${settings.minutes} perc`;
-    el('val-bots').textContent = settings.bots ? `${LEVEL_NAME[settings.bots]} – kb. ${plan.bots} bot` : 'nincs';
+    el('val-bots').textContent = locked ? `a tempó szerint – ${plan.bots} bot` : settings.bots ? `${LEVEL_NAME[settings.bots]} – kb. ${plan.bots} bot` : 'nincs';
     el('val-skill').textContent = settings.bots ? SKILL_NAME[settings.botSkill] : '–';
     el('val-aggression').textContent = settings.bots ? AGGRESSION_NAME[settings.botAggression] : '–';
     {
@@ -925,10 +1039,10 @@ export class Menu {
   showResults(winner: string | null, standings: Standing[], myId: string): void {
     const me = standings.find((s) => s.id === myId);
     const first = standings.find((s) => s.id === winner);
-    // egyedül játszva nincs győztes: az eredmény a kilövések száma
+    // egyedül játszva nincs győztes és nincs ellenséges játékos: az eredmény a kilőtt botok száma
     const solo = standings.length === 1;
     el('results-title').textContent = solo
-      ? `Lejárt az idő – ${me?.kills ?? 0} kilövés`
+      ? `Lejárt az idő – ${me?.bots ?? 0} kilőtt bot`
       : winner === myId
         ? 'Győztél!'
         : first
@@ -943,6 +1057,7 @@ export class Menu {
       box.className = 'mvp';
       const why = [
         `${mvp.kills} kilövés`,
+        mvp.bots > 0 ? `${mvp.bots} bot` : '',
         `${mvp.damage} sebzés`,
         mvp.accuracy >= 0 ? `${mvp.accuracy}% pontosság` : '',
         mvp.streak > 1 ? `${mvp.streak}-es sorozat` : '',
@@ -954,7 +1069,7 @@ export class Menu {
     const grid = document.createElement('table');
     grid.className = 'results-grid';
     grid.innerHTML =
-      '<thead><tr><th>#</th><th class="name">Játékos</th><th title="Teljesítménypont a statisztikákból">Pont</th><th>Kilövés</th><th>Halál</th><th title="Kilövés / halál">Arány</th>' +
+      '<thead><tr><th>#</th><th class="name">Játékos</th><th title="Teljesítménypont a statisztikákból">Pont</th><th title="Kilőtt ellenséges játékosok">Kilövés</th><th title="Kilőtt botok (a helyezésbe nem számít)">Bot</th><th>Halál</th><th title="Kilövés / halál">Arány</th>' +
       '<th title="Az ellenfeleknek okozott sebzés">Sebzés</th><th title="Elszenvedett sebzés">Kapott</th><th>Találat / lövés</th><th>Pontosság</th><th title="Leghosszabb kilövéssorozat halál nélkül">Sorozat</th><th title="Ledöntött házak">Ház</th><th>Szint</th></tr></thead>';
     const body = document.createElement('tbody');
     for (const s of standings) {
@@ -962,7 +1077,7 @@ export class Menu {
       row.className = [s === me ? 'me' : '', s.mvp ? 'best' : '', s.gone ? 'gone' : ''].filter(Boolean).join(' ');
       row.innerHTML =
         `<td>${s.place}.</td><td class="name">${s.mvp ? '<span class="mvp-star">★</span> ' : ''}${esc(s.name)}${s.gone ? ' <span class="stats">(kilépett)</span>' : ''}</td>` +
-        `<td class="score">${s.score}</td><td>${s.kills}</td><td>${s.deaths}</td><td>${ratio(s)}</td><td>${s.damage}</td><td>${s.taken}</td>` +
+        `<td class="score">${s.score}</td><td>${s.kills}</td><td>${s.bots ?? 0}</td><td>${s.deaths}</td><td>${ratio(s)}</td><td>${s.damage}</td><td>${s.taken}</td>` +
         `<td>${s.hits} / ${s.shots}</td><td>${s.accuracy >= 0 ? `${s.accuracy}%` : '–'}</td><td>${s.streak}</td><td>${s.wrecked}</td><td>${s.level}.</td>`;
       body.appendChild(row);
     }
@@ -973,7 +1088,7 @@ export class Menu {
     table.appendChild(scroll);
     const note = document.createElement('p');
     note.className = 'note results-note';
-    note.textContent = `Pont: kilövés ${SCORE.kill}, halál ${SCORE.death}, sebzés pontonként ${String(SCORE.damage).replace('.', ',')}, sorozat ${SCORE.streak}, pontosság %-onként ${SCORE.accuracy} (legalább ${SCORE.accuracyShots} lövésnél), ledöntött ház ${SCORE.wrecked} (legfeljebb ${SCORE.wreckedMax}), szint ${SCORE.level}. A helyezés a kilövések száma szerint dől el.`;
+    note.textContent = `Pont: kilövés ${SCORE.kill}, halál ${SCORE.death}, sebzés pontonként ${String(SCORE.damage).replace('.', ',')}, sorozat ${SCORE.streak}, pontosság %-onként ${SCORE.accuracy} (legalább ${SCORE.accuracyShots} lövésnél), ledöntött ház ${SCORE.wrecked} (legfeljebb ${SCORE.wreckedMax}), szint ${SCORE.level}. A helyezés a kilövések száma szerint dől el; kilövésnek csak az ellenséges játékos kilövése számít, a kilőtt botok csak statisztika.`;
     table.appendChild(note);
     // különdíjak: több játékosnál az kapja, aki a legjobb az adott dologban
     if (!solo) {
