@@ -17,8 +17,8 @@ export const TANK_TIERS = 6;
 export const TRACK_FRAMES = 3;
 /** egy osztályon belül ennyi szintlépést jelez külön rajz (kilövésgyűrűk a csövön, csillagok) */
 export const TANK_MARKS = 5;
-/** a saját tank zöld, a botoké vörös, a többi játékosé kék */
-export type TankPaint = 'own' | 'bot' | 'rival';
+/** a saját tank zöld, a botoké vörös, a többi játékosé kék; a főgonosz fekete-vörös, a testőrei sötét bíbor */
+export type TankPaint = 'own' | 'bot' | 'rival' | 'boss' | 'guard';
 
 /** Az osztályok neve (a LEVEL.tiers sorrendjében). */
 export const TIER_NAMES = ['Felderítő', 'Közepes harckocsi', 'Nehéz harckocsi', 'Ostromtank', 'Romboló', 'Titán'] as const;
@@ -1080,6 +1080,39 @@ function recolor(ctx: Ctx, w: number, h: number, hue: 'red' | 'blue', markOnly =
   ctx.putImageData(image, 0, 0);
 }
 
+/**
+ * A főgonosz csapatának festése: a zöld részek a bossnál szinte feketék (enyhe bordó beütéssel),
+ * a testőröknél sötét bíborvörösek; a legvilágosabb zöld (jelzések) a bossnál izzó vörös lesz.
+ */
+function recolorPack(ctx: Ctx, w: number, h: number, paint: 'boss' | 'guard'): void {
+  const image = ctx.getImageData(0, 0, w, h);
+  const d = image.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+    // a boss kék fényei (szemek, lámpák) vörösen izzanak
+    if (paint === 'boss' && b > 150 && g > 120 && r < 140) {
+      d[i] = Math.min(255, 120 + b * 0.55);
+      d[i + 1] = g * 0.22;
+      d[i + 2] = b * 0.12;
+      continue;
+    }
+    if (!(g > r * 1.08 && g > b)) continue;
+    if (paint === 'boss') {
+      const bright = g > 150;
+      d[i] = bright ? Math.min(255, 150 + g * 0.45) : 22 + g * 0.24;
+      d[i + 1] = bright ? 24 : 14 + g * 0.08;
+      d[i + 2] = bright ? 18 : 16 + g * 0.09;
+    } else {
+      d[i] = 30 + g * 0.6;
+      d[i + 1] = 8 + g * 0.1;
+      d[i + 2] = 12 + g * 0.12;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
 /** Kiégett roncs: a rajz megfeketedve, rozsdás foltokkal. */
 function char(ctx: Ctx, w: number, h: number): void {
   const image = ctx.getImageData(0, 0, w, h);
@@ -1221,6 +1254,10 @@ export function createTankTextures(scene: Phaser.Scene): void {
         });
         variant(tankTex.hull('bot', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red', isClassicLook(look)));
         variant(tankTex.hull('rival', tier, frame, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue', isClassicLook(look)));
+        if (look === 0) {
+          variant(tankTex.hull('boss', tier, frame, look), own, (ctx, w, h) => recolorPack(ctx, w, h, 'boss'));
+          variant(tankTex.hull('guard', tier, frame, look), own, (ctx, w, h) => recolorPack(ctx, w, h, 'guard'));
+        }
         if (frame === 0) {
           variant(tankTex.wreckHull(tier, look), own, char);
           // sérülésrétegek: a rajz csak ott látszik, ahol a tank teste van
@@ -1242,6 +1279,10 @@ export function createTankTextures(scene: Phaser.Scene): void {
         });
         variant(tankTex.turret('bot', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'red', isClassicLook(look)));
         variant(tankTex.turret('rival', tier, marks, look), own, (ctx, w, h) => recolor(ctx, w, h, 'blue', isClassicLook(look)));
+        if (look === 0) {
+          variant(tankTex.turret('boss', tier, marks, look), own, (ctx, w, h) => recolorPack(ctx, w, h, 'boss'));
+          variant(tankTex.turret('guard', tier, marks, look), own, (ctx, w, h) => recolorPack(ctx, w, h, 'guard'));
+        }
         if (marks === 0) {
           variant(tankTex.wreckTurret(tier, look), own, char);
           for (let stage = 1; stage <= DAMAGE_STAGES; stage++) {
@@ -1270,7 +1311,8 @@ export function tankSprites(tier: number, paint: TankPaint, marks = 0, look = 0)
     const ctx = canvas.getContext('2d')!;
     draw(ctx);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (paint !== 'own') recolor(ctx, w, h, paint === 'bot' ? 'red' : 'blue', isClassicLook(look));
+    if (paint === 'boss' || paint === 'guard') recolorPack(ctx, w, h, paint);
+    else if (paint !== 'own') recolor(ctx, w, h, paint === 'bot' ? 'red' : 'blue', isClassicLook(look));
     return canvas;
   };
   const hull = Array.from({ length: TRACK_FRAMES }, (_, frame) =>

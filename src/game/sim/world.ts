@@ -9,6 +9,7 @@ import { SegmentGrid } from './collision';
 import { FELLABLE, type Fellables } from './props';
 import { BARREL, CLOAK, FLAME, MG, MINE, SMOKE, STRIKE, SUPER, WORKSHOP, insideSmoke, type WorkshopState, type BarrelState, type BoomKind, type MineState, type SmokeState, type StrikeState } from './gadgets';
 import type { Structures } from './structures';
+import { BOSS, isPack, ROLE } from './bossRules';
 import { BOOST, CARGO_KINDS, isWeapon, LASER, mulberry32, OIL, PICKUP, pickKind, PICKUPS, ROCKET, TIMED_KINDS, type PickupKind, type TimedKind, type WeaponKind } from './pickups';
 import type { NetRoad } from './roadnet';
 import { TURRET, VEHICLE, VEHICLES, VSTATE, type TurretState, type VehicleKind, type VehicleState, turretInterval, turretMaxHp, turretRange } from './vehicles';
@@ -174,9 +175,10 @@ export function tankTier(level: number): number {
   for (let i = 1; i < LEVEL.tiers.length; i++) if (level >= LEVEL.tiers[i]) tier = i;
   return tier;
 }
-export const tankSize = (tank: { level: number }): number => 1 + LEVEL.size * (tank.level - 1) + LEVEL.tierSize * tankTier(tank.level);
-export const tankRadius = (tank: { level: number }): number => TANK.radius * tankSize(tank);
-export const tankMaxHp = (tank: { level: number }): number => TANK.maxHp + LEVEL.hp * (tank.level - 1);
+export const tankSize = (tank: { level: number; role?: number }): number =>
+  (1 + LEVEL.size * (tank.level - 1) + LEVEL.tierSize * tankTier(tank.level)) * (tank.role === ROLE.boss ? BOSS.sizeMult : 1);
+export const tankRadius = (tank: { level: number; role?: number }): number => TANK.radius * tankSize(tank);
+export const tankMaxHp = (tank: { level: number; role?: number }): number => (TANK.maxHp + LEVEL.hp * (tank.level - 1)) * (tank.role === ROLE.boss ? BOSS.hpMult : 1);
 /** A sebzés szorzója: a szinttel nő, a szupertárgy hatása alatt többszörös. */
 const damageBoost = (tank: { level: number; effects?: Effects }): number => (1 + LEVEL.damage * (tank.level - 1)) * (tank.effects && tank.effects.super > 0 ? SUPER.power : 1);
 
@@ -245,7 +247,7 @@ export const WRECK = {
 } as const;
 
 /** A roncs akadályként akkora, amekkora a kilőtt tank volt. */
-export const wreckRadius = (wreck: { level: number }): number => WRECK.radius * tankSize(wreck);
+export const wreckRadius = (wreck: { level: number; role?: number }): number => WRECK.radius * tankSize(wreck);
 
 /**
  * Az ágyúlövedék. Egyik fegyver sem lő messzebb SHOT_RANGE méternél (kb. a képernyő
@@ -271,7 +273,7 @@ export const DAMAGE = {
 } as const;
 
 /** Csapatok: az azonos csapatban lévők nem sebzik egymást. */
-export const TEAM = { player: 0, bots: 1 } as const;
+export const TEAM = { player: 0, bots: 1, boss: 2 } as const;
 /** freeSpot: minden ember vezérelte tanktól távol (nem egyetlen csapattól). */
 export const ANY_PLAYER = -2;
 
@@ -377,6 +379,10 @@ export interface TankState {
   dropCooldown: number;
   /** az alaptank fajtája (0 … TANK_LOOKS − 1): csak megjelenés */
   look: number;
+  /** szerep: közönséges tank, a főgonosz vagy a testőre (ROLE) */
+  role: number;
+  /** hányszor győzte le a főgonoszt */
+  bossKills: number;
   /** megcsúszás hátralévő ideje (mp); közben a tank irányíthatatlanul sodródik */
   slip: number;
   /** olajos a lánctalp (mp): kipörög – lassabb, nehezen gyorsul és nehezen áll meg */
@@ -406,6 +412,8 @@ export interface WreckState {
   /** a kilőtt tank szintje és fajtája: a roncs mérete és kinézete ehhez igazodik */
   level: number;
   look: number;
+  /** a főgonosz roncsa nagyobb (ROLE) */
+  role?: number;
   /** a kilövés óta eltelt idő (mp) – a füstöléshez */
   age: number;
 }
@@ -511,7 +519,13 @@ export type SimEvent =
   | { type: 'cloak'; tank: number; on: boolean }
   /** szupertárgy: seconds mp múlva megjelenik, illetve megjelent a megadott helyen */
   | { type: 'superSoon'; x: number; y: number; seconds: number }
-  | { type: 'superHere'; x: number; y: number };
+  | { type: 'superHere'; x: number; y: number }
+  /** főgonosz: seconds mp múlva megérkezik a megadott helyre; megérkezett; legyőzték (by: a legyőző, helpers: a segítők) */
+  | { type: 'bossSoon'; x: number; y: number; seconds: number }
+  | { type: 'bossSpawn'; tank: number; x: number; y: number }
+  | { type: 'bossDown'; tank: number; by: number; x: number; y: number; helpers: number[] }
+  /** riadó: valaki megtámadta a főgonoszt vagy egy testőrét (by: a támadó) */
+  | { type: 'bossAlarm'; by: number; x: number; y: number };
 
 export interface RoadGuide {
   /** az út tengelyének legközelebbi pontja */
@@ -628,6 +642,10 @@ export class World {
   readonly workshops: WorkshopState[] = [];
   /** a botok szívóssága és hogy vehetnek-e fel tárgyat, léphetnek-e szintet (a meccs állítja be) */
   botRules: BotRules = botRules();
+  /** a főgonosz csapatának támadói: tankazonosító → az utolsó támadás lépésszáma (tick) */
+  readonly packThreats = new Map<number, number>();
+  /** a bossnak okozott sebzés játékosonként (a segítők jutalmához) */
+  readonly bossDamage = new Map<number, number>();
   /** a forgalom irányítója: a lépés végén fut, így látja a lépés eseményeit */
   traffic: Stepper | null = null;
   /** az utolsó step() eseményei (hang, effektek) */
@@ -655,12 +673,14 @@ export class World {
     return this.terrain.bounds ?? { minX: 0, minY: 0, maxX: this.terrain.width, maxY: this.terrain.height };
   }
 
-  addTank(x: number, y: number, angle: number, options: { team?: number; bot?: boolean; look?: number } = {}): TankState {
+  addTank(x: number, y: number, angle: number, options: { team?: number; bot?: boolean; look?: number; role?: number } = {}): TankState {
     const id = this.nextId++;
     const tank: TankState = {
       id,
       // a botok (és akinek nincs megadva) az azonosítójuk szerint kapnak fajtát: a kliens ugyanígy számol
       look: options.look ?? id % TANK_LOOKS,
+      role: options.role ?? ROLE.tank,
+      bossKills: 0,
       team: options.team ?? TEAM.player,
       bot: options.bot ?? false,
       x,
@@ -906,9 +926,10 @@ export class World {
     }
     // önjavítás: ha egy ideje nem érte sebzés, az életerő nagyon lassan visszatöltődik
     tank.calm += dt;
-    if (tank.calm >= REGEN.delay) {
+    const pack = isPack(tank);
+    if (tank.calm >= (pack ? BOSS.healDelay : REGEN.delay)) {
       const max = tankMaxHp(tank);
-      if (tank.hp < max) tank.hp = Math.min(max, tank.hp + max * REGEN.rate * dt);
+      if (tank.hp < max) tank.hp = Math.min(max, tank.hp + max * (pack ? BOSS.healRate : REGEN.rate) * dt);
     }
 
     let heading: number;
@@ -1326,7 +1347,7 @@ export class World {
       tank.cloak = 0;
       this.events.push({ type: 'cloak', tank: tank.id, on: false });
     }
-    tank.cooldown = TANK.fireCooldown * (fx.rapid > 0 ? BOOST.rapidCooldown : 1) * (laser ? LASER.cooldown : rocket ? ROCKET.cooldown : 1);
+    tank.cooldown = tank.role === ROLE.boss ? BOSS.fireInterval : TANK.fireCooldown * (fx.rapid > 0 ? BOOST.rapidCooldown : 1) * (laser ? LASER.cooldown : rocket ? ROCKET.cooldown : 1);
 
     const barrel = TANK.barrelLength * tankSize(tank);
     const mx = tank.x + Math.cos(tank.turretAngle) * barrel;
@@ -1428,7 +1449,7 @@ export class World {
     let post: TurretState | null = null;
     let best: number = MG.range;
     for (const other of this.tanks) {
-      if (!other.alive || other.team === tank.team) continue;
+      if (!other.alive || other.team === tank.team || isPack(other)) continue;
       const dist = Math.hypot(other.x - tank.x, other.y - tank.y);
       if (dist >= best) continue;
       if (other.cloak > 0 && dist > CLOAK.botSight) continue;
@@ -1485,7 +1506,19 @@ export class World {
     }
     // a támadó szintje növeli a sebzést; a bot gyengébben lő, és a páncélja is gyengébb
     const attacker = this.tank(by);
-    const dealt = amount * (attacker ? damageBoost(attacker) : 1) * (attacker?.bot && !tank.bot ? this.botRules.damage : 1) * (tank.bot ? this.botRules.armor : 1);
+    const packAttacker = attacker !== undefined && isPack(attacker);
+    const dealt =
+      amount *
+      (attacker ? damageBoost(attacker) : 1) *
+      (attacker?.bot && !packAttacker && !tank.bot ? this.botRules.damage : 1) *
+      (attacker?.role === ROLE.guard ? BOSS.guardDamage : 1) *
+      (tank.bot && !isPack(tank) ? this.botRules.armor : 1);
+    // a főgonosz csapatát megtámadták: a támadót megjegyzik (riadó), a bossnak okozott sebzést számolják
+    if (isPack(tank) && attacker && attacker !== tank && !packAttacker) {
+      if (!this.packThreats.has(attacker.id) || this.tick - (this.packThreats.get(attacker.id) ?? 0) > 60) this.events.push({ type: 'bossAlarm', by: attacker.id, x: tank.x, y: tank.y });
+      this.packThreats.set(attacker.id, this.tick);
+      if (tank.role === ROLE.boss && !attacker.bot) this.bossDamage.set(attacker.id, (this.bossDamage.get(attacker.id) ?? 0) + Math.min(dealt, tank.hp));
+    }
     // a statisztikába csak a ténylegesen elvett életerő számít (a túllövés nem)
     const real = Math.min(dealt, tank.hp);
     tank.taken += real;
@@ -1505,11 +1538,13 @@ export class World {
       tank.out = true;
       this.events.push({ type: 'eliminated', tank: tank.id, by });
     }
+    // a főgonosz és a testőrei nem élednek újra
+    if (isPack(tank)) tank.out = true;
     // a roncs akkora, amekkora a tank a kilövésekor volt; a győztes jutalma is ehhez a szinthez igazodik
     const victimLevel = tank.level;
-    this.wrecks.push({ id: this.nextId++, x: tank.x, y: tank.y, hullAngle: tank.hullAngle, turretAngle: tank.turretAngle, team: tank.team, level: victimLevel, look: tank.look, age: 0 });
-    // a kilőtt tank szintet veszít (a botok nem fejlődnek, nekik nincs mit veszteniük)
-    const lost = Math.min(LEVEL.deathLoss, tank.level - 1);
+    this.wrecks.push({ id: this.nextId++, x: tank.x, y: tank.y, hullAngle: tank.hullAngle, turretAngle: tank.turretAngle, team: tank.team, level: victimLevel, look: tank.look, age: 0, ...(tank.role ? { role: tank.role } : {}) });
+    // a kilőtt tank szintet veszít (a botok nem fejlődnek, nekik nincs mit veszteniük; a főgonosz csapata nem éled újra)
+    const lost = isPack(tank) ? 0 : Math.min(LEVEL.deathLoss, tank.level - 1);
     if (lost > 0) {
       tank.level -= lost;
       this.events.push({ type: 'leveldown', tank: tank.id, level: tank.level, lost });
@@ -1529,7 +1564,11 @@ export class World {
       // a játékosok tankja fejlődik; a botoké csak a két legügyesebb szinten
       if (!attacker.bot || this.botRules.perks) {
         let gain = 0;
-        if (tank.bot) {
+        if (tank.role === ROLE.boss) {
+          // a főgonosz legyőzése: nagy ugrás
+          attacker.bossKills++;
+          gain = BOSS.reward;
+        } else if (tank.bot) {
           // botokból több kell egy szinthez
           if (++attacker.botKills >= LEVEL.botKills) {
             attacker.botKills = 0;
@@ -1549,6 +1588,29 @@ export class World {
       }
     }
     this.events.push({ type: 'destroyed', tank: tank.id, by, x: tank.x, y: tank.y, cause, ...(self ? { self } : {}) });
+    if (tank.role === ROLE.boss) this.bossDefeated(tank, attacker && attacker !== tank ? attacker : undefined);
+  }
+
+  /**
+   * A főgonosz legyőzése: a legyőző a jutalmát már megkapta (damage); aki legalább a boss
+   * életerejének BOSS.helperShare részét lebontotta, BOSS.helperReward szintet lép.
+   */
+  private bossDefeated(boss: TankState, killer: TankState | undefined): void {
+    const helpers: number[] = [];
+    const share = tankMaxHp(boss) * BOSS.helperShare;
+    for (const [id, dealt] of this.bossDamage) {
+      if (dealt < share || id === killer?.id) continue;
+      const helper = this.tank(id);
+      if (!helper || helper.out) continue;
+      helpers.push(id);
+      const gain = Math.min(BOSS.helperReward, LEVEL.max - helper.level);
+      if (gain <= 0) continue;
+      helper.level += gain;
+      helper.hp = Math.min(tankMaxHp(helper), helper.hp + LEVEL.hp * gain);
+      this.events.push({ type: 'levelup', tank: helper.id, level: helper.level, gain });
+    }
+    this.bossDamage.clear();
+    this.events.push({ type: 'bossDown', tank: boss.id, by: killer?.id ?? 0, x: boss.x, y: boss.y, helpers });
   }
 
   // --- civil járművek ---------------------------------------------------------------
@@ -1731,7 +1793,7 @@ export class World {
         let best: number = turretRange(turret.level);
         turret.target = -1;
         for (const other of this.tanks) {
-          if (!other.alive || other.team === turret.team) continue;
+          if (!other.alive || other.team === turret.team || isPack(other)) continue;
           const dist = Math.hypot(other.x - turret.x, other.y - turret.y);
           if (dist >= best || walls.raycast(turret.x, turret.y, other.x, other.y)) continue;
           if (dist > 9 && this.inSmoke(other.x, other.y)) continue; // a füstbe nem lát be

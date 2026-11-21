@@ -139,7 +139,7 @@ export interface HudFrame {
 }
 
 export interface MapMark {
-  kind: 'revenge' | 'super' | 'superSoon' | 'strike' | 'workshop';
+  kind: 'revenge' | 'super' | 'superSoon' | 'strike' | 'workshop' | 'boss' | 'bossSoon';
   x: number;
   y: number;
 }
@@ -188,6 +188,9 @@ export class Hud {
   private gpsClick: ((x: number, y: number) => void) | null = null;
   private gpsOff: (() => void) | null = null;
   private readonly gpsBadge = el<HTMLSpanElement>('hud-gps');
+  private readonly bossBox = el<HTMLDivElement>('hud-boss');
+  private readonly bossFill = el<HTMLElement>('hud-boss-fill');
+  private bossShown = '';
   private gpsText = '';
   private aiming = false;
   private readonly clock = el<HTMLDivElement>('hud-clock');
@@ -298,6 +301,17 @@ export class Hud {
   onGps(set: (x: number, y: number) => void, off: () => void): void {
     this.gpsClick = set;
     this.gpsOff = off;
+  }
+
+  /** A főgonosz életerősávja az óra alatt (null: nincs a közelben). */
+  setBoss(boss: { name: string; ratio: number } | null): void {
+    const key = boss ? `${boss.name}:${Math.round(boss.ratio * 200)}` : '';
+    if (key === this.bossShown) return;
+    this.bossShown = key;
+    this.bossBox.classList.toggle('hidden', !boss);
+    if (!boss) return;
+    el<HTMLElement>('hud-boss-name').textContent = boss.name.toUpperCase();
+    this.bossFill.style.width = `${Math.max(0, Math.min(1, boss.ratio)) * 100}%`;
   }
 
   /** A GPS jelvénye a térkép sarkában (üres szöveg: nincs kint). */
@@ -688,7 +702,34 @@ export class Hud {
     for (const mark of f.marks) {
       const mx = mark.x * s;
       const my = mark.y * s;
-      if (mark.kind === 'workshop') {
+      if (mark.kind === 'boss' || mark.kind === 'bossSoon') {
+        // főgonosz: fekete kör vörös szegéllyel, benne koponya (érkezéskor szaggatott, villogó kör)
+        if (mark.kind === 'bossSoon') {
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = blink ? '#ff3a2a' : '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(mx, my, 12, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        ctx.fillStyle = '#101418';
+        ctx.beginPath();
+        ctx.arc(mx, my, 8.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#e8321e';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = '#f4f0e0';
+        ctx.beginPath();
+        ctx.arc(mx, my - 1, 4.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(mx - 3, my + 2, 6, 3);
+        ctx.fillStyle = '#101418';
+        ctx.fillRect(mx - 3, my - 2.5, 2, 2);
+        ctx.fillRect(mx + 1, my - 2.5, 2, 2);
+        ctx.fillRect(mx - 0.5, my + 2.5, 1, 2.5);
+      } else if (mark.kind === 'workshop') {
         // javítóműhely: zöld négyzet fehér kereszttel
         ctx.fillStyle = '#101418';
         ctx.fillRect(mx - 8, my - 8, 16, 16);

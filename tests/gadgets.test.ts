@@ -777,9 +777,9 @@ describe('statisztika és hálózat', () => {
     const swapped = match.standings();
     expect(swapped[0].id).toBe('a'); // a helyezés a kilövések szerint
     expect(swapped.find((s) => s.mvp)!.id).toBe('b');
-    expect(matchScore({ kills: 0, bots: 0, deaths: 9, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 })).toBe(0);
+    expect(matchScore({ kills: 0, bots: 0, bosses: 0, deaths: 9, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 })).toBe(0);
     // a pontosság csak elég lövés után számít; a ledöntött házakért járó pont korlátos
-    const base = { kills: 0, bots: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: 80, shots: 5, hits: 4, damage: 0, taken: 0 };
+    const base = { kills: 0, bots: 0, bosses: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: 80, shots: 5, hits: 4, damage: 0, taken: 0 };
     expect(matchScore(base)).toBe(0);
     expect(matchScore({ ...base, shots: 10, hits: 8 })).toBe(80);
     expect(matchScore({ ...base, accuracy: -1, shots: 0, hits: 0, wrecked: 50 })).toBe(SCORE.wreckedMax);

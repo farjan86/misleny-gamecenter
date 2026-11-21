@@ -12,6 +12,7 @@
 import type { GameMap } from '../maps/GameMap';
 import type { BarrelState, MineState, SmokeState, WorkshopState } from '../sim/gadgets';
 import type { TurretState, VehicleState } from '../sim/vehicles';
+import { BOSS, ROLE } from '../sim/bossRules';
 import { SIM_DT, TANK_LOOKS, World, type BulletState, type OilState, type PickupState, type SimEvent, type TankInput, type TankState, type WreckState } from '../sim/world';
 import type { GameLink } from './LocalGame';
 import { blankTank, packInput, unpackBarrel, unpackBullet, unpackMine, unpackOil, unpackPickup, unpackSmoke, unpackTank, unpackTurret, unpackVehicle, unpackWreck, mergeSnapshot, type FullSnapshot, type PlayerInfo, type RoomInfo, type Snapshot } from './protocol';
@@ -123,7 +124,10 @@ export class ClientWorld {
   }
 
   nameOf(tankId: number): string {
-    return this.names.get(tankId) ?? 'Bot';
+    const name = this.names.get(tankId);
+    if (name) return name;
+    const role = this.byId.get(tankId)?.role;
+    return role === ROLE.boss ? BOSS.name : role === ROLE.guard ? BOSS.guardName : 'Bot';
   }
 
   /** A saját tank, ahogy a képernyőn látszik (előre számolt mozgással); null, ha nincs. */

@@ -23,6 +23,7 @@ import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '
 import { BARREL, CLOAK, FLAME, SMOKE, STRIKE, WORKSHOP, insideSmoke, smokeRadius } from '../sim/gadgets';
 import { GAME_MODE_NAME } from '../sim/match';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
+import { BOSS, ROLE } from '../sim/bossRules';
 import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankRadius, tankSize, tankTier, type KillCause, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { isFullscreen, toggleFullscreen } from '../ui/fullscreen';
@@ -199,6 +200,12 @@ export class GameScene extends Phaser.Scene {
   private revengeArrow: Phaser.GameObjects.Image | null = null;
   /** a bejelentett vagy már kint lévő szupertárgy helye */
   private superMark: { x: number; y: number; here: boolean; since: number } | null = null;
+  /** a főgonosz bejelentett érkezési helye (az érkezésig), és meddig mutat rá nyíl az érkezése után (mp) */
+  private bossSoon: { x: number; y: number } | null = null;
+  private bossArrowUntil = 0;
+  private bossArrow: Phaser.GameObjects.Image | null = null;
+  /** mikor szólt utoljára, hogy a falka riadót fújt rád (mp) */
+  private bossAlarmAt = -Infinity;
   private superArrow: Phaser.GameObjects.Image | null = null;
   /** a folyamatban lévő tüzérségi csapások helye (a térképhez) */
   private readonly strikeMarks: { x: number; y: number; until: number }[] = [];
@@ -1078,6 +1085,37 @@ export class GameScene extends Phaser.Scene {
           if (ev.on) this.hud.toast(`Álcázás ${CLOAK.duration} másodpercig – a lövés leleplez!`);
         }
         break;
+      case 'bossSoon':
+        this.bossSoon = { x: ev.x, y: ev.y };
+        this.sfx.warning();
+        this.hud.toast(`A ${BOSS.name} közeledik! ${ev.seconds} másodperc múlva megérkezik ${BOSS.guards} testőrével – a térképen koponya jelzi.`);
+        break;
+      case 'bossSpawn':
+        this.bossSoon = null;
+        this.bossArrowUntil = this.time.now / 1000 + 15;
+        this.sfx.announce();
+        this.hud.toast(`Megérkezett a ${BOSS.name}! Aki legyőzi, ${BOSS.reward} szintet lép – de a testőrei mint a méhek, rátámadnak a támadóra.`);
+        break;
+      case 'bossDown': {
+        this.bossArrowUntil = 0;
+        const name = ev.by > 0 ? this.world.nameOf(ev.by) : '';
+        if (ev.by === this.world.myId) {
+          this.sfx.fanfare();
+          this.hud.toast(`Legyőzted a ${BOSS.name}t! +${BOSS.reward} szint!`);
+        } else if (ev.helpers.includes(this.world.myId)) {
+          this.sfx.levelUp();
+          this.hud.toast(`${name || 'Valaki'} legyőzte a ${BOSS.name}t – a segítségedért +${BOSS.helperReward} szint!`);
+        } else this.hud.toast(`${name || 'Valaki'} legyőzte a ${BOSS.name}t!`);
+        break;
+      }
+      case 'bossAlarm':
+        // a támadónak szól (legfeljebb 10 másodpercenként egyszer)
+        if (ev.by === this.world.myId && this.time.now / 1000 - this.bossAlarmAt > 10) {
+          this.bossAlarmAt = this.time.now / 1000;
+          this.sfx.warning();
+          this.hud.toast(`Megtámadtad a ${BOSS.name} falkáját – jönnek a testőrök!`);
+        }
+        break;
       case 'superSoon':
         this.superMark = { x: ev.x, y: ev.y, here: false, since: this.time.now / 1000 };
         this.sfx.announce();
@@ -1578,6 +1616,19 @@ export class GameScene extends Phaser.Scene {
       this.superArrow.setAlpha(this.superMark.here ? 1 : 0.6);
       this.pointAt(this.superArrow, this.superMark.x, this.superMark.y, view);
     } else this.superArrow?.setVisible(false);
+
+    // főgonosz: a bejelentéstől a térképen koponya; érkezéskor egy ideig nyíl is mutat rá
+    const boss = world.tanks.find((t) => t.role === ROLE.boss && t.alive);
+    const bossAt = boss ?? this.bossSoon;
+    if (boss) marks.push({ kind: 'boss', x: boss.x, y: boss.y });
+    else if (this.bossSoon) marks.push({ kind: 'bossSoon', x: this.bossSoon.x, y: this.bossSoon.y });
+    if (bossAt && (this.bossSoon || now < this.bossArrowUntil)) {
+      this.bossArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff2a1a).setScale(this.spriteScale * 1.1);
+      this.pointAt(this.bossArrow, bossAt.x, bossAt.y, view);
+    } else this.bossArrow?.setVisible(false);
+    // az életerősávja, ha a közelében vagy
+    const own = world.own ?? world.focus;
+    this.hud.setBoss(boss && own && Math.hypot(boss.x - own.x, boss.y - own.y) < 260 ? { name: BOSS.name, ratio: boss.hp / tankMaxHp(boss) } : null);
 
     // bosszú: aki kilőtt, az újraéledés után egy ideig jelölve van
     const revenge = this.revenge;
@@ -2091,8 +2142,10 @@ export class GameScene extends Phaser.Scene {
         // megjelenítő csak akkor készül, amikor a tank először a kép közelébe kerül
         if (!onScreen) continue;
         // a többi játékos tankja fölött ott a neve; a sajátunkon és a botokon nincs felirat
-        const kind = tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival';
-        view = new TankView(this, this.ppm, tank, kind, kind === 'rival' ? this.world.nameOf(tank.id) : '', this.world.lookOf(tank.id));
+        // a főgonosz fekete-vörös, a testőrei sötét bíborvörösek; a boss fölött ott a neve
+        const kind = tank.id === myId ? 'own' : tank.role === ROLE.boss ? 'boss' : tank.role === ROLE.guard ? 'guard' : tank.bot ? 'bot' : 'rival';
+        const label = kind === 'rival' ? this.world.nameOf(tank.id) : kind === 'boss' ? BOSS.name.toUpperCase() : '';
+        view = new TankView(this, this.ppm, tank, kind, label, kind === 'boss' || kind === 'guard' ? 0 : this.world.lookOf(tank.id));
         this.tankViews.set(tank.id, view);
       }
       if (onScreen) view.render(tank, tank.id === myId ? ownAlpha : netAlpha, seconds);

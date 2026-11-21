@@ -513,6 +513,33 @@ mennyi idő múlva lesz újra használható.
 > **Újraéledés:** a tankod újraéledéskor és belépéskor a térkép teteje felé
 > (felfelé) néz.
 
+### Főgonosz: a Vasóriás
+
+- **Mikor jön:** csak **10 perces vagy hosszabb** meccsben (és a nyitott játékokban),
+  legalább **0,2 km²-es** játéktéren. Az első a meccs **3–5. percében** érkezik; ha
+  legyőzik, 8–10 perc múlva jöhet új – de csak akkor, ha a megérkezése után a meccsből
+  még legalább 5 perc hátravan (5 perces meccsben soha).
+- **Bejelentés:** 20 másodperccel előtte üzenet és sziréna; a térképen villogó koponya
+  jelzi a helyét, és vörös nyíl mutat felé. Érkezéskor még 15 másodpercig nyíl mutat rá.
+- **A tanya:** egy tágas hely a játékosoktól távol. A boss lassan araszol rajta
+  (legfeljebb 12 m-re a közepétől), onnan nem megy el.
+- **A boss:** fekete, vörösen izzó óriás (a 20. szintű tank másfélszerese), a neve
+  fölötte, az életereje (a 20. szintű tank tízszerese: **6560**) a képernyő tetején, ha
+  260 m-en belül vagy. Nagyon nagyot lő (nehéz lövedék, kb. 126 sebzés), de ritkán
+  (2,6 mp-enként). **Csak védekezik:** azt lövi, aki a falkát megtámadta, vagy aki
+  25 m-nél közelebb jön. Ha 30 másodpercig nem éri találat, lassan gyógyul.
+- **A testőrök:** négy sötét bíborvörös, 12. szintű tank körben a boss körül (18 m-re).
+  **Méhraj:** ha valaki a bosst vagy bármelyik testőrt megtámadja, **riadó**: két
+  testőr (a boss két ellentétes oldaláról) rátámad és üldözi – a tanyától legfeljebb
+  150 m-ig –, a másik kettő a bossnál marad, és a közelébe jövőket támadja. A riadó az
+  utolsó támadás után 20 másodpercig tart. A kilőtt testőr nem éled újra.
+- **A botok** és a falka békén hagyják egymást (amíg egy bot meg nem támadja őket), a
+  géppuska és a telepített lövegek sem lőnek rájuk magától – csak az, aki szándékosan.
+- **Jutalom:** aki **legyőzi**, **10 szintet lép** (legfeljebb a 20.-ig); aki a boss
+  életerejének legalább 10%-át lebontotta, **2 szintet**. A kilövés a botok közé számít
+  (nem kilövés), a meccs végi eredménynél külön sor jelzi: „A Vasóriás legyőzője: …”.
+  A boss legyőzése után a testőrök elvonulnak.
+
 ### GPS
 
 - **Cél kijelölése:** az **M**-mel feljövő nagy térképen kattints oda, ahová menni

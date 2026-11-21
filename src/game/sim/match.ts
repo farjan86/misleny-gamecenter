@@ -8,6 +8,8 @@
 // tankot lövi ki. A mód a beállítások része, hogy később több is lehessen.
 
 import { BOT_LEVELS, BotManager, botTuning, SKILL_LEVELS } from './bots';
+import { BossPack } from './boss';
+import { bossAllowed } from './bossRules';
 import { BARREL, SUPER, WORKSHOP } from './gadgets';
 import { Traffic } from './traffic';
 import { ANY_PLAYER, BOT_TOUGHNESS_LEVELS, botRules, cleanLook, SPAWN_ANGLE, TEAM, tankMaxHp, World, type TankInput, type TankState, type Terrain, type Weather } from './world';
@@ -89,7 +91,7 @@ export const WEATHERS: readonly Weather[] = ['day', 'rain', 'night'];
  * Amit a játékos a nyitott játékban megtart, ha kilép és rövidesen visszalép, vagy ha a
  * játékot módosítják (új pálya): a szintje, az eredményei és a felszerelése.
  */
-export const CARRY_KEYS = ['level', 'kills', 'deaths', 'streak', 'bestStreak', 'botKills', 'botsDown', 'weapon', 'tripleShots', 'shield', 'oil', 'mines', 'smokes', 'strikes', 'turrets', 'fuel', 'shots', 'hits', 'dealt', 'taken', 'wrecked'] as const;
+export const CARRY_KEYS = ['level', 'kills', 'deaths', 'streak', 'bestStreak', 'botKills', 'botsDown', 'bossKills', 'weapon', 'tripleShots', 'shield', 'oil', 'mines', 'smokes', 'strikes', 'turrets', 'fuel', 'shots', 'hits', 'dealt', 'taken', 'wrecked'] as const;
 export type Carry = Pick<TankState, (typeof CARRY_KEYS)[number]>;
 
 /**
@@ -286,6 +288,8 @@ export interface MatchStanding {
   kills: number;
   /** kilőtt botok: csak statisztika, a helyezésbe és a pontba nem számít */
   bots: number;
+  /** hányszor győzte le a főgonoszt (csak statisztika) */
+  bosses: number;
   deaths: number;
   level: number;
   gone: boolean;
@@ -307,7 +311,7 @@ export interface MatchStanding {
   mvp: boolean;
 }
 
-type Final = Pick<MatchStanding, 'kills' | 'bots' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy' | 'shots' | 'hits' | 'damage' | 'taken'>;
+type Final = Pick<MatchStanding, 'kills' | 'bots' | 'bosses' | 'deaths' | 'level' | 'streak' | 'wrecked' | 'accuracy' | 'shots' | 'hits' | 'damage' | 'taken'>;
 
 /** A teljesítménypont összetevői. */
 export const SCORE = {
@@ -346,6 +350,7 @@ export function matchScore(s: Final): number {
 const finalOf = (tank: TankState): Final => ({
   kills: tank.kills,
   bots: tank.botsDown,
+  bosses: tank.bossKills,
   deaths: tank.deaths,
   level: tank.level,
   streak: tank.bestStreak,
@@ -363,6 +368,8 @@ const PLAYER_TEAM = 10;
 export class Match {
   readonly world: World;
   readonly bots: BotManager;
+  /** a főgonosz és a testőrei (csak elég hosszú vagy nyitott meccsben, elég nagy játéktéren) */
+  readonly boss: BossPack;
   readonly traffic: Traffic;
   readonly plan: MatchPlan;
   readonly players: MatchPlayer[] = [];
@@ -406,6 +413,9 @@ export class Match {
     this.world.botRules = botRules(settings.botToughness, settings.botSkill);
     this.bots = new BotManager(this.world, botTuning(settings.botSkill, settings.botAggression));
     this.bots.setCount(this.plan.bots, TEAM.bots, ANY_PLAYER);
+    const { area } = settings;
+    const km2 = ((area.maxX - area.minX) * (area.maxY - area.minY)) / 1e6;
+    this.boss = new BossPack(this.world, bossAllowed(settings.minutes, endless, km2));
     this.world.scatterPickups(this.plan.pickups);
     // a műhelyek előbb kerülnek ki, hogy a tárgyak és a palackok ne essenek beléjük
     this.world.scatterBarrels(this.plan.barrels);
@@ -456,8 +466,10 @@ export class Match {
       if (input && !p.gone) this.inputs.set(p.tankId, input);
     }
     this.bots.update(this.inputs, 1 / 60);
+    this.boss.update(this.inputs, 1 / 60);
     this.world.step(this.inputs);
     this.stepSuper(1 / 60);
+    this.boss.step(1 / 60, this.timeLeft);
     this.clock += 1 / 60;
     if (this.endless) {
       this.stepRegrow();
@@ -563,7 +575,7 @@ export class Match {
       .map((p) => {
         // a kilépett játékos tankja már nincs a világban: az utolsó állása számít
         const live = this.world.tank(p.tankId);
-        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, bots: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 };
+        const final: Final = (live ? finalOf(live) : this.finals.get(p.id)) ?? { kills: 0, bots: 0, bosses: 0, deaths: 0, level: 1, streak: 0, wrecked: 0, accuracy: -1, shots: 0, hits: 0, damage: 0, taken: 0 };
         return { id: p.id, name: p.name, place: 0, gone: p.gone, ...final, score: matchScore(final), mvp: false };
       })
       // a kilépettek a bent lévők mögé kerülnek
