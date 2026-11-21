@@ -8,7 +8,6 @@ import { MATCH } from '../sim/match';
 import { keysText, type Action, type KeyBindings } from '../settings';
 import { BARREL, CLOAK, FLAME, MG, MINE, SMOKE, STRIKE, SUPER, WORKSHOP } from '../sim/gadgets';
 import { BOOST, LASER, OIL, PICKUP, PICKUP_KINDS, PICKUPS, ROCKET, type PickupKind, RAIN_ALL_TERRAIN } from '../sim/pickups';
-import { BOSS } from '../sim/bossRules';
 import { TURRET, VEHICLES, turretInterval, turretMaxHp, turretRange } from '../sim/vehicles';
 import { BOT_POWER, DAMAGE, LEVEL, REGEN, TANK } from '../sim/world';
 
@@ -239,7 +238,6 @@ export function buildGuide(root: HTMLElement, keys: KeyBindings): void {
     'A tank és a szintek',
     `<ul class="guide-list">
       <li><b>Szintek:</b> 1–${LEVEL.max}. Egy játékos kilövése egy szint; ha legalább ${LEVEL.upsetGap} szinttel erősebb volt nálad, ${LEVEL.upsetGain}. ${LEVEL.botKills} bot ér egy szintet. A botok szívóssága a játék beállítása: közepes szinten kisebbet sebeznek (${Math.round(BOT_POWER.damage * 100)}%) és gyengébb a páncéljuk (${Math.round(BOT_POWER.armor * 100)}% sebzést kapnak), a legszívósabb bot egyenrangú a játékossal. A botok nem vesznek fel tárgyat és nem fejlődnek – kivéve a két legügyesebb szintet (nagyon ügyes, ultra ügyes). Ha kilőnek, ${LEVEL.deathLoss} szintet veszítesz, és a felszerelésed elvész (a lövegekből újra ${TURRET.base} jár).</li>
-      <li><b>Főgonosz – a ${BOSS.name}:</b> legalább ${BOSS.minMinutes} perces meccsben, nagyobb pályán a 3–5. perc körül megérkezik ${BOSS.guards} testőrével (bejelentés, a térképen koponya). Nagyon erős (${BOSS.hpMult}× egy 20. szintű tank életereje), de csak védekezik; aki megtámadja a falkát, arra két testőr rátámad. Aki legyőzi, ${BOSS.reward} szintet lép; aki sokat segített (az életerejének ${Math.round(BOSS.helperShare * 100)}%-a), ${BOSS.helperReward}-t.</li>
       <li><b>Kilövéssorozat:</b> minden ${STRIKE.every}. kilövés után (halál nélkül) tüzérségi csapás jár – ${esc(keysText(keys, 'strike'))}: feljön a nagy térkép, és azon kell kattintani a célpontra.</li>
       <li><b>Álcázás:</b> minden tank alapképessége (${esc(keysText(keys, 'cloak'))}): ${CLOAK.duration} mp-ig halvány sziluett vagy, a térképen nem látszol; a lövés megszünteti.</li>
       <li><b>Rombolás:</b> minden tank rombolja az épületet, amelynek nekifeszül; a nagyobb tank gyorsabban, a nehéz tankok a kisebb házakon megállás nélkül áthajtanak. A fák és oszlopok kidőlnek.</li>

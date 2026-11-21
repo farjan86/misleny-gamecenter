@@ -5,14 +5,13 @@
 // állapot-pillanatképeket (snap) meg eseményeket (ev) küld vissza.
 
 import { PICKUP_KINDS, TIMED_KINDS } from '../sim/pickups';
-import { ROLE } from '../sim/bossRules';
 import type { MatchPlan, MatchSettings } from '../sim/match';
 import type { BarrelState, MineState, SmokeState } from '../sim/gadgets';
 import { VEHICLE_KINDS, type TurretState, type VehicleState } from '../sim/vehicles';
 import { TANK_LOOKS } from '../sim/world';
 import type { BulletState, OilState, PickupState, ShellKind, SimEvent, TankInput, TankState, WreckState } from '../sim/world';
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 /** a szimuláció ennyi lépésenként küld pillanatképet (60 Hz / 3 = 20 Hz) */
 export const SNAPSHOT_EVERY = 3;
 
@@ -97,8 +96,6 @@ export interface Standing {
   /** kilőtt ellenséges játékosok; a kilőtt botok külön (bots) */
   kills: number;
   bots: number;
-  /** hányszor győzte le a főgonoszt */
-  bosses?: number;
   deaths: number;
   level: number;
   /** a leghosszabb kilövéssorozat, a ledöntött épületek száma, a pontosság százalékban (−1: nem lőtt) */
@@ -165,7 +162,7 @@ export type MeState = TankState;
 
 /** [id, x, y, test szöge, torony szöge, sebesség, életerő, szint, jelzők, csapat, megtett út] */
 export type PackedTank = number[];
-export const TANK_FLAG = { alive: 1, bot: 2, boosting: 4, invulnerable: 8, shield: 16, out: 32, super: 64, cloak: 128, gun: 256, oily: 512, flaming: 1024, boss: 2048, guard: 4096 } as const;
+export const TANK_FLAG = { alive: 1, bot: 2, boosting: 4, invulnerable: 8, shield: 16, out: 32, super: 64, cloak: 128, gun: 256, oily: 512, flaming: 1024 } as const;
 
 export interface Snapshot {
   t: 'snap';
@@ -272,8 +269,7 @@ export function packTank(t: TankState): PackedTank {
     (t.cloak > 0 ? TANK_FLAG.cloak : 0) |
     (t.effects.gun > 0 ? TANK_FLAG.gun : 0) |
     (t.oily > 0 ? TANK_FLAG.oily : 0) |
-    (t.flaming ? TANK_FLAG.flaming : 0) |
-    (t.role === ROLE.boss ? TANK_FLAG.boss : t.role === ROLE.guard ? TANK_FLAG.guard : 0);
+    (t.flaming ? TANK_FLAG.flaming : 0);
   // a többi tanknál a sebesség, az életerő és a megtett út csak a megjelenítéshez kell: kevesebb tizedessel megy
   return [t.id, t.x, t.y, t.hullAngle, t.turretAngle, Math.round(t.speed * 10) / 10, Math.round(t.hp), t.level, flags, t.team, Math.round(t.odometer * 10) / 10];
 }
@@ -283,8 +279,6 @@ export function blankTank(id: number): TankState {
   return {
     id,
     look: id % TANK_LOOKS,
-    role: ROLE.tank,
-    bossKills: 0,
     team: 0,
     bot: false,
     x: 0,
@@ -363,7 +357,6 @@ export function unpackTank(p: PackedTank, into: TankState): TankState {
   into.oily = flags & TANK_FLAG.oily ? 1 : 0;
   into.flaming = (flags & TANK_FLAG.flaming) !== 0;
   into.out = (flags & TANK_FLAG.out) !== 0;
-  into.role = flags & TANK_FLAG.boss ? ROLE.boss : flags & TANK_FLAG.guard ? ROLE.guard : ROLE.tank;
   into.team = p[9];
   into.odometer = p[10];
   return into;
@@ -377,8 +370,8 @@ export const unpackPickup = (p: number[]): PickupState => ({ id: p[0], kind: PIC
 export const packOil = (o: OilState): number[] => [o.id, o.x, o.y];
 export const unpackOil = (p: number[]): OilState => ({ id: p[0], owner: 0, x: p[1], y: p[2], life: 10, ownerSafe: false });
 // a roncs kora csak a füstöléshez kell: öt másodperces lépésekben megy, hogy a lista ritkán változzon
-export const packWreck = (w: WreckState): number[] => [w.id, w.x, w.y, w.hullAngle, w.turretAngle, Math.min(30, Math.floor(w.age / 5) * 5), w.level, w.look, ...(w.role ? [w.role] : [])];
-export const unpackWreck = (p: number[]): WreckState => ({ id: p[0], x: p[1], y: p[2], hullAngle: p[3], turretAngle: p[4], team: 0, level: p[6] ?? 1, look: p[7] ?? 0, age: p[5], ...(p[8] ? { role: p[8] } : {}) });
+export const packWreck = (w: WreckState): number[] => [w.id, w.x, w.y, w.hullAngle, w.turretAngle, Math.min(30, Math.floor(w.age / 5) * 5), w.level, w.look];
+export const unpackWreck = (p: number[]): WreckState => ({ id: p[0], x: p[1], y: p[2], hullAngle: p[3], turretAngle: p[4], team: 0, level: p[6] ?? 1, look: p[7] ?? 0, age: p[5] });
 
 export const packVehicle = (v: VehicleState): number[] => [v.id, VEHICLE_KINDS.indexOf(v.kind), v.look, v.x, v.y, v.angle, v.speed, v.state];
 export const unpackVehicle = (p: number[]): VehicleState => ({ id: p[0], kind: VEHICLE_KINDS[p[1]] ?? 'car', look: p[2], x: p[3], y: p[4], angle: p[5], speed: p[6], hp: 1, state: p[7], timer: 0, by: 0 });

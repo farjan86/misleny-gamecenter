@@ -23,7 +23,6 @@ import { ACTION_LABEL, ACTIONS, keysText, type Action, type KeyBindings } from '
 import { BARREL, CLOAK, FLAME, SMOKE, STRIKE, WORKSHOP, insideSmoke, smokeRadius } from '../sim/gadgets';
 import { GAME_MODE_NAME } from '../sim/match';
 import { OIL, PICKUP, TIMED_KINDS, type PickupKind } from '../sim/pickups';
-import { BOSS, ROLE } from '../sim/bossRules';
 import { BOOSTER, LEVEL, SIM_DT, TANK, tankMaxHp, tankRadius, tankSize, tankTier, type KillCause, type ShotKind, type SimEvent, type TankInput, type TankState } from '../sim/world';
 import { Sfx } from '../systems/audio';
 import { isFullscreen, toggleFullscreen } from '../ui/fullscreen';
@@ -200,12 +199,6 @@ export class GameScene extends Phaser.Scene {
   private revengeArrow: Phaser.GameObjects.Image | null = null;
   /** a bejelentett vagy már kint lévő szupertárgy helye */
   private superMark: { x: number; y: number; here: boolean; since: number } | null = null;
-  /** a főgonosz bejelentett érkezési helye (az érkezésig), és meddig mutat rá nyíl az érkezése után (mp) */
-  private bossSoon: { x: number; y: number } | null = null;
-  private bossArrowUntil = 0;
-  private bossArrow: Phaser.GameObjects.Image | null = null;
-  /** mikor szólt utoljára, hogy a falka riadót fújt rád (mp) */
-  private bossAlarmAt = -Infinity;
   private superArrow: Phaser.GameObjects.Image | null = null;
   /** a folyamatban lévő tüzérségi csapások helye (a térképhez) */
   private readonly strikeMarks: { x: number; y: number; until: number }[] = [];
@@ -280,6 +273,7 @@ export class GameScene extends Phaser.Scene {
   private shownStats = '';
   /** tankonként az utolsó falrombolás ideje (ms): ebből tudni, hogy új ütközés-e */
   private lastRam = new Map<number, number>();
+  private lastShove = new Map<number, number>();
   private readonly listeners: [EventTarget, string, EventListener][] = [];
   /** a tárgyak ikonjai képként (adat-URL), a felső sáv számára */
   private readonly iconUrls = new Map<PickupKind, string>();
@@ -523,7 +517,7 @@ export class GameScene extends Phaser.Scene {
     if (fallen && !fallen.alive) this.hud.deathCountdown(fallen.out ? -1 : fallen.respawn);
     else this.hud.hideDeath();
     this.syncGadgets(seconds);
-    this.syncWrecks(this.view);
+    this.syncWrecks(this.view, Math.min(0.1, deltaMs / 1000));
 
     const own = world.own;
     const focus = world.focus;
@@ -950,6 +944,21 @@ export class GameScene extends Phaser.Scene {
         }
         break;
       }
+      case 'shove': {
+        // a tank egy roncsot tol félre: fémcsikorgás, por; az első érintés nagyot csattan
+        const volume = this.loudness(ev.x, ev.y);
+        if (volume <= 0) break;
+        const pusher = world.tank(ev.tank);
+        const size = pusher ? tankSize(pusher) : 1;
+        this.puff(ev.x * ppm, ev.y * ppm, 0x8f8a80, 0.7 * size, 420);
+        const since = this.time.now - (this.lastShove.get(ev.tank) ?? -Infinity);
+        this.lastShove.set(ev.tank, this.time.now);
+        if (since > 600) {
+          this.sfx.crunch(volume * (mine ? 0.7 : 0.5));
+          if (mine) this.cameras.main.shake(100, 0.0018 * size);
+        } else this.sfx.wallGrind(volume * (mine ? 0.45 : 0.3), size);
+        break;
+      }
       case 'overheat':
         if (mine) {
           this.sfx.overheat();
@@ -1083,37 +1092,6 @@ export class GameScene extends Phaser.Scene {
         if (mine) {
           this.sfx.cloak(ev.on);
           if (ev.on) this.hud.toast(`Álcázás ${CLOAK.duration} másodpercig – a lövés leleplez!`);
-        }
-        break;
-      case 'bossSoon':
-        this.bossSoon = { x: ev.x, y: ev.y };
-        this.sfx.warning();
-        this.hud.toast(`A ${BOSS.name} közeledik! ${ev.seconds} másodperc múlva megérkezik ${BOSS.guards} testőrével – a térképen koponya jelzi.`);
-        break;
-      case 'bossSpawn':
-        this.bossSoon = null;
-        this.bossArrowUntil = this.time.now / 1000 + 15;
-        this.sfx.announce();
-        this.hud.toast(`Megérkezett a ${BOSS.name}! Aki legyőzi, ${BOSS.reward} szintet lép – de a testőrei mint a méhek, rátámadnak a támadóra.`);
-        break;
-      case 'bossDown': {
-        this.bossArrowUntil = 0;
-        const name = ev.by > 0 ? this.world.nameOf(ev.by) : '';
-        if (ev.by === this.world.myId) {
-          this.sfx.fanfare();
-          this.hud.toast(`Legyőzted a ${BOSS.name}t! +${BOSS.reward} szint!`);
-        } else if (ev.helpers.includes(this.world.myId)) {
-          this.sfx.levelUp();
-          this.hud.toast(`${name || 'Valaki'} legyőzte a ${BOSS.name}t – a segítségedért +${BOSS.helperReward} szint!`);
-        } else this.hud.toast(`${name || 'Valaki'} legyőzte a ${BOSS.name}t!`);
-        break;
-      }
-      case 'bossAlarm':
-        // a támadónak szól (legfeljebb 10 másodpercenként egyszer)
-        if (ev.by === this.world.myId && this.time.now / 1000 - this.bossAlarmAt > 10) {
-          this.bossAlarmAt = this.time.now / 1000;
-          this.sfx.warning();
-          this.hud.toast(`Megtámadtad a ${BOSS.name} falkáját – jönnek a testőrök!`);
         }
         break;
       case 'superSoon':
@@ -1617,19 +1595,6 @@ export class GameScene extends Phaser.Scene {
       this.pointAt(this.superArrow, this.superMark.x, this.superMark.y, view);
     } else this.superArrow?.setVisible(false);
 
-    // főgonosz: a bejelentéstől a térképen koponya; érkezéskor egy ideig nyíl is mutat rá
-    const boss = world.tanks.find((t) => t.role === ROLE.boss && t.alive);
-    const bossAt = boss ?? this.bossSoon;
-    if (boss) marks.push({ kind: 'boss', x: boss.x, y: boss.y });
-    else if (this.bossSoon) marks.push({ kind: 'bossSoon', x: this.bossSoon.x, y: this.bossSoon.y });
-    if (bossAt && (this.bossSoon || now < this.bossArrowUntil)) {
-      this.bossArrow ??= this.add.image(0, 0, GTEX.arrow).setDepth(19.5).setTint(0xff2a1a).setScale(this.spriteScale * 1.1);
-      this.pointAt(this.bossArrow, bossAt.x, bossAt.y, view);
-    } else this.bossArrow?.setVisible(false);
-    // az életerősávja, ha a közelében vagy
-    const own = world.own ?? world.focus;
-    this.hud.setBoss(boss && own && Math.hypot(boss.x - own.x, boss.y - own.y) < 260 ? { name: BOSS.name, ratio: boss.hp / tankMaxHp(boss) } : null);
-
     // bosszú: aki kilőtt, az újraéledés után egy ideig jelölve van
     const revenge = this.revenge;
     const target = revenge && revenge.live ? world.tank(revenge.id) : undefined;
@@ -1811,7 +1776,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** A kilőtt tankok roncsai: kiégett test és torony; a frissek füstölnek. */
-  private syncWrecks(view: Phaser.Geom.Rectangle): void {
+  private syncWrecks(view: Phaser.Geom.Rectangle, dt: number): void {
     const { wrecks } = this.world;
     if (wrecks.length === 0 && this.wreckViews.size === 0) return;
     const margin = 6 * this.ppm;
@@ -1833,6 +1798,18 @@ export class GameScene extends Phaser.Scene {
       }
       const visible = x > view.x - margin && x < view.right + margin && y > view.y - margin && y < view.bottom + margin;
       if (parts[0].visible !== visible) for (const part of parts) part.setVisible(visible);
+      // a félretolt roncs a szerver lépései között simán csúszik és fordul a helyére
+      const [hull, turret] = parts;
+      const spin = Phaser.Math.Angle.Wrap(w.hullAngle - hull.rotation);
+      if (hull.x !== x || hull.y !== y || Math.abs(spin) > 1e-4) {
+        const far = Math.abs(hull.x - x) + Math.abs(hull.y - y) > 8 * this.ppm;
+        const k = far ? 1 : Math.min(1, dt * 14);
+        const nx = Math.abs(x - hull.x) < 0.05 ? x : hull.x + (x - hull.x) * k;
+        const ny = Math.abs(y - hull.y) < 0.05 ? y : hull.y + (y - hull.y) * k;
+        const turn = Math.abs(spin) < 0.002 ? spin : spin * k;
+        hull.setPosition(nx, ny).setRotation(hull.rotation + turn);
+        turret.setPosition(nx, ny).setRotation(turret.rotation + turn);
+      }
       // a friss roncs még füstöl
       if (visible && w.age < 25 && (this.frame + w.id) % 14 === 0) this.smoke(x + (w.id % 5) - 2, y - 4);
     }
@@ -2142,10 +2119,8 @@ export class GameScene extends Phaser.Scene {
         // megjelenítő csak akkor készül, amikor a tank először a kép közelébe kerül
         if (!onScreen) continue;
         // a többi játékos tankja fölött ott a neve; a sajátunkon és a botokon nincs felirat
-        // a főgonosz fekete-vörös, a testőrei sötét bíborvörösek; a boss fölött ott a neve
-        const kind = tank.id === myId ? 'own' : tank.role === ROLE.boss ? 'boss' : tank.role === ROLE.guard ? 'guard' : tank.bot ? 'bot' : 'rival';
-        const label = kind === 'rival' ? this.world.nameOf(tank.id) : kind === 'boss' ? BOSS.name.toUpperCase() : '';
-        view = new TankView(this, this.ppm, tank, kind, label, kind === 'boss' || kind === 'guard' ? 0 : this.world.lookOf(tank.id));
+        const kind = tank.id === myId ? 'own' : tank.bot ? 'bot' : 'rival';
+        view = new TankView(this, this.ppm, tank, kind, kind === 'rival' ? this.world.nameOf(tank.id) : '', this.world.lookOf(tank.id));
         this.tankViews.set(tank.id, view);
       }
       if (onScreen) view.render(tank, tank.id === myId ? ownAlpha : netAlpha, seconds);

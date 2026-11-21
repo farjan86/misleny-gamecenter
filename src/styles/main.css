@@ -342,42 +342,6 @@ body {
   margin-top: 10px;
 }
 
-/* a főgonosz életereje: az óra és az értesítések alatt, széles vörös sáv */
-#hud-boss {
-  position: absolute;
-  top: 116px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(460px, 60vw);
-  padding: 4px 10px 6px;
-  text-align: center;
-  pointer-events: none;
-  border-color: #c02a1a;
-}
-
-#hud-boss b {
-  display: block;
-  font-size: 13px;
-  letter-spacing: 3px;
-  color: #ff6a4a;
-  margin-bottom: 3px;
-}
-
-#hud-boss .bar {
-  display: block;
-  height: 10px;
-  background: #1a0c0a;
-  border: 1px solid #5a1a10;
-}
-
-#hud-boss .bar i {
-  display: block;
-  height: 100%;
-  width: 100%;
-  background: linear-gradient(#ff5a3a, #b01a0a);
-  transition: width 0.15s;
-}
-
 #hud-clock {
   position: absolute;
   top: 8px;

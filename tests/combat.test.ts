@@ -734,7 +734,7 @@ describe('roncsok', () => {
     expect(world.wrecks).toHaveLength(1);
   });
 
-  it('a roncs akadály: a tank nem megy át rajta, a lövedék megáll benne', () => {
+  it('a roncs akadály: a tank nem megy át rajta (félretolja), a lövedék megáll benne', () => {
     const world = new World(arena());
     world.wrecks.push({ id: 999, x: 160, y: 200, hullAngle: 0, turretAngle: 0, team: TEAM.bots, level: 1, look: 0, age: 0 });
     const tank = world.addTank(120, 200, 0);

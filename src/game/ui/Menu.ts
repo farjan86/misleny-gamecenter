@@ -9,7 +9,6 @@ import { CHAT, cleanCode, ROOM_CODE, type OnlinePlayer, type RoomInfo, type Serv
 import { ACTION_LABEL, ACTIONS, DEFAULT_VOLUME, defaultKeys, FIXED_KEYS, keyName, saveSettings, type Settings } from '../settings';
 import { Sfx } from '../systems/audio';
 import { areaOfCells, GAME_MODE_HINT, GAME_MODE_NAME, GAME_MODES, gridSize, MATCH, matchPlan, sanitizeSettings, SCORE, WEATHERS, type GameMode, type MatchSettings, DEMO, demoPlayers, applyTempo, TEMPO, TEMPO_HINTS, TEMPO_NAMES, tempoKm2 } from '../sim/match';
-import { BOSS } from '../sim/bossRules';
 import { pickArea } from './areaPick';
 import { HULL_SIZE, LOOK_TIER_NAMES, TANK_LOOK_HINT, TANK_LOOK_NAMES, tankSprites, TURRET_PIVOT } from '../entities/tankTextures';
 import { LEVEL, BOT_TOUGHNESS, BOT_TOUGHNESS_LEVELS, DAMAGE, TANK } from '../sim/world';
@@ -1104,14 +1103,6 @@ export class Menu {
         best((s) => s.wrecked, (s) => `Legtöbb ledöntött ház: <b>${esc(s.name)}</b> – ${s.wrecked}`) +
         best((s) => s.accuracy, (s) => `Legpontosabb lövész: <b>${esc(s.name)}</b> – ${s.accuracy}%`);
       if (awards.innerHTML) table.appendChild(awards);
-    }
-    // a főgonosz legyőzője (egyedül játszva is)
-    const slayers = standings.filter((s) => (s.bosses ?? 0) > 0);
-    if (slayers.length) {
-      const box = document.createElement('div');
-      box.className = 'awards';
-      box.innerHTML = slayers.map((s) => `<div>A ${BOSS.name} legyőzője: <b>${esc(s.name)}</b>${(s.bosses ?? 0) > 1 ? ` – ${s.bosses}×` : ''}</div>`).join('');
-      table.appendChild(box);
     }
     this.show('results');
   }

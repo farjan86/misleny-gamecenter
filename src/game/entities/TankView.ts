@@ -272,13 +272,12 @@ export class TankView {
         this.tier = tier;
         this.hullFrames = Array.from({ length: TRACK_FRAMES }, (_, f) => tankTex.hull(this.kind, tier, f, this.look));
         this.frame = -1;
-        const glow = this.kind === 'boss' ? 0xff2a1a : AURA[tier];
-        if (glow && !this.aura) this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
-        else if (!glow && this.aura) {
+        if (AURA[tier] && !this.aura) this.aura = this.scene.add.image(0, 0, GTEX.light).setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
+        else if (!AURA[tier] && this.aura) {
           this.aura.destroy();
           this.aura = null;
         }
-        this.aura?.setTint(glow);
+        this.aura?.setTint(AURA[tier]);
       }
       if (tank.level > 1) {
         this.badge ??= this.scene.add
@@ -293,7 +292,7 @@ export class TankView {
     }
     if (this.aura) {
       // a titán fénye erős, az ostromtanké és a rombolóé halvány parázslás
-      const strong = this.tier === TANK_TIERS - 1 || this.kind === 'boss';
+      const strong = this.tier === TANK_TIERS - 1;
       const pulse = 0.5 + 0.5 * Math.sin(time * 3.2);
       this.aura.setPosition(x, y).setScale(size * (0.92 + 0.1 * pulse)).setAlpha(hide ? 0 : strong ? 0.3 + 0.16 * pulse : 0.14 + 0.1 * pulse);
     }
